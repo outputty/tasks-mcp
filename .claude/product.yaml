@@ -1,0 +1,88 @@
+# product.yaml — North Star + Language only. Every session loads this — keep it small.
+# Roadmap -> roadmap.yaml, surface + machinery -> architecture.yaml, the past -> lessons.yaml.
+# Every ✅ claim is verified by a run.
+north_star: |
+  A coding agent plans in a dependency graph. Humans track work in GitHub. tasks-mcp is the
+  bridge: a local MCP server that exposes outputty's task tracker as typed tools, with every
+  task mirrored two-way into GitHub — one issue per task, execution properties worn as labels,
+  a kanban card on a Projects board. The agent asks the graph its questions; the human sees
+  and edits the same plan in the UI they already use.
+
+  Strong sides, one example each:
+
+  - The two planning questions are first-class tools. "What must be done before X?" is
+    `prereqs` (dependency-ordered layers); "what holds up the most work?" is `blockers`
+    (ranked by transitive downstream impact). Both answer instantly and offline, from the
+    local file layer.
+  - The sync survives the real world. A hand-opened issue is adopted as a task; a label edit
+    in the GitHub UI flows back on the next sync; a junk label value is ignored, not crashed
+    on; a corrupt or deleted local cache rebuilds itself from GitHub.
+  - Zero install. `npx -y @outputty/tasks-mcp` in `.mcp.json` and the server runs on demand.
+    The same core is a CLI for humans and an importable library.
+
+  Wedge: the provider stack. Tasks live in ordered layers behind one seam — a local file on
+  top answering every read instantly, remotes beneath it as the source of truth (deepest
+  wins). Absence is not a claim, so adding a layer is a free migration and deleting the cache
+  loses nothing. Alternatives give an agent either a scratchpad humans never see, or a GitHub
+  wrapper that is slow, online-only, and breaks when humans touch the issues.
+language:
+  - term: task
+    definition: One tracked unit — id, title, status, deps, scope, execution properties, brief/contract prose; one issue on GitHub.
+    replaces: []
+  - term: layer
+    definition: One provider in the stack — a class implementing the seam, owning its own storage and handles.
+    replaces: [backend, sync target, adapter]
+  - term: stack
+    definition: The ordered provider list a project's tasks live in — file layer first, remotes beneath; order is authority order.
+    replaces: [cache+provider pair]
+  - term: seam
+    definition: The whole Provider interface — init / pull / upsert (+ optional upsertMany); create-vs-update is the layer's call.
+    replaces: [port]
+  - term: deepest wins
+    definition: The sync merge rule — on any disagreement the deepest layer's version is truth, pushed back into every layer that differs.
+    replaces: []
+  - term: absence is not a claim
+    definition: A task missing from a layer is pushed into it, never deleted from the others; deletions never propagate.
+    replaces: []
+  - term: free migration
+    definition: What the stack rules buy — a newly added (or wiped) layer is backfilled by the next sync, no tooling.
+    replaces: []
+  - term: handle
+    definition: A layer-private remote id (issue number, card node id) kept in that layer's index — never visible above the seam.
+    replaces: [ref]
+  - term: body block
+    definition: The hidden YAML block leading a managed issue's body — id first, then deps, scope, brief, contract, attempts, discovered_from.
+    replaces: [id-label]
+  - term: managed issue
+    definition: An issue whose body carries the block; human prose below the block is preserved across updates.
+    replaces: []
+  - term: adopt
+    definition: Import a hand-opened issue as task `gh-<number>` and stamp its body with the block, so it is tracked from then on.
+    replaces: []
+  - term: execution properties
+    definition: The scalar fields that modify how a task is built — kind, tier, qa, spec, stage, priority.
+    replaces: []
+  - term: field:value label
+    definition: One GitHub label per execution property (`tier:2`, `priority:high`) — created on demand, color-coded per field, editable in the UI, pulled back by sync; junk values ignored; foreign labels never touched.
+    replaces: []
+  - term: board
+    definition: The Projects v2 kanban — one card per task-issue, Status column mirrors open/done both ways; found or created by name (default "Tasks").
+    replaces: [kanban]
+  - term: best-effort
+    definition: The board's error contract — a board failure warns and continues; the issue write always decides success.
+    replaces: []
+  - term: first-wins
+    definition: Duplicate-id resolution — when two issues claim one task id, every read and write resolves to the OLDEST issue; the collision is counted, never auto-deleted.
+    replaces: [last-wins]
+  - term: quarantine
+    definition: An unparseable task file is renamed `.corrupt`; the layer reads empty and the next sync rebuilds it from the layers below.
+    replaces: []
+  - term: the two questions
+    definition: What a dependency graph is for — `prereqs` (what must be done before X, as ordered layers) and `blockers` (open tasks ranked by transitive downstream impact).
+    replaces: []
+  - term: ready
+    definition: A task that can be worked right now — open, spec settled, every dep done.
+    replaces: []
+  - term: planning
+    definition: The tasks the planning stage still owns — spec `drafting` or `replan`.
+    replaces: []

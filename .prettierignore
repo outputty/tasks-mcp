@@ -1,0 +1,5 @@
+# Plugin-managed files: the CLAUDE.md outputty block is replaced byte-for-byte by /outputty:init,
+# and .claude/ holds agent-managed product memory and settings. Formatting them creates churn
+# against the plugin's verbatim writes.
+CLAUDE.md
+.claude/

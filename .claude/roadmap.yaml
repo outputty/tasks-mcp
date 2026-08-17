@@ -1,0 +1,98 @@
+# roadmap.yaml — one row per TARGET you can name in one sentence: the what-we're-building.
+# Task-shaped work (bugs, debt, spikes) goes to the tasks MCP server. Live rows link their plan
+# (the trail, graph included). A shipped row closes clean: one-line status_detail + doc — the
+# story lives in roadmap/<name>.md, never on the row.
+- row: 1
+  feature: The task tracker as a local MCP server
+  summary: |
+    Problem: outputty's task graph lived in tasks.js inside one repo — no server, no GitHub
+    mirror, nothing a human could see or edit. Solution: a local MCP server exposing the
+    tracker as typed tools, every task mirrored two-way into GitHub Issues and a Projects v2
+    kanban, hand-opened issues adopted, the local cache disposable.
+
+      { "mcpServers": { "tasks": { "command": "npx", "args": ["-y", "@outputty/tasks-mcp"] } } }
+
+    Output (REAL OBSERVED 2026-08-17): `node dist/cli.js --version` -> `0.8.0`; 53 e2e tests
+    green over the real stack with nock at the wire.
+  status: "✅ shipped"
+  status_detail: Shipped across v0.1.0-v0.4.0; every later row reshapes this core.
+  depends_on: []
+  doc: roadmap/tracker-mcp-server.md
+  absorbs: []
+  links: [808cab2, d000f7b, 60820a3, 3d8a5b3, 1dac343]
+- row: 2
+  feature: npm distribution with tokenless publishing
+  summary: |
+    Problem: a bun-only server you had to clone. Solution: Node-native core split from the MCP
+    wrapper, published to npm as @outputty/tasks-mcp (library `.`, `./mcp`, `tasks-mcp` bin),
+    CI on every push, publish ONLY on a GitHub Release via npm Trusted Publishing (OIDC) — no
+    stored token, provenance automatic.
+
+      npx -y @outputty/tasks-mcp --version
+
+    Output (REAL OBSERVED 2026-08-17): npm registry serves 0.5.0/0.6.0/0.7.0/0.8.0, all
+    published today; `npm view @outputty/tasks-mcp version` -> `0.8.0`.
+  status: "✅ shipped"
+  status_detail: v0.5.0; publish trigger settled on the Release event after two pivots.
+  depends_on: [1]
+  doc: roadmap/npm-distribution.md
+  absorbs: []
+  links: [351b2e8, b50b486, 88d72c9, 7e72465]
+- row: 3
+  feature: Provider architecture — one-class providers on the official SDK
+  summary: |
+    Problem: the provider was satellite modules with lazy imports, the MCP layer a hand-rolled
+    JSON-RPC handler, tests in-memory fakes. Solution: GitHubProvider is ONE class wrapping its
+    own Octokit (client the sole injection point), explicit async init(), GraphQL-only by
+    ruling; MCP on @modelcontextprotocol/sdk with zod schemas; hono dropped for node:http;
+    tests e2e with nock at the wire; oxc toolchain with build-enforced working-set caps.
+
+      npm run check
+
+    Output (REAL OBSERVED 2026-08-17): format -> lint -> typecheck -> 53 tests -> tsdown
+    build, all green in this worktree.
+  status: "✅ shipped"
+  status_detail: v0.6.0 (PR #8).
+  depends_on: [2]
+  doc: roadmap/provider-architecture.md
+  absorbs: []
+  links: ["https://github.com/outputty/tasks-mcp/pull/8"]
+- row: 4
+  feature: The provider stack — layered truth, free migrations
+  summary: |
+    Problem: one hardcoded cache+provider pair; refs leaked through the shared model; adding a
+    remote meant migration tooling. Solution: TaskStack orchestrates an ordered layer list —
+    FileProvider on top (every read local), remotes beneath, deepest wins a disagreement,
+    absence is not a claim, deletions never propagate; each layer owns its handles privately;
+    the seam shrinks to init/pull/upsert.
+
+      service.sync({ project: "/abs/repo" })
+
+    Output (REAL OBSERVED 2026-08-17): the three-layer stack suite passes within the 53; a
+    task present only in the deepest MockProvider is backfilled into every layer above.
+  status: "✅ shipped"
+  status_detail: v0.7.0 (PR #10); breaking for the library surface (CachedTaskService -> TaskStack).
+  depends_on: [3]
+  doc: roadmap/provider-stack.md
+  absorbs: []
+  links: ["https://github.com/outputty/tasks-mcp/pull/10"]
+- row: 5
+  feature: Labels, the two questions, central config
+  summary: |
+    Problem: execution properties were invisible on GitHub; the graph could not answer its own
+    two questions; config was scattered flags plus an in-repo file. Solution: field:value
+    labels (created on demand, editable in the UI, junk-tolerant); prereqs and blockers as
+    first-class tools on graphology; commander CLI; ConfigProvider — get_config/set_config,
+    global spec overridable per repo, zod-parsed, nothing configured inside the user's repo.
+
+      tasks-mcp blockers --project /abs/repo
+
+    Output (REAL OBSERVED 2026-08-17): 12 MCP tools registered (list_ready, list_planning,
+    schedule, get_task, add_task, amend_task, close_task, sync, prereqs, blockers, get_config,
+    set_config); label round-trip and junk-label tests green.
+  status: "✅ shipped"
+  status_detail: v0.8.0 (PR #11); includes corrupt-file quarantine and first-wins duplicate handling.
+  depends_on: [4]
+  doc: roadmap/labels-and-planning-tools.md
+  absorbs: []
+  links: ["https://github.com/outputty/tasks-mcp/pull/11"]
