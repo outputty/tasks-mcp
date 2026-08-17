@@ -217,12 +217,19 @@ The service, cache, and protocol tests run against an in-memory fake provider.
 
 ## Releasing
 
-Publishing is automated and deliberate — it runs only when you cut a GitHub **Release**, never on a push.
+Publishing is automated, deliberate, and **tokenless** — it runs only when you cut a GitHub **Release**,
+authenticating with **npm Trusted Publishing (OIDC)**: no `NPM_TOKEN` is stored anywhere.
 
-1. Bump `version` in `package.json`, commit, and push to `main`.
-2. Create a GitHub Release with the tag `vX.Y.Z` (matching that version).
-3. The `Publish` workflow tests, builds, and runs `npm publish --provenance`.
+One-time setup:
 
-The workflow authenticates with a **granular, package-scoped npm token** stored as the repo secret
-`NPM_TOKEN`, and attaches a signed **provenance** attestation via GitHub OIDC (`id-token: write`) so the
-published package is verifiably built from this repo. See the token setup in the repo's Actions docs.
+1. **First publish by hand** (OIDC can't do a package's first publish): `npm run build && npm publish`.
+2. On npmjs, open the package → **Settings → Publishing → Add a trusted publisher** → GitHub Actions →
+   org `outputty`, repo `tasks-mcp`, workflow `publish.yml`.
+
+Every release after that:
+
+1. Bump `version` in `package.json`, commit, push.
+2. Create a GitHub Release tagged `vX.Y.Z` (matching the version).
+3. The `Publish` workflow tests, builds, and `npm publish`es via OIDC — the runner proves its identity to
+   npm with a short-lived token, and **provenance** is attached automatically (verifiable build from this
+   repo+commit). Nothing to store, rotate, or leak.

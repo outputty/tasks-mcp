@@ -2,13 +2,18 @@ name: Publish
 
 # Publishing is a deliberate act: it runs only when you publish a GitHub Release (tag it `vX.Y.Z`,
 # matching package.json). Nothing publishes on a plain push.
+#
+# Auth is npm Trusted Publishing (OIDC) — no token is stored. GitHub Actions proves its identity to npm
+# via a short-lived OIDC token, so you configure a Trusted Publisher on the package (Settings ->
+# Publishing) pointing at this repo + this workflow. Provenance is attached automatically.
+# Note: OIDC cannot do a package's FIRST publish — publish v0.5.0 once by hand, then this takes over.
 on:
   release:
     types: [published]
 
 permissions:
   contents: read
-  id-token: write # lets npm attach a signed provenance attestation via GitHub OIDC (no secret needed)
+  id-token: write # the OIDC identity npm trusts — replaces a stored NPM_TOKEN
 
 jobs:
   publish:
@@ -20,10 +25,8 @@ jobs:
           node-version: 20
           registry-url: "https://registry.npmjs.org"
           cache: npm
+      - run: npm install -g npm@latest # trusted publishing needs npm >= 11.5.1
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - run: npm publish --provenance --access public
-        env:
-          # A granular, package-scoped npm token stored as a repo secret. Never echoed; GitHub masks it.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish # OIDC: no NODE_AUTH_TOKEN, provenance automatic
