@@ -38,6 +38,50 @@ export async function syncToBoard(
   return itemId;
 }
 
+/** What the board says about one card: its item id and whether its Status column is a Done column. */
+export interface BoardCard {
+  itemId: string;
+  done: boolean;
+}
+
+/** Read the board back: every card keyed by its content issue's node id. Powers board → cache sync. */
+export async function readBoard(
+  env: GitHubEnv,
+): Promise<Map<string, BoardCard>> {
+  const board = await resolveBoardCached(env);
+  const out = new Map<string, BoardCard>();
+  let after: string | null = null;
+  for (;;) {
+    const res: {
+      node: {
+        items: {
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+          nodes: Array<{
+            id: string;
+            content: { id?: string } | null;
+            fieldValueByName: { name?: string } | null;
+          }>;
+        };
+      };
+    } = await env.graphql(
+      `query($p:ID!,$c:String){ node(id:$p){ ... on ProjectV2 { items(first:100,after:$c){ pageInfo{ hasNextPage endCursor } nodes{ id content{ ... on Issue { id } } fieldValueByName(name:"Status"){ ... on ProjectV2ItemFieldSingleSelectValue { name } } } } } } }`,
+      { p: board.projectId, c: after },
+    );
+    for (const item of res.node.items.nodes) {
+      const issueId = item.content?.id;
+      if (!issueId) continue; // draft cards or non-issue content
+      const name = (item.fieldValueByName?.name ?? "").toLowerCase();
+      out.set(issueId, {
+        itemId: item.id,
+        done: name === "done" || name === "closed",
+      });
+    }
+    if (!res.node.items.pageInfo.hasNextPage) break;
+    after = res.node.items.pageInfo.endCursor;
+  }
+  return out;
+}
+
 async function setStatus(
   env: GitHubEnv,
   board: BoardMeta,

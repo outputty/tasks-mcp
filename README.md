@@ -77,16 +77,16 @@ its body (no labels), and adds a card to the board.
 `schema` is ready and `api` is not, because `api` waits on `schema`. Close `schema` (`close_task`) and
 `api` is ready on the very next call — reads are cache-local, with no GitHub indexing lag.
 
-| Tool            | Does                                                                  | Writes |
-| --------------- | --------------------------------------------------------------------- | ------ |
-| `list_ready`    | open, settled, all deps done                                          | —      |
-| `list_planning` | drafting or sent back by a build (replan)                             | —      |
-| `schedule`      | the whole plan as dependency layers; errors on a cycle                | —      |
-| `get_task`      | one task's full record                                                | —      |
-| `add_task`      | create a task (cache + issue + board)                                 | ✎      |
-| `amend_task`    | widen an open task's scope, or set its brief                          | ✎      |
-| `close_task`    | mark done (close the issue, move the card)                            | ✎      |
-| `sync`          | pull issue status into the cache; push cache tasks the provider lacks | ✎      |
+| Tool            | Does                                                                                     | Writes |
+| --------------- | ---------------------------------------------------------------------------------------- | ------ |
+| `list_ready`    | open, settled, all deps done                                                             | —      |
+| `list_planning` | drafting or sent back by a build (replan)                                                | —      |
+| `schedule`      | the whole plan as dependency layers; errors on a cycle                                   | —      |
+| `get_task`      | one task's full record                                                                   | —      |
+| `add_task`      | create a task (cache + issue + board)                                                    | ✎      |
+| `amend_task`    | widen an open task's scope, or set its brief                                             | ✎      |
+| `close_task`    | mark done (close the issue, move the card)                                               | ✎      |
+| `sync`          | two-way reconcile: pull issue/board status, adopt hand-opened issues, push offline tasks | ✎      |
 
 ## How it works
 
@@ -152,12 +152,24 @@ stream, no session id. Both handle `initialize`, `tools/list`, and `tools/call` 
 | `OUTPUTTY_PROJECT_NUMBER`   | target an existing Projects board | find/create "Tasks"           | no       |
 | `OUTPUTTY_PROJECTS`         | `off` disables the board sync     | on                            | no       |
 
+## Sync semantics
+
+`sync` reconciles the cache with GitHub **both ways**:
+
+- **Status flows in.** A task is **done** when its issue is closed **or** its board card is in a Done
+  column. `sync` writes that into the cache and pushes it back — closing/reopening the issue and moving
+  the card so all three agree. To reopen a task, reopen its issue (and move the card off Done).
+- **Hand-opened issues are adopted.** Any repo issue `sync` finds without the outputty block is imported
+  as a task (`gh-<number>`) and its body is stamped, so it is tracked from then on. Prose already in the
+  issue is preserved below the block.
+- **Offline tasks are pushed.** A task added while the provider was unreachable is created on the next
+  `sync`.
+
 ## Limitations
 
-- **Projects sync is best-effort and one-way for now.** A card moved on the board is not yet read back
-  into the cache; issue state is the canonical status. Board-to-cache pull is a follow-up.
-- **Adoption needs the body block.** Because the id lives in the issue body (not a label), `sync` only
-  reconciles issues this server created; a hand-opened issue isn't picked up as a task.
+- **Reading a moved card needs the `project` scope.** Board → cache sync requires the token's
+  `read:project` scope (`gh auth refresh -s project`). Without it the board is push-only and issue state
+  is the sole status source. Writing cards (add/set-column) needs `project`; nothing else here does.
 
 ## Development
 

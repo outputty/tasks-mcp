@@ -144,18 +144,21 @@ async function setState(
   await env.graphql(mutation, { id: issueId });
 }
 
-/** Every managed issue in the repo, as {id, issueId, title, status}. Paginates the whole repo. */
-export async function listManaged(
-  env: GitHubEnv,
-): Promise<
-  Array<{ id: string; issueId: string; title: string; status: Task["status"] }>
-> {
-  const out: Array<{
-    id: string;
-    issueId: string;
-    title: string;
-    status: Task["status"];
-  }> = [];
+/** One repo issue as the provider sees it. `managed` is false for a hand-opened issue with no block. */
+export interface ListedIssue {
+  taskId: string;
+  issueId: string;
+  title: string;
+  status: Task["status"];
+  managed: boolean;
+}
+
+/**
+ * Every issue in the repo (not PRs — the `issues` connection excludes them). A managed issue keeps its
+ * body-block id; a hand-opened one is given `gh-<number>` so `sync` can adopt it as a task.
+ */
+export async function listIssues(env: GitHubEnv): Promise<ListedIssue[]> {
+  const out: ListedIssue[] = [];
   let after: string | null = null;
   for (;;) {
     const res: {
@@ -170,14 +173,14 @@ export async function listManaged(
       { o: env.repo.owner, n: env.repo.repo, c: after },
     );
     for (const issue of res.repository.issues.nodes) {
-      const id = managedId(issue);
-      if (id)
-        out.push({
-          id,
-          issueId: issue.id,
-          title: issue.title || "",
-          status: issue.state === "CLOSED" ? "done" : "open",
-        });
+      const mid = managedId(issue);
+      out.push({
+        taskId: mid ?? `gh-${issue.number}`,
+        issueId: issue.id,
+        title: issue.title || "",
+        status: issue.state === "CLOSED" ? "done" : "open",
+        managed: mid !== null,
+      });
     }
     if (!res.repository.issues.pageInfo.hasNextPage) break;
     after = res.repository.issues.pageInfo.endCursor;

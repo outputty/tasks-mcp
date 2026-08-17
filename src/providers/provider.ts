@@ -14,6 +14,8 @@ import { GitHubProvider } from "./github/github.ts";
 export interface RemoteState {
   patch: Partial<Task>;
   refs: Refs;
+  /** The provider's sides disagree (or an issue needs adopting): the service should push this back. */
+  reconcile?: boolean;
 }
 
 export interface Provider {

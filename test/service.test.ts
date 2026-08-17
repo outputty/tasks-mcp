@@ -80,3 +80,42 @@ test("sync pulls a status change made on GitHub back into the cache", async () =
   expect((await svc.get(ctx, "t-1"))?.status).toBe("done");
   cleanup();
 });
+
+test("sync adopts a hand-opened issue, stamps it, and stays stable", async () => {
+  const { dir, cleanup } = tmpProject();
+  const gh = new FakeGitHub();
+  const svc = service(gh);
+  const ctx = { project: dir };
+  gh.issues.push({
+    id: "I_7",
+    number: 7,
+    title: "reported bug",
+    body: "plain text",
+    state: "OPEN",
+  });
+
+  await svc.sync(ctx);
+  expect((await svc.get(ctx, "gh-7"))?.title).toBe("reported bug");
+  expect(gh.issues[0].body).toContain("id: gh-7"); // the issue is now stamped as managed
+  expect(gh.issues[0].body).toContain("plain text"); // the human's text is preserved
+
+  await svc.sync(ctx); // idempotent: no second copy, no error
+  expect((await svc.list(ctx)).length).toBe(1);
+  cleanup();
+});
+
+test("sync reads a board Done back and closes the issue to match", async () => {
+  const { dir, cleanup } = tmpProject();
+  const gh = new FakeGitHub();
+  const svc = new CachedTaskService(
+    new GitHubProvider(async () => envFor(gh, {})),
+  ); // Projects on
+  const ctx = { project: dir };
+  await svc.create(ctx, task({ id: "api" })); // issue open, card Todo
+  [...gh.items.values()][0].status = "OPT_DONE"; // drag the card to Done
+
+  await svc.sync(ctx);
+  expect((await svc.get(ctx, "api"))?.status).toBe("done");
+  expect(gh.issues[0].state).toBe("CLOSED"); // reconcile closed the issue to match the board
+  cleanup();
+});

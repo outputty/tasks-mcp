@@ -90,6 +90,20 @@ export class FakeGitHub {
         },
       };
     }
+    if (q.includes("ProjectV2ItemFieldSingleSelectValue")) {
+      const nodes = [...this.items.entries()].map(([id, it]) => ({
+        id,
+        content: { id: it.contentId },
+        fieldValueByName: it.status
+          ? { name: it.status === "OPT_DONE" ? "Done" : "Todo" }
+          : null,
+      }));
+      return {
+        node: {
+          items: { pageInfo: { hasNextPage: false, endCursor: null }, nodes },
+        },
+      };
+    }
     if (q.includes("projectsV2(")) {
       return {
         repository: {

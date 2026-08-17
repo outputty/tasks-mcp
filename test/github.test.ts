@@ -42,7 +42,7 @@ test("update rewrites the body and preserves human prose below the block", async
   expect(gh.issues[0].body).toContain("Human note: see the design.");
 });
 
-test("pull returns managed issues and ignores issues without the block", async () => {
+test("pull returns managed issues and adopts hand-opened ones", async () => {
   const gh = new FakeGitHub();
   const p = provider(gh, { projects: false });
   await p.create(ctx, task({ id: "mine", title: "mine" }));
@@ -55,11 +55,13 @@ test("pull returns managed issues and ignores issues without the block", async (
   });
   gh.issues[0].state = "CLOSED";
   const remote = await p.pull(ctx);
-  expect([...remote.keys()]).toEqual(["mine"]);
-  expect(remote.get("mine")).toEqual({
+  expect([...remote.keys()].sort()).toEqual(["gh-99", "mine"]);
+  expect(remote.get("mine")).toMatchObject({
     patch: { title: "mine", status: "done" },
     refs: { issueId: "I_1" },
   });
+  expect(remote.get("mine")!.reconcile).toBe(false); // already managed and consistent
+  expect(remote.get("gh-99")!.reconcile).toBe(true); // hand-opened → needs stamping
 });
 
 test("with Projects on, the issue becomes a board card in the right column", async () => {
@@ -82,4 +84,28 @@ test("a Projects failure never fails the task write (best-effort)", async () => 
   );
   expect(refs.issueId).toBe("I_1"); // issue still created
   expect(refs.projectItem).toBeUndefined(); // board skipped
+});
+
+test("pull reads a card moved to Done back, and flags it for reconcile", async () => {
+  const gh = new FakeGitHub();
+  const p = provider(gh); // Projects on
+  const refs = await p.create(ctx, task({ id: "api" })); // issue open, card Todo
+  gh.items.get(refs.projectItem!)!.status = "OPT_DONE"; // someone drags the card to Done
+  const state = (await p.pull(ctx)).get("api")!;
+  expect(state.patch.status).toBe("done");
+  expect(state.reconcile).toBe(true); // issue still open, so the sides disagree
+});
+
+test("pull adopts a hand-opened issue under a gh-<number> id", async () => {
+  const gh = new FakeGitHub();
+  gh.issues.push({
+    id: "I_50",
+    number: 50,
+    title: "found a bug",
+    body: "no block here",
+    state: "OPEN",
+  });
+  const remote = await provider(gh, { projects: false }).pull(ctx);
+  expect([...remote.keys()]).toEqual(["gh-50"]);
+  expect(remote.get("gh-50")!.reconcile).toBe(true); // needs its body stamped
 });

@@ -8,8 +8,8 @@ import type { ProjectContext, Refs, Task } from "../../types.ts";
 import type { Provider, RemoteState } from "../provider.ts";
 import type { GitHubEnv } from "./client.ts";
 import { resolveGitHubEnv } from "./client.ts";
-import { createIssue, updateIssue, listManaged } from "./issues.ts";
-import { syncToBoard } from "./projects.ts";
+import { createIssue, updateIssue, listIssues } from "./issues.ts";
+import { syncToBoard, readBoard } from "./projects.ts";
 
 export class GitHubProvider implements Provider {
   readonly name = "github";
@@ -35,11 +35,29 @@ export class GitHubProvider implements Provider {
 
   async pull(ctx: ProjectContext): Promise<Map<string, RemoteState>> {
     const env = await this.resolve(ctx.project);
+    const projectsOn = env.config.projects !== false;
+    // Read the board too (best-effort), so a card moved to Done flows back into the cache.
+    const board = projectsOn
+      ? await readBoard(env).catch(
+          () => new Map<string, { itemId: string; done: boolean }>(),
+        )
+      : new Map();
+
     const out = new Map<string, RemoteState>();
-    for (const m of await listManaged(env)) {
-      out.set(m.id, {
-        patch: { title: m.title, status: m.status },
-        refs: { issueId: m.issueId },
+    for (const issue of await listIssues(env)) {
+      const card = board.get(issue.issueId);
+      const issueDone = issue.status === "done";
+      const done = issueDone || card?.done === true; // done if the issue is closed OR the card is in Done
+      // Reconcile (push back) when the sides disagree, the card is missing, or an issue needs adopting —
+      // the push makes the issue, the body block, and the board card all consistent.
+      const reconcile =
+        !issue.managed ||
+        issueDone !== done ||
+        (projectsOn && (!card || card.done !== done));
+      out.set(issue.taskId, {
+        patch: { title: issue.title, status: done ? "done" : "open" },
+        refs: { issueId: issue.issueId, projectItem: card?.itemId },
+        reconcile,
       });
     }
     return out;

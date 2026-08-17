@@ -1,6 +1,6 @@
 {
   "name": "@outputty/tasks-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "outputty's task tracker as a local MCP server: a committed dependency graph synced two-way to GitHub Issues and Projects.",
   "type": "module",
   "bin": {

@@ -85,31 +85,40 @@ export class CachedTaskService implements TaskService {
     const byId = new Map(entries.map((e) => [e.id, e]));
     const provider = this.providerFor(ctx);
 
-    // Pull the fields the provider owns (title, status) back into the cache, learning each task's ref.
+    // Pull the fields the provider owns (title, status) back into the cache, adopting any issue it
+    // surfaces that the cache did not know (a hand-opened one), and learning each task's refs.
     const remote = await provider.pull(ctx);
+    const reconcile: CacheEntry[] = [];
     let pulled = 0;
     for (const [id, state] of remote) {
-      const entry = byId.get(id);
-      if (entry) {
-        Object.assign(entry, state.patch, {
-          refs: { ...entry.refs, ...state.refs },
-        });
+      let entry = byId.get(id);
+      if (!entry) {
+        entry = withDefaults({ id, ...state.patch });
+        byId.set(id, entry);
+        entries.push(entry);
       } else {
-        const created: CacheEntry = {
-          ...withDefaults({ id, ...state.patch }),
-          refs: state.refs,
-        };
-        byId.set(id, created);
-        entries.push(created);
+        Object.assign(entry, state.patch);
       }
+      entry.refs = { ...entry.refs, ...state.refs };
+      if (state.reconcile) reconcile.push(entry);
       pulled++;
     }
 
-    // Push cache tasks the provider has never seen (created offline), so the mirror catches up.
     let pushed = 0;
+    // Push cache tasks the provider has never seen (created offline), so the mirror catches up.
     for (const entry of entries) {
       if (remote.has(entry.id)) continue;
       entry.refs = await provider.create(ctx, stripRefs(entry));
+      pushed++;
+    }
+    // Push back the disagreeing ones: close/reopen the issue to match, stamp an adopted issue's body
+    // block, and set its board card — so issue, cache, and board converge.
+    for (const entry of reconcile) {
+      entry.refs = await provider.update(
+        ctx,
+        stripRefs(entry),
+        entry.refs ?? {},
+      );
       pushed++;
     }
 
