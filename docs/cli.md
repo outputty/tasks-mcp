@@ -58,5 +58,5 @@ console.log(blockers(tasks)[0]?.task.id); // the biggest blocker
 ```
 
 Exports: `makeService` / `TaskStack` (the orchestrator), `FileProvider` / `GitHubProvider` /
-`stackFor` (the layers), the pure graph engine (`ready`, `planning`, `schedule`, `prereqs`,
+`buildStack` (the layers), the pure graph engine (`ready`, `planning`, `schedule`, `prereqs`,
 `blockers`, …), and `createMcpServer` / `createHttpServer` / `runStdio` under `./mcp`.

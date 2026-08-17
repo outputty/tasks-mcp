@@ -22,6 +22,7 @@ import { Octokit } from "octokit";
 import { match } from "ts-pattern";
 import { parse, stringify } from "yaml";
 import type { LabelFieldName, ProjectConfig, ProjectContext, RepoRef, Task } from "../types.ts";
+import { LABEL_FIELD_NAMES, TIERS, QA_LEVELS, SPEC_STATES, PRIORITIES } from "../types.ts";
 import { ConfigProvider } from "../config.ts";
 import type { Provider, ProviderState } from "./provider.ts";
 import { withDefaults } from "../graph.ts";
@@ -89,43 +90,47 @@ const META_CLOSE = "-->";
 // block; the label-worn fields live on the issue as labels.
 const META_KEYS = ["deps", "scope", "brief", "contract", "attempts", "discovered_from"] as const;
 
-// The label-worn fields, each with the color its labels are created with.
-const LABEL_FIELDS = {
+// The label-worn fields (LABEL_FIELD_NAMES is the one source), each with its label color.
+const LABEL_FIELDS: Record<LabelFieldName, string> = {
   kind: "bfd4f2",
   tier: "1d76db",
   qa: "5319e7",
   spec: "fbca04",
   stage: "0e8a16",
   priority: "b60205",
-} as const;
-type LabelField = keyof typeof LABEL_FIELDS;
-const labelField = (name: string): LabelField | null => {
+};
+const labelField = (name: string): LabelFieldName | null => {
   const at = name.indexOf(":");
   if (at === -1) return null;
   const field = name.slice(0, at);
-  return field in LABEL_FIELDS ? (field as LabelField) : null;
+  return (LABEL_FIELD_NAMES as readonly string[]).includes(field)
+    ? (field as LabelFieldName)
+    : null;
 };
 
 /** The labels a task wears — one `field:value` per configured label-worn field that is set — or
  *  null when the label sync is configured off (meaning: do not touch labels at all). */
 function labelsFor(task: Task, config: ProjectConfig): string[] | null {
   if (config.labels === false) return null;
-  const fields = config.labelFields ?? (Object.keys(LABEL_FIELDS) as LabelFieldName[]);
+  const fields = config.labelFields ?? LABEL_FIELD_NAMES;
   const out: string[] = [];
   for (const field of fields) {
-    const value = (task as unknown as Record<string, unknown>)[field];
-    if (value !== undefined) out.push(`${field}:${value}`);
+    if (task[field] !== undefined) out.push(`${field}:${task[field]}`);
   }
   return out;
 }
 
-/** A label's value parsed for its field — hand-typed junk (`tier:x`) is ignored, not crashed on. */
-function parseLabelValue(field: LabelField, value: string): unknown {
+/** A label's value parsed for its field — hand-typed junk (`tier:x`) is ignored, not crashed on.
+ *  The valid sets are the shared domains, so the parser can never drift from the validators. */
+function parseLabelValue(field: LabelFieldName, value: string): unknown {
+  const inSet = (set: readonly string[]) => (set.includes(value) ? value : undefined);
   return match(field)
-    .with("tier", () => ([1, 2, 3, 4].includes(Number(value)) ? Number(value) : undefined))
-    .with("qa", () => (["skip", "inline", "subagent"].includes(value) ? value : undefined))
-    .with("spec", () => (["drafting", "settled", "replan"].includes(value) ? value : undefined))
-    .with("priority", () => (["high", "normal", "low"].includes(value) ? value : undefined))
+    .with("tier", () =>
+      (TIERS as readonly number[]).includes(Number(value)) ? Number(value) : undefined,
+    )
+    .with("qa", () => inSet(QA_LEVELS))
+    .with("spec", () => inSet(SPEC_STATES))
+    .with("priority", () => inSet(PRIORITIES))
     .otherwise(() => value); // kind and stage are free text
 }
 
@@ -311,42 +316,35 @@ interface Scanned {
   card?: BoardCard;
 }
 
-// FIRST WINS everywhere a task id repeats: the listing is oldest-first, so upserts and pulls always
-// resolve to the OLDEST issue carrying an id — deterministic, and the one a human saw first.
-function indexOf(scan: Scanned[]): Map<string, IssueHandle> {
+/** Both views of one scan: the pull states and the upsert index. FIRST WINS everywhere a task id
+ *  repeats — the listing is oldest-first, so pulls and upserts always resolve to the OLDEST issue
+ *  carrying an id (deterministic, and the one a human saw first); newer duplicates are flagged. */
+function collate(
+  scan: Scanned[],
+  boardOn: boolean,
+): { states: Map<string, ProviderState>; index: Map<string, IssueHandle> } {
+  const states = new Map<string, ProviderState>();
   const index = new Map<string, IssueHandle>();
   for (const { listed, card } of scan) {
-    if (index.has(listed.task.id)) continue;
+    const existing = states.get(listed.task.id);
+    if (existing) {
+      existing.conflict = true; // a newer issue also claims this id; the oldest stays the record
+      continue;
+    }
+    states.set(listed.task.id, providerState(listed, card, boardOn));
     index.set(
       listed.task.id,
       card ? { issueId: listed.issueId, projectItem: card.itemId } : { issueId: listed.issueId },
     );
   }
-  return index;
+  return { states, index };
 }
 
-/** The updateIssue call for a task: label sync off leaves labels untouched; on, it keeps every
- *  foreign label and replaces only ours (updateIssue's labelIds REPLACES the whole set). */
-function updateMutation(
-  issueId: string,
-  task: Task,
-  human: string,
+/** The label node ids on an issue that are NOT ours — kept as-is on every update. */
+function foreignLabelIds(
   node: { labels: { nodes: Array<{ id: string; name: string }> } } | null,
-  labelIds: string[] | undefined,
-): [string, Record<string, unknown>] {
-  const base = { id: issueId, t: task.title || task.id, b: renderBody(task, human) };
-  if (labelIds === undefined)
-    return [
-      `mutation($id:ID!,$t:String!,$b:String!){ updateIssue(input:{id:$id,title:$t,body:$b}){ issue{ id } } }`,
-      base,
-    ];
-  const foreign = (node?.labels.nodes ?? [])
-    .filter((l) => labelField(l.name) === null)
-    .map((l) => l.id);
-  return [
-    `mutation($id:ID!,$t:String!,$b:String!,$l:[ID!]){ updateIssue(input:{id:$id,title:$t,body:$b,labelIds:$l}){ issue{ id } } }`,
-    { ...base, l: [...foreign, ...labelIds] },
-  ];
+): string[] {
+  return (node?.labels.nodes ?? []).filter((l) => labelField(l.name) === null).map((l) => l.id);
 }
 
 /** Duplicate ids are worth a line in the log every time they are seen — they mean two issues claim
@@ -380,7 +378,7 @@ export class GitHubProvider implements Provider {
   private readonly indexes = new Map<string, Promise<Map<string, IssueHandle>>>();
 
   constructor(
-    private readonly config: ConfigProvider = new ConfigProvider(),
+    private readonly config: ConfigProvider,
     octokit?: Octokit,
   ) {
     this.octokit = octokit ?? defaultOctokit();
@@ -399,9 +397,7 @@ export class GitHubProvider implements Provider {
     const state = await this.state(ctx.project);
     const index = await this.index(ctx.project, state);
     const known = index.get(task.id);
-    // Label preferences are read LIVE (not from init-frozen state), so a set_config propagates to
-    // the very next write; board configuration stays init-resolved (changing it needs a new board).
-    const wanted = labelsFor(task, this.config.get(ctx.project));
+    const wanted = labelsFor(task, state.config);
     const labelIds = wanted === null ? undefined : await this.ensureLabels(state, wanted);
     const issueId = await this.writeIssue(state, known?.issueId, task, labelIds);
     const projectItem = await this.withBoard(state, task, issueId, known?.projectItem);
@@ -436,19 +432,10 @@ export class GitHubProvider implements Provider {
 
   async pull(ctx: ProjectContext): Promise<Map<string, ProviderState>> {
     const state = await this.state(ctx.project);
-    const scan = await this.scan(state);
-    this.indexes.set(ctx.project, Promise.resolve(indexOf(scan)));
-    const out = new Map<string, ProviderState>();
-    for (const { listed, card } of scan) {
-      const existing = out.get(listed.task.id);
-      if (existing) {
-        existing.conflict = true; // a newer issue also claims this id; the oldest stays the record
-        continue;
-      }
-      out.set(listed.task.id, providerState(listed, card, state.board !== null));
-    }
-    warnConflicts(state.repo, out);
-    return out;
+    const { states, index } = collate(await this.scan(state), state.board !== null);
+    this.indexes.set(ctx.project, Promise.resolve(index));
+    warnConflicts(state.repo, states);
+    return states;
   }
 
   // -------------------------------------------------------------------------------------------------
@@ -458,7 +445,7 @@ export class GitHubProvider implements Provider {
     let index = this.indexes.get(project);
     if (!index) {
       index = this.scan(state)
-        .then(indexOf)
+        .then((scan) => collate(scan, state.board !== null).index)
         .catch((err) => {
           this.indexes.delete(project);
           throw err;
@@ -499,20 +486,23 @@ export class GitHubProvider implements Provider {
   // Init.
 
   private state(project: string): Promise<ProjectState> {
-    let state = this.states.get(project);
+    // The cache key carries the effective config, so ANY preference change (board, projects, labels)
+    // rebuilds the state on the next call — set_config propagates uniformly, no special cases.
+    const config = this.config.get(project);
+    const key = `${project}\u0000${JSON.stringify(config)}`;
+    let state = this.states.get(key);
     if (!state) {
-      state = this.buildState(project).catch((err) => {
-        this.states.delete(project); // a failed init retries next call instead of caching the error
+      state = this.buildState(project, config).catch((err) => {
+        this.states.delete(key); // a failed init retries next call instead of caching the error
         throw err;
       });
-      this.states.set(project, state);
+      this.states.set(key, state);
     }
     return state;
   }
 
-  private async buildState(project: string): Promise<ProjectState> {
+  private async buildState(project: string, config: ProjectConfig): Promise<ProjectState> {
     const repo = resolveRepo(project);
-    const config = this.config.get(project);
     const snapshot = await this.repoSnapshot(repo);
     return {
       repo,
@@ -638,7 +628,18 @@ export class GitHubProvider implements Provider {
       { id: issueId },
     );
     const human = parseBody(current.node?.body).human;
-    await this.octokit.graphql(...updateMutation(issueId, task, human, current.node, labelIds));
+    // updateIssue's labelIds REPLACES the whole set: keep every foreign label, replace only ours.
+    // Label sync off (labelIds undefined) leaves the labels field out of the mutation entirely.
+    const mutation =
+      labelIds === undefined
+        ? `mutation($id:ID!,$t:String!,$b:String!){ updateIssue(input:{id:$id,title:$t,body:$b}){ issue{ id } } }`
+        : `mutation($id:ID!,$t:String!,$b:String!,$l:[ID!]){ updateIssue(input:{id:$id,title:$t,body:$b,labelIds:$l}){ issue{ id } } }`;
+    await this.octokit.graphql(mutation, {
+      id: issueId,
+      t: task.title || task.id,
+      b: renderBody(task, human),
+      l: labelIds === undefined ? undefined : [...foreignLabelIds(current.node), ...labelIds],
+    });
     await this.setIssueState(issueId, task.status);
   }
 

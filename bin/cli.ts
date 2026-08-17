@@ -10,14 +10,17 @@ import { createHttpServer } from "../src/mcp/http.ts";
 import { SERVER_INFO } from "../src/mcp/server.ts";
 import { makeService } from "../src/core/service.ts";
 import type { ServerOptions } from "../src/core/config.ts";
-import type { ProjectContext, Task } from "../src/core/types.ts";
-import { ready, planning, schedule, prereqs, blockers, idList } from "../src/core/graph.ts";
-
-const csv = (value: string): string[] =>
-  value
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+import type { ProjectContext } from "../src/core/types.ts";
+import {
+  ready,
+  planning,
+  schedule,
+  prereqs,
+  blockers,
+  buildTask,
+  priorityOf,
+  idList,
+} from "../src/core/graph.ts";
 
 const program = new Command()
   .name(SERVER_INFO.name)
@@ -89,7 +92,7 @@ program
         id: b.task.id,
         blocks: b.blocks.length,
         blocked: idList(b.blocks),
-        priority: b.task.priority ?? "normal",
+        priority: priorityOf(b.task),
       })),
     ),
   );
@@ -104,28 +107,19 @@ program
   .command("add")
   .description("create a task")
   .argument("<id>", "stable unique id")
-  .option("--title <text>", "one-line summary", "")
-  .option("--deps <ids>", "comma-separated ids this task waits on", csv, [])
-  .option("--scope <folders>", "comma-separated folders the task may edit", csv, [])
+  .option("--title <text>", "one-line summary")
+  .option("--deps <ids>", "comma-separated ids this task waits on")
+  .option("--scope <folders>", "comma-separated folders the task may edit")
   .option("--tier <n>", "1-4; how much model the work needs", (v) => Number.parseInt(v, 10))
   .option("--qa <level>", "skip | inline | subagent")
   .option("--priority <level>", "high | normal | low")
+  .option("--spec <state>", "drafting | settled | replan")
+  .option("--stage <label>", "narrative label on a staged deliverable")
   .option("--brief <text>", "the build brief")
   .option("--contract <text>", "the done-condition")
   .action(async (id: string, opts: Record<string, unknown>) => {
-    const task: Task = {
-      id,
-      title: String(opts.title ?? ""),
-      status: "open",
-      deps: opts.deps as string[],
-      scope: opts.scope as string[],
-      ...(opts.tier !== undefined ? { tier: opts.tier as number } : {}),
-      ...(opts.qa !== undefined ? { qa: opts.qa as Task["qa"] } : {}),
-      ...(opts.priority !== undefined ? { priority: opts.priority as Task["priority"] } : {}),
-      ...(opts.brief !== undefined ? { brief: String(opts.brief) } : {}),
-      ...(opts.contract !== undefined ? { contract: String(opts.contract) } : {}),
-    };
-    out(await service().create(ctx(), task));
+    // The SAME builder the MCP surface uses: comma strings normalize, tier/qa/priority validate.
+    out(await service().create(ctx(), buildTask(id, opts)));
   });
 
 program
@@ -150,11 +144,11 @@ program
 // No subcommand: run the MCP server on the chosen transport.
 program.action(async () => {
   const opts = program.opts();
-  if (!opts.http) return runStdio(makeService(serverOptions()));
+  if (!opts.http) return runStdio(service());
   console.error(
     `tasks-mcp (http) listening on http://localhost:${opts.port}/mcp  (health: /health)`,
   );
-  createHttpServer(makeService(serverOptions())).listen(opts.port);
+  createHttpServer(service()).listen(opts.port);
 });
 
 await program.parseAsync(process.argv);

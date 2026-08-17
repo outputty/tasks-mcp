@@ -9,14 +9,9 @@
 import { DirectedGraph } from "graphology";
 import { topologicalGenerations } from "graphology-dag";
 import { bfsFromNode } from "graphology-traversal";
+import { match, P } from "ts-pattern";
 import type { Task, QaLevel, Priority } from "./types.ts";
-
-const SPEC_STATES = ["drafting", "settled", "replan"] as const;
-const TIERS = [1, 2, 3, 4] as const;
-// Ordered weakest-first, so a build's review level is the strongest qa among the tasks it drained.
-const QA_LEVELS: QaLevel[] = ["skip", "inline", "subagent"];
-// Ordered most-important-first; absent means "normal".
-const PRIORITIES: Priority[] = ["high", "normal", "low"];
+import { SPEC_STATES, TIERS, QA_LEVELS, PRIORITIES } from "./types.ts";
 
 /** Ids of the tasks that are already finished. */
 export function doneIds(tasks: Task[]): Set<string> {
@@ -29,7 +24,7 @@ export function doneIds(tasks: Task[]): Set<string> {
  */
 export function specSettled(task: Task): boolean {
   if (task.spec === undefined) return true;
-  if (!SPEC_STATES.includes(task.spec)) {
+  if (!(SPEC_STATES as readonly string[]).includes(task.spec)) {
     throw new Error(
       `unknown spec state '${task.spec}' on task ${task.id} (states: ${SPEC_STATES.join(", ")})`,
     );
@@ -65,7 +60,7 @@ export function tierOf(task: Task): number {
 /** A task's validated QA level, defaulting to `subagent` (nothing downgrades unless PLAN says so). */
 export function qaOf(task: Task): QaLevel {
   const qa = task.qa ?? "subagent";
-  if (!QA_LEVELS.includes(qa))
+  if (!(QA_LEVELS as readonly string[]).includes(qa))
     throw new Error(`unknown qa '${qa}' on task ${task.id} (qa: ${QA_LEVELS.join(", ")})`);
   return qa;
 }
@@ -73,7 +68,7 @@ export function qaOf(task: Task): QaLevel {
 /** A task's validated priority, defaulting to `normal`. */
 export function priorityOf(task: Task): Priority {
   const priority = task.priority ?? "normal";
-  if (!PRIORITIES.includes(priority))
+  if (!(PRIORITIES as readonly string[]).includes(priority))
     throw new Error(
       `unknown priority '${priority}' on task ${task.id} (priorities: ${PRIORITIES.join(", ")})`,
     );
@@ -82,6 +77,51 @@ export function priorityOf(task: Task): Priority {
 
 /** Most-important-first rank, for sorting. */
 export const priorityRank = (task: Task): number => PRIORITIES.indexOf(priorityOf(task));
+
+/** Loose list input (MCP args or CLI flags): a string array, a comma string, or nothing. */
+export const asArray = (value: unknown): string[] =>
+  match(value)
+    .with(P.array(P.string), (v) => v)
+    .with(P.string, (v) =>
+      v
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean),
+    )
+    .otherwise(() => []);
+
+// The optional task fields a loose input may carry through verbatim.
+const OPTIONAL_FIELDS = [
+  "brief",
+  "contract",
+  "tier",
+  "qa",
+  "priority",
+  "spec",
+  "stage",
+  "discovered_from",
+] as const;
+
+/**
+ * ONE task builder for every surface (MCP add_task, CLI add): normalizes deps/scope from array or
+ * comma string, carries the optional fields that are present, and validates before anything writes.
+ */
+export function buildTask(id: string, input: Record<string, unknown>): Task {
+  const task: Task = {
+    id,
+    title: typeof input.title === "string" ? input.title : "",
+    status: "open",
+    deps: asArray(input.deps),
+    scope: asArray(input.scope),
+  };
+  for (const key of OPTIONAL_FIELDS) {
+    if (input[key] !== undefined) (task as unknown as Record<string, unknown>)[key] = input[key];
+  }
+  tierOf(task);
+  qaOf(task);
+  priorityOf(task);
+  return task;
+}
 
 /** The whole plan as ordered layers, in dependency order. Throws on a dependency cycle. */
 export function schedule(tasks: Task[]): Task[][] {
@@ -153,6 +193,11 @@ function induced(graph: TaskGraph, keep: Map<string, Task>): TaskGraph {
 export function prereqs(tasks: Task[], id: string): Task[][] {
   const graph = buildGraph(tasks);
   if (!graph.hasNode(id)) throw new Error(`no task ${id}`);
+  return prereqsOn(graph, id);
+}
+
+/** `prereqs` over an already-built graph, so rankings never rebuild it per task. */
+function prereqsOn(graph: TaskGraph, id: string): Task[][] {
   const needed = openReach(graph, id, "in");
   const sub = induced(graph, needed);
   return topologicalGenerations(sub).map((layer) =>
@@ -165,6 +210,8 @@ export interface Blocker {
   task: Task;
   /** The open tasks that cannot start (or finish their chain) until this one is done. */
   blocks: Task[];
+  /** What has to happen before the blocker itself can start, dependency-ordered. */
+  unblockedBy: Task[][];
 }
 
 /**
@@ -178,7 +225,7 @@ export function blockers(tasks: Task[]): Blocker[] {
   for (const task of tasks) {
     if (task.status !== "open") continue;
     const blocks = [...openReach(graph, task.id, "out").values()];
-    if (blocks.length > 0) out.push({ task, blocks });
+    if (blocks.length > 0) out.push({ task, blocks, unblockedBy: prereqsOn(graph, task.id) });
   }
   return out.sort(byImpact);
 }

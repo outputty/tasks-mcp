@@ -42,11 +42,18 @@ export class FileProvider implements Provider {
   }
 
   async upsert(ctx: ProjectContext, task: Task): Promise<void> {
-    const tasks = this.load(ctx.project);
-    const at = tasks.findIndex((t) => t.id === task.id);
-    if (at === -1) tasks.push(task);
-    else tasks[at] = task;
-    this.save(ctx.project, tasks);
+    await this.upsertMany(ctx, [task]);
+  }
+
+  /** The batch form the service prefers: one read and one write however many tasks change. */
+  async upsertMany(ctx: ProjectContext, tasks: Task[]): Promise<void> {
+    const all = this.load(ctx.project);
+    for (const task of tasks) {
+      const at = all.findIndex((t) => t.id === task.id);
+      if (at === -1) all.push(task);
+      else all[at] = task;
+    }
+    this.save(ctx.project, all);
   }
 
   /** The file for a project: `<cacheDir>/<basename>-<hash>.yaml`, keyed by the project's path. */

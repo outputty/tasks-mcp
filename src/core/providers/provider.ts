@@ -38,6 +38,8 @@ export interface Provider {
   pull(ctx: ProjectContext): Promise<Map<string, ProviderState>>;
   /** Create-or-update one task; the layer resolves its own handles (issue number, card id, …). */
   upsert(ctx: ProjectContext, task: Task): Promise<void>;
+  /** Optional batch form of `upsert` — a layer with cheap batching (one file write) implements it. */
+  upsertMany?(ctx: ProjectContext, tasks: Task[]): Promise<void>;
 }
 
 // Registered remote layers. Adding Linear is one entry here plus its class — nothing else moves.
@@ -45,28 +47,19 @@ const REMOTES: Record<string, (config: ConfigProvider) => Provider> = {
   github: (config) => new GitHubProvider(config),
 };
 
-// One stack per remote name — layers cache their per-project init (repo, board, index), so handing out
-// fresh instances would redo that remote work on every service call.
-const stacks = new Map<string, Provider[]>();
-
 /**
- * The project's provider stack, top-first: the file layer, then the configured remote (default
- * "github"). Order is authority order — the LAST layer is the source of truth. Every remote layer
- * shares the one ConfigProvider, so a preference set centrally propagates to all of them.
+ * Build the stack for one remote, top-first: the file layer, then the named remote. Order is
+ * authority order — the LAST layer is the source of truth. A pure builder: the caller (TaskStack)
+ * owns memoization, and every remote layer shares the one ConfigProvider, so a preference set
+ * centrally propagates to all of them.
  */
-export function stackFor(
-  project: string,
-  options: ServerOptions = {},
-  config: ConfigProvider = new ConfigProvider(options),
+export function buildStack(
+  remote: string,
+  options: ServerOptions,
+  config: ConfigProvider,
 ): Provider[] {
-  const name = config.get(project).provider ?? "github";
-  const make = REMOTES[name];
+  const make = REMOTES[remote];
   if (!make)
-    throw new Error(`unknown provider '${name}' (known: ${Object.keys(REMOTES).join(", ")})`);
-  let stack = stacks.get(name);
-  if (!stack) {
-    stack = [new FileProvider(options), make(config)];
-    stacks.set(name, stack);
-  }
-  return stack;
+    throw new Error(`unknown provider '${remote}' (known: ${Object.keys(REMOTES).join(", ")})`);
+  return [new FileProvider(options), make(config)];
 }

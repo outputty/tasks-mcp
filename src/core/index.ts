@@ -38,6 +38,6 @@ export type {
   Priority,
   LabelFieldName,
 } from "./types.ts";
-export { stackFor, type Provider, type ProviderState } from "./providers/provider.ts";
+export { buildStack, type Provider, type ProviderState } from "./providers/provider.ts";
 export { FileProvider } from "./providers/file.ts";
 export { GitHubProvider } from "./providers/github.ts";

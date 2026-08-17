@@ -2,9 +2,17 @@
 // engine reasons over them. Every field except id/title/status is optional so a plain todo and a full
 // outputty task share one shape.
 
-export type SpecState = "drafting" | "settled" | "replan";
-export type QaLevel = "skip" | "inline" | "subagent";
-export type Priority = "high" | "normal" | "low";
+// The value domains, each stated ONCE — the types, the validators, the zod schemas, and the GitHub
+// label parser all derive from these arrays.
+export const SPEC_STATES = ["drafting", "settled", "replan"] as const;
+export const QA_LEVELS = ["skip", "inline", "subagent"] as const;
+export const PRIORITIES = ["high", "normal", "low"] as const;
+export const TIERS = [1, 2, 3, 4] as const;
+export const LABEL_FIELD_NAMES = ["kind", "tier", "qa", "spec", "stage", "priority"] as const;
+
+export type SpecState = (typeof SPEC_STATES)[number];
+export type QaLevel = (typeof QA_LEVELS)[number];
+export type Priority = (typeof PRIORITIES)[number];
 
 export interface Attempt {
   tried: string;
@@ -54,7 +62,7 @@ export interface RepoRef {
 }
 
 /** A field a task can wear as a `field:value` GitHub label. */
-export type LabelFieldName = "kind" | "tier" | "qa" | "spec" | "stage" | "priority";
+export type LabelFieldName = (typeof LABEL_FIELD_NAMES)[number];
 
 /** User preferences, resolved by ConfigProvider (defaults < flags < global spec < per-repo). */
 export interface ProjectConfig {

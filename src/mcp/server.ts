@@ -5,17 +5,20 @@
 // passed straight through to the backend.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { match, P } from "ts-pattern";
 import { z } from "zod";
 import pkg from "../../package.json";
 import type { TaskService } from "../core/service.ts";
 import type { ProjectContext, Task } from "../core/types.ts";
+import { QA_LEVELS, SPEC_STATES, PRIORITIES } from "../core/types.ts";
+import { ProjectConfigSchema } from "../core/config.ts";
 import {
   ready,
   planning,
   schedule,
   prereqs,
   blockers,
+  buildTask,
+  asArray,
   tierOf,
   qaOf,
   priorityOf,
@@ -42,35 +45,6 @@ const ctxOf = (args: { project: string; branch?: string }): ProjectContext => ({
   branch: args.branch,
 });
 
-/** deps/scope come in as a string array or a comma string; anything absent is an empty list. */
-const asArray = (value: unknown): string[] =>
-  match(value)
-    .with(P.array(P.string), (v) => v)
-    .with(P.string, (v) =>
-      v
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-    )
-    .otherwise(() => []);
-
-// The optional task fields add_task passes through verbatim when present.
-const OPTIONAL_FIELDS = [
-  "brief",
-  "contract",
-  "tier",
-  "qa",
-  "priority",
-  "spec",
-  "stage",
-  "discovered_from",
-] as const;
-function optionalFields(args: Record<string, unknown>): Partial<Task> {
-  const out: Record<string, unknown> = {};
-  for (const key of OPTIONAL_FIELDS) if (args[key] !== undefined) out[key] = args[key];
-  return out as Partial<Task>;
-}
-
 // A compact index row, the same shape the tracker's derived index has always emitted.
 const ROW = {
   id: z.string(),
@@ -91,21 +65,8 @@ const indexRow = (task: Task) => ({
   priority: priorityOf(task),
 });
 
-// The config object's zod shape — reused by get_config (output) and set_config (input + output).
-const CONFIG = {
-  provider: z.string().optional(),
-  projects: z.boolean().optional(),
-  projectNumber: z.number().optional(),
-  board: z.string().optional(),
-  labels: z
-    .boolean()
-    .optional()
-    .describe("Wear execution properties as GitHub labels (default on)."),
-  labelFields: z
-    .array(z.enum(["kind", "tier", "qa", "spec", "stage", "priority"]))
-    .optional()
-    .describe("Which fields become labels (default: all)."),
-};
+// The config object's zod shape — THE schema from core/config.ts, so the surfaces cannot drift.
+const CONFIG = ProjectConfigSchema.shape;
 
 // Tool results carry the JSON twice by MCP convention: `structuredContent` for typed consumers,
 // serialized `content` text for the rest.
@@ -217,31 +178,16 @@ export function createMcpServer(service: TaskService): McpServer {
           .optional()
           .describe("The done-condition, turned into a failing test first."),
         tier: z.number().optional().describe("1-4; how much model the work needs (default 3)."),
-        qa: z
-          .enum(["skip", "inline", "subagent"])
-          .optional()
-          .describe("How much review (default subagent)."),
-        priority: z
-          .enum(["high", "normal", "low"])
-          .optional()
-          .describe("How urgent (default normal)."),
-        spec: z.enum(["drafting", "settled", "replan"]).optional().describe("Planning lifecycle."),
+        qa: z.enum(QA_LEVELS).optional().describe("How much review (default subagent)."),
+        priority: z.enum(PRIORITIES).optional().describe("How urgent (default normal)."),
+        spec: z.enum(SPEC_STATES).optional().describe("Planning lifecycle."),
         stage: z.string().optional().describe("Narrative label on a staged deliverable."),
         discovered_from: z.string().optional().describe("Parent task, when split out mid-build."),
       },
       outputSchema: { task: z.unknown() },
     },
     async (args) => {
-      const task: Task = {
-        id: args.id,
-        title: args.title ?? "",
-        status: "open",
-        deps: asArray(args.deps),
-        scope: asArray(args.scope),
-        ...optionalFields(args),
-      };
-      tierOf(task); // validate before the write
-      qaOf(task);
+      const task = buildTask(args.id, args); // normalizes and validates before the write
       return result({ task: await service.create(ctxOf(args), task) });
     },
   );
@@ -380,7 +326,7 @@ export function createMcpServer(service: TaskService): McpServer {
           blocks: b.blocks.length,
           blocked: b.blocks.map((t) => t.id),
           highPriorityBlocked: b.blocks.filter((t) => priorityOf(t) === "high").map((t) => t.id),
-          unblockedBy: prereqs(tasks, b.task.id).map((layer) => layer.map((t) => t.id)),
+          unblockedBy: b.unblockedBy.map((layer) => layer.map((t) => t.id)),
         })),
       });
     },
