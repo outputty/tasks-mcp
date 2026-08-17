@@ -93,6 +93,8 @@ disposable file cache, a trail is durable local memory — one YAML file per tas
 at the repo root (path via `trailsDir`), committable, and **never synced to a remote**. `TrailStore`
 owns it; `append_trail` / `get_trail` are the surface.
 
+![The trail append and read flow: append_trail guards the task exists, then text-appends to the store; get_trail reads it back](trails.svg)
+
 Writes are a **text append, never a rewrite**: a new entry is concatenated as one YAML list item, so
 every earlier byte — including any hand-editing between appends — survives untouched. (outputty's
 original tracker refused to write trails at all for exactly this reason: a full re-serialize flattens
