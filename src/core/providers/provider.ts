@@ -20,6 +20,12 @@ export interface RemoteState {
 
 export interface Provider {
   readonly name: string;
+  /**
+   * Resolve everything the provider needs for this project — credentials, remote coordinates, and any
+   * container to sync into (for GitHub: the Projects v2 board, found or created). Called by the
+   * service before task operations; idempotent, one real run per project.
+   */
+  init(ctx: ProjectContext): Promise<void>;
   /** Create the task in the provider (it is new to the cache). Returns refs to store. */
   create(ctx: ProjectContext, task: Task): Promise<Refs>;
   /** Update an existing task in the provider, using the refs from its cache entry. */
@@ -34,6 +40,10 @@ const PROVIDERS: Record<string, (options: ServerOptions) => Provider> = {
   github: (options) => new GitHubProvider(options),
 };
 
+// One instance per provider name — a provider caches its per-project init (repo, config, board), so
+// handing out fresh instances would redo that remote work on every service call.
+const instances = new Map<string, Provider>();
+
 /** The provider a project uses, from its config (default "github"). */
 export function providerFor(
   project: string,
@@ -45,5 +55,10 @@ export function providerFor(
     throw new Error(
       `unknown provider '${name}' (known: ${Object.keys(PROVIDERS).join(", ")})`,
     );
-  return make(options);
+  let instance = instances.get(name);
+  if (!instance) {
+    instance = make(options);
+    instances.set(name, instance);
+  }
+  return instance;
 }

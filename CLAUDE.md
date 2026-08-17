@@ -5,16 +5,24 @@ to npm. It is split so the MCP layer wraps the core, never the reverse:
 
 - `src/core/` — the business logic: `service`, `cache`, `graph`, `config`, `providers/` (GitHub via
   Octokit, GraphQL only). Exported as the library (`.`).
-- `src/mcp/` — the wrapper: `tools`, the JSON-RPC `protocol`, and the `stdio` + `http` transports.
-  Exported as `./mcp`.
+- `src/mcp/` — the wrapper on the official `@modelcontextprotocol/sdk`: the tool surface (`server`)
+  and the `stdio` + `http` transports. Exported as `./mcp`.
 - `bin/cli.ts` — the entry: MCP server (stdio default, `--http`) or direct subcommands.
 
 ## Code rules (the user's standing preferences — follow them in every change)
 
-- **Providers are classes.** Every provider is a class implementing the `Provider` seam, and it wraps
-  its own API client (`GitHubProvider` holds its `Octokit`). The client is the one injection point —
-  constructor parameter, defaulted for production, passed explicitly by tests. No free-function
-  resolver seams around a provider.
+- **A provider is ONE class in ONE file.** Every provider is a class implementing the `Provider` seam,
+  and it wraps its own API client (`GitHubProvider` holds its `Octokit`) — no satellite modules
+  (client/issues/projects were folded into the class by request). The client is the one injection
+  point — constructor parameter, defaulted for production, passed explicitly by tests.
+- **All remote setup happens in `init()`.** There are no async constructors, so every provider has an
+  explicit `async init(ctx)` — credentials, repo resolution, and container selection/creation (for
+  GitHub: finding or creating the Projects v2 board) run there, once per project, never lazily inside
+  task calls. The service awaits `init` before any operation.
+- **The MCP layer is the official `@modelcontextprotocol/sdk`** — never a hand-rolled JSON-RPC
+  handler. Tools declare zod input AND output schemas; results carry `structuredContent`.
+- **The server version comes from `package.json`** (imported at build time) — never a hand-maintained
+  copy in the source.
 - **No imports inside functions.** All imports sit at the top of the module — no lazy
   `await import(...)` to shave startup or dodge a dependency in tests.
 - **The GitHub provider speaks GraphQL only** (user ruling, 2026-08-17). The Projects v2 board is
@@ -50,7 +58,7 @@ explicitly confirms — release creation is theirs to approve every time.
 On an explicit "yes":
 
 1. Bump `version` in `package.json` — **patch** for a fix, **minor** for a feature, **major** for a
-   breaking change — and keep `SERVER_INFO.version` in `src/mcp/protocol.ts` in sync.
+   breaking change. (`SERVER_INFO.version` reads it from `package.json`; nothing else to sync.)
 2. Commit and push the bump (this alone still does not publish).
 3. `gh release create vX.Y.Z --generate-notes` — the tag must equal the new version. Publishing this
    release is what triggers the npm publish.

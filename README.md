@@ -118,7 +118,7 @@ body (no labels), and adds a card to the board.
 ```
    bin/cli.ts   ── CLI subcommands  ·  MCP server (stdio / http)
         │
-   src/mcp/     ── the MCP WRAPPER: tools · JSON-RPC protocol · stdio + node:http transports
+   src/mcp/     ── the MCP WRAPPER (@modelcontextprotocol/sdk): tools · stdio + streamable-http
         │  wraps ↓ ; never the other way round
    src/core/    ── the CORE (business logic): service · cache · graph engine · providers
         │  each call carries { project, branch? }
@@ -161,10 +161,10 @@ Turn it off with `--no-projects`, or aim it at an existing board with `--project
 
 ## The MCP transport
 
-A tools-only server sends no server-initiated messages. Over stdio it is newline-delimited JSON-RPC; over
-HTTP the Streamable HTTP transport collapses to one JSON-RPC message in, one JSON reply out — no SSE
-stream, no session id. Both handle `initialize`, `tools/list`, and `tools/call` (plus `ping` and the
-`initialized` notification). The whole server leans on just `octokit` + `yaml` — the HTTP transport is plain `node:http`.
+The protocol is the official [`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk):
+`StdioServerTransport` for the spawned case, and stateless Streamable HTTP (JSON responses, no session
+ids) served from plain `node:http` for `--http`. Each tool declares zod input and output schemas, so
+results carry `structuredContent`. Runtime deps: the SDK, `octokit`, `yaml`, and `zod`.
 
 ## Config
 
@@ -206,13 +206,13 @@ overrides the flags for one repo. Credentials come from `GITHUB_TOKEN` / `GH_TOK
 
 ```bash
 npm install
-npm test             # vitest: graph engine · GitHub provider (nock) · cache service · MCP protocol
+npm test             # vitest: graph engine · GitHub provider (nock) · cache service · MCP server
 npm run build        # tsup -> dist/ (cli, index, mcp)
 ```
 
 The GitHub provider is tested with **nock** — the tests drive the real Octokit client, and nock
 intercepts the HTTP so the actual queries and responses are exercised without a network or credentials.
-The service and protocol tests run the same way — end to end over the real provider, nock at the network boundary.
+The service and MCP tests run the same way — the MCP suite drives the SDK client over real HTTP against the real server, end to end over the real provider, nock at the network boundary.
 
 ## Releasing
 

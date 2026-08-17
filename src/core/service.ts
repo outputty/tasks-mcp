@@ -36,8 +36,11 @@ export class CachedTaskService implements TaskService {
     return Cache.forProject(project, this.options.cacheDir);
   }
 
-  private providerFor(ctx: ProjectContext): Provider {
-    return this.provider ?? providerFor(ctx.project, this.options);
+  /** The project's provider, initialised — repo, credentials, and board are resolved before any op. */
+  private async providerFor(ctx: ProjectContext): Promise<Provider> {
+    const provider = this.provider ?? providerFor(ctx.project, this.options);
+    await provider.init(ctx);
+    return provider;
   }
 
   async list(ctx: ProjectContext): Promise<Task[]> {
@@ -57,7 +60,7 @@ export class CachedTaskService implements TaskService {
     const entries = cache.load();
     if (entries.some((e) => e.id === task.id))
       throw new Error(`task ${task.id} already exists`);
-    const refs = await this.providerFor(ctx).create(ctx, task);
+    const refs = await (await this.providerFor(ctx)).create(ctx, task);
     entries.push({ ...task, refs });
     cache.save(entries);
     return task;
@@ -73,11 +76,9 @@ export class CachedTaskService implements TaskService {
     const entry = entries.find((e) => e.id === id);
     if (!entry) throw new Error(`no task ${id}`);
     const merged: CacheEntry = { ...entry, ...patch, id };
-    merged.refs = await this.providerFor(ctx).update(
-      ctx,
-      stripRefs(merged),
-      entry.refs ?? {},
-    );
+    merged.refs = await (
+      await this.providerFor(ctx)
+    ).update(ctx, stripRefs(merged), entry.refs ?? {});
     entries[entries.indexOf(entry)] = merged;
     cache.save(entries);
     return stripRefs(merged);
@@ -91,7 +92,7 @@ export class CachedTaskService implements TaskService {
     const cache = this.cache(ctx.project);
     const entries = cache.load();
     const byId = new Map(entries.map((e) => [e.id, e]));
-    const provider = this.providerFor(ctx);
+    const provider = await this.providerFor(ctx);
 
     // Pull the fields the provider owns (title, status) back into the cache, adopting any issue it
     // surfaces that the cache did not know (a hand-opened one), and learning each task's refs.
