@@ -22,10 +22,7 @@ function harness() {
   const gh = installNock(new NockGitHub());
   const project = tmpRepo();
   const cache = tmp();
-  const svc = new CachedTaskService(
-    { cacheDir: cache.dir },
-    nockProvider({ projects: false }),
-  );
+  const svc = new CachedTaskService({ cacheDir: cache.dir }, nockProvider({ projects: false }));
   return {
     svc,
     gh,
@@ -47,9 +44,7 @@ test("the cache lives outside the repo, in the given cacheDir", async () => {
   expect(fs.existsSync(`${project}/.claude/tasks.cache.yaml`)).toBe(false); // nothing in the repo
   const files = fs.readdirSync(cacheDir);
   expect(files).toHaveLength(1);
-  expect(fs.readFileSync(`${cacheDir}/${files[0]}`, "utf8")).toContain(
-    "- schema",
-  );
+  expect(fs.readFileSync(`${cacheDir}/${files[0]}`, "utf8")).toContain("- schema");
   cleanup();
 });
 
@@ -67,9 +62,7 @@ test("reads come from the cache; deps gate readiness", async () => {
 test("a duplicate id is refused", async () => {
   const { svc, project, cleanup } = harness();
   await svc.create({ project }, task({ id: "dup" }));
-  await expect(svc.create({ project }, task({ id: "dup" }))).rejects.toThrow(
-    DuplicateTaskError,
-  );
+  await expect(svc.create({ project }, task({ id: "dup" }))).rejects.toThrow(DuplicateTaskError);
   cleanup();
 });
 
@@ -81,10 +74,7 @@ test("a deleted cache is rebuilt from the issues, deps and all", async () => {
 
   // Fresh cache dir, same "remote" (the nock GitHub keeps its issues).
   const cache2 = tmp();
-  const svc2 = new CachedTaskService(
-    { cacheDir: cache2.dir },
-    nockProvider({ projects: false }),
-  );
+  const svc2 = new CachedTaskService({ cacheDir: cache2.dir }, nockProvider({ projects: false }));
   expect(await svc2.list(ctx)).toEqual([]);
   await svc2.sync(ctx);
   const api = (await svc2.list(ctx)).find((t) => t.id === "api")!;

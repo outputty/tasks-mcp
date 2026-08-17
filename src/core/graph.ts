@@ -32,10 +32,7 @@ export function specSettled(task: Task): boolean {
 export function ready(tasks: Task[]): Task[] {
   const done = doneIds(tasks);
   return tasks.filter(
-    (t) =>
-      t.status === "open" &&
-      specSettled(t) &&
-      t.deps.every((dep) => done.has(dep)),
+    (t) => t.status === "open" && specSettled(t) && t.deps.every((dep) => done.has(dep)),
   );
 }
 
@@ -51,9 +48,7 @@ export function planning(tasks: Task[]): Task[] {
 export function tierOf(task: Task): number {
   const tier = task.tier ?? 3;
   if (!TIERS.includes(tier as (typeof TIERS)[number])) {
-    throw new Error(
-      `unknown tier ${tier} on task ${task.id} (tiers: 1, 2, 3, 4)`,
-    );
+    throw new Error(`unknown tier ${tier} on task ${task.id} (tiers: 1, 2, 3, 4)`);
   }
   return tier;
 }
@@ -62,9 +57,7 @@ export function tierOf(task: Task): number {
 export function qaOf(task: Task): QaLevel {
   const qa = task.qa ?? "subagent";
   if (!QA_LEVELS.includes(qa))
-    throw new Error(
-      `unknown qa '${qa}' on task ${task.id} (qa: ${QA_LEVELS.join(", ")})`,
-    );
+    throw new Error(`unknown qa '${qa}' on task ${task.id} (qa: ${QA_LEVELS.join(", ")})`);
   return qa;
 }
 
@@ -86,8 +79,7 @@ export function schedule(tasks: Task[]): Task[][] {
   return layers;
 }
 
-export const idList = (tasks: Task[]): string =>
-  tasks.map((t) => t.id).join(", ");
+export const idList = (tasks: Task[]): string => tasks.map((t) => t.id).join(", ");
 
 /** Fill the structural defaults a backend may omit, so the graph functions never see undefined. */
 export const withDefaults = (task: Partial<Task> & { id: string }): Task => ({

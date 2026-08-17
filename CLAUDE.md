@@ -23,6 +23,19 @@ to npm. It is split so the MCP layer wraps the core, never the reverse:
   handler. Tools declare zod input AND output schemas; results carry `structuredContent`.
 - **The server version comes from `package.json`** (imported at build time) — never a hand-maintained
   copy in the source.
+- **Exit early.** Guard clauses and early returns; `else` only when the branches are genuinely
+  symmetric. oxlint's `no-else-return` (no else-if allowed) backs this in the build.
+- **Pattern matching is `ts-pattern`.** When a function dispatches on the value or shape of one
+  input, write `match(x).with(...).exhaustive()` — `.exhaustive()` whenever the input is a closed
+  union, `.otherwise()` only for genuinely open input. (The user asked for "ts-match"; that npm
+  package is unmaintained — last publish 2022, ~460 downloads/week — so the maintained standard
+  `ts-pattern` (~5.4M/week) fills the role.)
+- **Orchestrator/executor.** A public method orchestrates: it sequences executor calls and assumes
+  no knowledge of their implementation (`create` = issue then board; `sync` = pull, merge, push).
+  Executors (`createIssue`, `syncToBoard`, `mergeRemote`, …) own the specific logic and let errors
+  bubble. An orchestrator catches only where business logic demands a fallback the executor cannot
+  decide — e.g. the board is best-effort, so board errors are caught and logged at the orchestration
+  seam while issue errors always propagate.
 - **No imports inside functions.** All imports sit at the top of the module — no lazy
   `await import(...)` to shave startup or dodge a dependency in tests.
 - **The GitHub provider speaks GraphQL only** (user ruling, 2026-08-17). The Projects v2 board is
@@ -38,15 +51,18 @@ to npm. It is split so the MCP layer wraps the core, never the reverse:
 
 ## Commands
 
-- `npm run check` — THE build: format check → oxlint → typecheck → tests → tsup. This is the exact
+- `npm run check` — THE build: format check → oxlint → typecheck → tests → tsdown. This is the exact
   command CI runs; run it before calling any change done.
 - `npm test` — vitest. **Not `bun test`:** the GitHub provider tests use **nock**, which needs Node's
   fetch; nock can't intercept Bun's.
 - `npm run lint` — oxlint, which enforces the working-set caps: complexity ≤ 7, ≤ 24 lines per
-  function, nesting ≤ 3 (see `.oxlintrc.json`). Fix by decomposing; a deviation is a targeted
-  disable comment with a written why, never a loosened threshold.
-- `npm run build` — tsup → `dist/` (cli, index, mcp).
-- `npm run format` — prettier.
+  function, nesting ≤ 3, no else-after-return (see `.oxlintrc.json`). Fix by decomposing; a
+  deviation is a targeted disable comment with a written why, never a loosened threshold.
+- `npm run typecheck` — TypeScript 7 (the native compiler; the `typescript` package IS ts7 now).
+- `npm run build` — tsdown (Rolldown + oxc) → `dist/` (cli, index, mcp). `oxc-transform` is the
+  low-level transpile API inside that stack, not a tool to drive directly.
+- `npm run format` — oxfmt (user ruling 2026-08-17: the oxc toolchain — oxlint/oxfmt/tsdown — over
+  eslint/prettier/tsup).
 
 Keep the code **runtime-portable** — no Bun-only APIs in `src/`/`bin/` (use `yaml`, `node:crypto`,
 `node:child_process`, `node:http`, `process` streams). It must run under both Node and Bun.

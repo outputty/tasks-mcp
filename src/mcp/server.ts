@@ -5,18 +5,12 @@
 // passed straight through to the backend.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { match, P } from "ts-pattern";
 import { z } from "zod";
 import pkg from "../../package.json";
 import type { TaskService } from "../core/service.ts";
 import type { ProjectContext, Task } from "../core/types.ts";
-import {
-  ready,
-  planning,
-  schedule,
-  tierOf,
-  qaOf,
-  idList,
-} from "../core/graph.ts";
+import { ready, planning, schedule, tierOf, qaOf, idList } from "../core/graph.ts";
 
 // The single source of the server's identity: the name is the package's bare name, the version is the
 // package version — never a hand-maintained copy.
@@ -25,9 +19,7 @@ export const SERVER_INFO = {
   version: pkg.version,
 };
 
-const PROJECT = z
-  .string()
-  .describe("Absolute path to the target repository root.");
+const PROJECT = z.string().describe("Absolute path to the target repository root.");
 const BRANCH = z
   .string()
   .optional()
@@ -40,15 +32,17 @@ const ctxOf = (args: { project: string; branch?: string }): ProjectContext => ({
   branch: args.branch,
 });
 
+/** deps/scope come in as a string array or a comma string; anything absent is an empty list. */
 const asArray = (value: unknown): string[] =>
-  Array.isArray(value)
-    ? value.map(String)
-    : typeof value === "string" && value
-      ? value
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean)
-      : [];
+  match(value)
+    .with(P.array(P.string), (v) => v)
+    .with(P.string, (v) =>
+      v
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    )
+    .otherwise(() => []);
 
 // The optional task fields add_task passes through verbatim when present.
 const OPTIONAL_FIELDS = [
@@ -62,8 +56,7 @@ const OPTIONAL_FIELDS = [
 ] as const;
 function optionalFields(args: Record<string, unknown>): Partial<Task> {
   const out: Record<string, unknown> = {};
-  for (const key of OPTIONAL_FIELDS)
-    if (args[key] !== undefined) out[key] = args[key];
+  for (const key of OPTIONAL_FIELDS) if (args[key] !== undefined) out[key] = args[key];
   return out as Partial<Task>;
 }
 
@@ -88,9 +81,7 @@ const indexRow = (task: Task) => ({
 // Tool results carry the JSON twice by MCP convention: `structuredContent` for typed consumers,
 // serialized `content` text for the rest.
 const result = <T extends Record<string, unknown>>(structured: T) => ({
-  content: [
-    { type: "text" as const, text: JSON.stringify(structured, null, 2) },
-  ],
+  content: [{ type: "text" as const, text: JSON.stringify(structured, null, 2) }],
   structuredContent: structured,
 });
 
@@ -105,8 +96,7 @@ export function createMcpServer(service: TaskService): McpServer {
   server.registerTool(
     "list_ready",
     {
-      description:
-        "The tasks ready to build right now: open, settled, every dependency done.",
+      description: "The tasks ready to build right now: open, settled, every dependency done.",
       inputSchema: { project: PROJECT, branch: BRANCH },
       outputSchema: { ids: z.array(z.string()), tasks: z.array(z.object(ROW)) },
     },
@@ -167,8 +157,7 @@ export function createMcpServer(service: TaskService): McpServer {
   server.registerTool(
     "get_task",
     {
-      description:
-        "One task's full record, or null if no task carries that id.",
+      description: "One task's full record, or null if no task carries that id.",
       inputSchema: {
         project: PROJECT,
         branch: BRANCH,
@@ -193,34 +182,19 @@ export function createMcpServer(service: TaskService): McpServer {
         title: z.string().optional().describe("One-line summary."),
         deps: LIST.optional().describe("Ids this task waits on."),
         scope: LIST.optional().describe("Folders the task may edit."),
-        brief: z
-          .string()
-          .optional()
-          .describe("The build brief: what it builds toward."),
+        brief: z.string().optional().describe("The build brief: what it builds toward."),
         contract: z
           .string()
           .optional()
           .describe("The done-condition, turned into a failing test first."),
-        tier: z
-          .number()
-          .optional()
-          .describe("1-4; how much model the work needs (default 3)."),
+        tier: z.number().optional().describe("1-4; how much model the work needs (default 3)."),
         qa: z
           .enum(["skip", "inline", "subagent"])
           .optional()
           .describe("How much review (default subagent)."),
-        spec: z
-          .enum(["drafting", "settled", "replan"])
-          .optional()
-          .describe("Planning lifecycle."),
-        stage: z
-          .string()
-          .optional()
-          .describe("Narrative label on a staged deliverable."),
-        discovered_from: z
-          .string()
-          .optional()
-          .describe("Parent task, when split out mid-build."),
+        spec: z.enum(["drafting", "settled", "replan"]).optional().describe("Planning lifecycle."),
+        stage: z.string().optional().describe("Narrative label on a staged deliverable."),
+        discovered_from: z.string().optional().describe("Parent task, when split out mid-build."),
       },
       outputSchema: { task: z.unknown() },
     },
@@ -258,21 +232,15 @@ export function createMcpServer(service: TaskService): McpServer {
       const task = await service.get(ctx, args.id);
       if (!task) throw new Error(`no task ${args.id}`);
       if (task.status === "done")
-        throw new Error(
-          `task ${args.id} is done — amend orphans committed work`,
-        );
+        throw new Error(`task ${args.id} is done — amend orphans committed work`);
       const patch: Partial<Task> = {};
       if (args.scope !== undefined) {
-        const added = asArray(args.scope).filter(
-          (s) => !task.scope.includes(s),
-        );
-        if (!added.length)
-          throw new Error(`task ${args.id} already covers that scope`);
+        const added = asArray(args.scope).filter((s) => !task.scope.includes(s));
+        if (!added.length) throw new Error(`task ${args.id} already covers that scope`);
         patch.scope = [...task.scope, ...added];
       }
       if (args.brief !== undefined) patch.brief = args.brief;
-      if (!Object.keys(patch).length)
-        throw new Error("amend needs scope or brief");
+      if (!Object.keys(patch).length) throw new Error("amend needs scope or brief");
       return result({ task: await service.update(ctx, args.id, patch) });
     },
   );

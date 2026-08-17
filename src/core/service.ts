@@ -66,19 +66,14 @@ export class CachedTaskService implements TaskService {
   async create(ctx: ProjectContext, task: Task): Promise<Task> {
     const cache = this.cache(ctx.project);
     const entries = cache.load();
-    if (entries.some((e) => e.id === task.id))
-      throw new DuplicateTaskError(task.id);
+    if (entries.some((e) => e.id === task.id)) throw new DuplicateTaskError(task.id);
     const refs = await (await this.providerFor(ctx)).create(ctx, task);
     entries.push({ ...task, refs });
     cache.save(entries);
     return task;
   }
 
-  async update(
-    ctx: ProjectContext,
-    id: string,
-    patch: Partial<Task>,
-  ): Promise<Task> {
+  async update(ctx: ProjectContext, id: string, patch: Partial<Task>): Promise<Task> {
     const cache = this.cache(ctx.project);
     const entries = cache.load();
     const entry = entries.find((e) => e.id === id);
@@ -114,11 +109,7 @@ export class CachedTaskService implements TaskService {
     // Push back the disagreeing ones: close/reopen the issue to match, stamp an adopted issue's body
     // block, and set its board card — so issue, cache, and board converge.
     for (const entry of reconcile) {
-      entry.refs = await provider.update(
-        ctx,
-        stripRefs(entry),
-        entry.refs ?? {},
-      );
+      entry.refs = await provider.update(ctx, stripRefs(entry), entry.refs ?? {});
       pushed++;
     }
 
@@ -140,19 +131,30 @@ function mergeRemote(
   const reconcile: CacheEntry[] = [];
   let pulled = 0;
   for (const [id, state] of remote) {
-    let entry = byId.get(id);
-    if (!entry) {
-      entry = withDefaults({ id, ...state.patch });
-      byId.set(id, entry);
-      entries.push(entry);
-    } else {
-      Object.assign(entry, state.patch);
-    }
+    const entry = upsert(byId, entries, id, state);
     entry.refs = { ...entry.refs, ...state.refs };
     if (state.reconcile) reconcile.push(entry);
     pulled++;
   }
   return { reconcile, pulled };
+}
+
+/** The cache entry for one pulled task: patched in place when known, adopted as new when not. */
+function upsert(
+  byId: Map<string, CacheEntry>,
+  entries: CacheEntry[],
+  id: string,
+  state: RemoteState,
+): CacheEntry {
+  const existing = byId.get(id);
+  if (existing) {
+    Object.assign(existing, state.patch);
+    return existing;
+  }
+  const entry = withDefaults({ id, ...state.patch });
+  byId.set(id, entry);
+  entries.push(entry);
+  return entry;
 }
 
 const stripRefs = (entry: CacheEntry): Task => {

@@ -15,14 +15,9 @@
 
 import { spawnSync } from "node:child_process";
 import { Octokit } from "octokit";
+import { match } from "ts-pattern";
 import { parse, stringify } from "yaml";
-import type {
-  ProjectConfig,
-  ProjectContext,
-  Refs,
-  RepoRef,
-  Task,
-} from "../../types.ts";
+import type { ProjectConfig, ProjectContext, Refs, RepoRef, Task } from "../../types.ts";
 import { loadConfig, type ServerOptions } from "../../config.ts";
 import type { Provider, RemoteState } from "../provider.ts";
 import { withDefaults } from "../../graph.ts";
@@ -40,10 +35,7 @@ function githubToken(): string {
   const fromEnv = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   if (fromEnv) return fromEnv.trim();
   const token = run("gh", ["auth", "token"]) ?? "";
-  if (!token)
-    throw new Error(
-      "no GitHub credentials: set GITHUB_TOKEN, or run `gh auth login`",
-    );
+  if (!token) throw new Error("no GitHub credentials: set GITHUB_TOKEN, or run `gh auth login`");
   return token;
 }
 
@@ -64,9 +56,7 @@ function defaultOctokit(): Octokit {
 function resolveRepo(project: string): RepoRef {
   const url = run("git", ["-C", project, "remote", "get-url", "origin"]);
   if (url === null) {
-    throw new Error(
-      `no git 'origin' remote in ${project} — the GitHub provider needs one`,
-    );
+    throw new Error(`no git 'origin' remote in ${project} — the GitHub provider needs one`);
   }
   const m = url.match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/);
   if (!m) throw new Error(`origin is not a github.com remote: ${url}`);
@@ -104,12 +94,7 @@ const META_KEYS = [
 /** A meta value stays out of the block when absent, or an empty list where emptiness means nothing. */
 function skipMeta(key: string, value: unknown): boolean {
   if (value === undefined) return true;
-  return (
-    Array.isArray(value) &&
-    value.length === 0 &&
-    key !== "deps" &&
-    key !== "scope"
-  );
+  return Array.isArray(value) && value.length === 0 && key !== "deps" && key !== "scope";
 }
 
 /** Serialise a task into an issue body: the hidden block (id first), then any human prose kept below. */
@@ -143,6 +128,13 @@ function parseBody(body: string | null | undefined): {
   return { meta, human: body.slice(end + META_CLOSE.length).trim() };
 }
 
+/** GitHub's issue state → the task status it means. */
+const taskStatus = (state: GhIssue["state"]): Task["status"] =>
+  match(state)
+    .with("CLOSED", () => "done" as const)
+    .with("OPEN", () => "open" as const)
+    .exhaustive();
+
 /** The task id an issue carries, or null when the issue is not one of ours. */
 function managedId(issue: GhIssue): string | null {
   const id = parseBody(issue.body).meta.id;
@@ -156,7 +148,7 @@ function issueToTask(issue: GhIssue): Task {
     ...meta,
     id: String(meta.id),
     title: issue.title || "",
-    status: issue.state === "CLOSED" ? "done" : "open",
+    status: taskStatus(issue.state),
   } as Partial<Task> & { id: string });
 }
 
@@ -221,7 +213,7 @@ function listedIssue(issue: GhIssue): ListedIssue {
     : withDefaults({
         id: `gh-${issue.number}`,
         title: issue.title || "",
-        status: issue.state === "CLOSED" ? "done" : "open",
+        status: taskStatus(issue.state),
       });
   return { task, issueId: issue.id, managed: mid !== null };
 }
@@ -304,18 +296,13 @@ export class GitHubProvider implements Provider {
     const cards = await this.boardCards(state);
     const out = new Map<string, RemoteState>();
     for (const listed of await this.listIssues(state)) {
-      out.set(
-        listed.task.id,
-        remoteState(listed, cards.get(listed.issueId), state.board !== null),
-      );
+      out.set(listed.task.id, remoteState(listed, cards.get(listed.issueId), state.board !== null));
     }
     return out;
   }
 
   /** The board's cards (best-effort — a read failure means no cards), so Done cards flow back in. */
-  private async boardCards(
-    state: ProjectState,
-  ): Promise<Map<string, BoardCard>> {
+  private async boardCards(state: ProjectState): Promise<Map<string, BoardCard>> {
     if (!state.board) return new Map();
     return this.readBoard(state.board).catch(() => new Map());
   }
@@ -377,10 +364,7 @@ export class GitHubProvider implements Provider {
 
   /** Find the board by number (config.projectNumber) or title (config.board, default "Tasks") among
    *  the repo's linked boards — or create it and link it to the repo — then read its Status field. */
-  private async resolveBoard(
-    repository: RepoSnapshot,
-    config: ProjectConfig,
-  ): Promise<BoardMeta> {
+  private async resolveBoard(repository: RepoSnapshot, config: ProjectConfig): Promise<BoardMeta> {
     const found = await this.findOrCreateBoard(repository, config);
     return this.statusField(found.id);
   }
@@ -399,10 +383,7 @@ export class GitHubProvider implements Provider {
     return this.createBoard(repository, title);
   }
 
-  private async createBoard(
-    repository: RepoSnapshot,
-    title: string,
-  ): Promise<{ id: string }> {
+  private async createBoard(repository: RepoSnapshot, title: string): Promise<{ id: string }> {
     const created = await this.octokit.graphql<{
       createProjectV2: { projectV2: { id: string } };
     }>(
@@ -432,8 +413,7 @@ export class GitHubProvider implements Provider {
     );
     const options = new Map<string, string>();
     const status = fields.node.field;
-    for (const opt of status?.options ?? [])
-      options.set(opt.name.toLowerCase(), opt.id);
+    for (const opt of status?.options ?? []) options.set(opt.name.toLowerCase(), opt.id);
     return { projectId, statusFieldId: status?.id, options };
   }
 
@@ -466,14 +446,11 @@ export class GitHubProvider implements Provider {
     await this.setIssueState(issueId, task.status);
   }
 
-  private async setIssueState(
-    issueId: string,
-    status: Task["status"],
-  ): Promise<void> {
-    const mutation =
-      status === "done"
-        ? `mutation($id:ID!){ closeIssue(input:{issueId:$id}){ issue{ id } } }`
-        : `mutation($id:ID!){ reopenIssue(input:{issueId:$id}){ issue{ id } } }`;
+  private async setIssueState(issueId: string, status: Task["status"]): Promise<void> {
+    const mutation = match(status)
+      .with("done", () => `mutation($id:ID!){ closeIssue(input:{issueId:$id}){ issue{ id } } }`)
+      .with("open", () => `mutation($id:ID!){ reopenIssue(input:{issueId:$id}){ issue{ id } } }`)
+      .exhaustive();
     await this.octokit.graphql(mutation, { id: issueId });
   }
 
@@ -494,26 +471,18 @@ export class GitHubProvider implements Provider {
     return out;
   }
 
-  private async issuePage(
-    repo: RepoRef,
-    after: string | null,
-  ): Promise<Page<GhIssue>> {
-    const res: { repository: { issues: Page<GhIssue> } } =
-      await this.octokit.graphql(
-        `query($o:String!,$n:String!,$c:String){ repository(owner:$o,name:$n){ issues(first:100,after:$c,states:[OPEN,CLOSED],orderBy:{field:CREATED_AT,direction:ASC}){ pageInfo{ hasNextPage endCursor } nodes{ id number title body state } } } }`,
-        { o: repo.owner, n: repo.repo, c: after },
-      );
+  private async issuePage(repo: RepoRef, after: string | null): Promise<Page<GhIssue>> {
+    const res: { repository: { issues: Page<GhIssue> } } = await this.octokit.graphql(
+      `query($o:String!,$n:String!,$c:String){ repository(owner:$o,name:$n){ issues(first:100,after:$c,states:[OPEN,CLOSED],orderBy:{field:CREATED_AT,direction:ASC}){ pageInfo{ hasNextPage endCursor } nodes{ id number title body state } } } }`,
+      { o: repo.owner, n: repo.repo, c: after },
+    );
     return res.repository.issues;
   }
 
   // -------------------------------------------------------------------------------------------------
   // The Projects v2 board — the mirror. Best-effort: never let a board failure fail the task write.
 
-  private async withBoard(
-    state: ProjectState,
-    task: Task,
-    refs: Refs,
-  ): Promise<Refs> {
+  private async withBoard(state: ProjectState, task: Task, refs: Refs): Promise<Refs> {
     if (!state.board || !refs.issueId) return refs;
     try {
       const projectItem = await this.syncToBoard(
@@ -560,8 +529,10 @@ export class GitHubProvider implements Provider {
     status: Task["status"],
   ): Promise<void> {
     if (!board.statusFieldId) return;
-    const wanted =
-      status === "done" ? ["done", "closed"] : ["todo", "to do", "backlog"];
+    const wanted = match(status)
+      .with("done", () => ["done", "closed"])
+      .with("open", () => ["todo", "to do", "backlog"])
+      .exhaustive();
     const optionId = wanted.map((w) => board.options.get(w)).find(Boolean);
     if (!optionId) return;
     await this.octokit.graphql(
@@ -583,15 +554,11 @@ export class GitHubProvider implements Provider {
     return out;
   }
 
-  private async boardPage(
-    board: BoardMeta,
-    after: string | null,
-  ): Promise<Page<BoardItem>> {
-    const res: { node: { items: Page<BoardItem> } } =
-      await this.octokit.graphql(
-        `query($p:ID!,$c:String){ node(id:$p){ ... on ProjectV2 { items(first:100,after:$c){ pageInfo{ hasNextPage endCursor } nodes{ id content{ ... on Issue { id } } fieldValueByName(name:"Status"){ ... on ProjectV2ItemFieldSingleSelectValue { name } } } } } } }`,
-        { p: board.projectId, c: after },
-      );
+  private async boardPage(board: BoardMeta, after: string | null): Promise<Page<BoardItem>> {
+    const res: { node: { items: Page<BoardItem> } } = await this.octokit.graphql(
+      `query($p:ID!,$c:String){ node(id:$p){ ... on ProjectV2 { items(first:100,after:$c){ pageInfo{ hasNextPage endCursor } nodes{ id content{ ... on Issue { id } } fieldValueByName(name:"Status"){ ... on ProjectV2ItemFieldSingleSelectValue { name } } } } } } }`,
+      { p: board.projectId, c: after },
+    );
     return res.node.items;
   }
 }

@@ -26,9 +26,7 @@ export class NockGitHub {
 
   // Query → handler, matched on format-stable identifiers (GraphQL ignores spacing). ORDERED: first
   // match wins, and some needles ("on Issue", "repository(") are substrings of other queries' text.
-  private readonly routes: Array<
-    [string, (vars: Record<string, any>) => unknown]
-  > = [
+  private readonly routes: Array<[string, (vars: Record<string, any>) => unknown]> = [
     ["createIssue", (v) => this.createIssue(v)],
     ["updateIssue", (v) => this.updateIssue(v)],
     ["closeIssue", (v) => this.setIssueState(v, "CLOSED", "closeIssue")],
@@ -51,10 +49,7 @@ export class NockGitHub {
   /** Answer one GraphQL request. */
   reply(q: string, vars: Record<string, any>): unknown {
     const route = this.routes.find(([needle]) => q.includes(needle));
-    if (!route)
-      throw new Error(
-        `unexpected graphql: ${q.replace(/\s+/g, " ").slice(0, 90)}`,
-      );
+    if (!route) throw new Error(`unexpected graphql: ${q.replace(/\s+/g, " ").slice(0, 90)}`);
     return route[1](vars);
   }
 
@@ -125,9 +120,7 @@ export class NockGitHub {
     const nodes = [...this.items.entries()].map(([id, it]) => ({
       id,
       content: { id: it.contentId },
-      fieldValueByName: it.status
-        ? { name: it.status === "OPT_DONE" ? "Done" : "Todo" }
-        : null,
+      fieldValueByName: it.status ? { name: it.status === "OPT_DONE" ? "Done" : "Todo" } : null,
     }));
     return {
       node: {

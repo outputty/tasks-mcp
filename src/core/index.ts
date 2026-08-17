@@ -29,9 +29,5 @@ export type {
   QaLevel,
   SpecState,
 } from "./types.ts";
-export {
-  providerFor,
-  type Provider,
-  type RemoteState,
-} from "./providers/provider.ts";
+export { providerFor, type Provider, type RemoteState } from "./providers/provider.ts";
 export { GitHubProvider } from "./providers/github/github.ts";

@@ -29,9 +29,7 @@ async function startHttp(service: CachedTaskService) {
   const addr = server.address();
   const base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
   const client = new Client({ name: "test-client", version: "0.0.0" });
-  await client.connect(
-    new StreamableHTTPClientTransport(new URL(`${base}/mcp`)),
-  );
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
   const close = async () => {
     await client.close();
     // Destroy lingering keep-alive sockets rather than wait on them — server.close alone can hang
@@ -49,10 +47,7 @@ async function harness() {
   installNock(new NockGitHub());
   const project = tmpRepo();
   const cache = tmp();
-  const service = new CachedTaskService(
-    { cacheDir: cache.dir },
-    nockProvider({ projects: false }),
-  );
+  const service = new CachedTaskService({ cacheDir: cache.dir }, nockProvider({ projects: false }));
   const { base, client, close } = await startHttp(service);
   return {
     client,
@@ -121,8 +116,7 @@ test("a dependency holds a task out of ready until its dep closes", async () => 
     name: "add_task",
     arguments: { project, id: "api", deps: ["schema"] },
   });
-  const ready = () =>
-    client.callTool({ name: "list_ready", arguments: { project } });
+  const ready = () => client.callTool({ name: "list_ready", arguments: { project } });
   expect(structured(await ready()).ids).toEqual(["schema"]);
   await client.callTool({
     name: "close_task",

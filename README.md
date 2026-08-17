@@ -164,7 +164,7 @@ Turn it off with `--no-projects`, or aim it at an existing board with `--project
 The protocol is the official [`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk):
 `StdioServerTransport` for the spawned case, and stateless Streamable HTTP (JSON responses, no session
 ids) served from plain `node:http` for `--http`. Each tool declares zod input and output schemas, so
-results carry `structuredContent`. Runtime deps: the SDK, `octokit`, `yaml`, and `zod`.
+results carry `structuredContent`. Runtime deps: the SDK, `octokit`, `ts-pattern`, `yaml`, and `zod`.
 
 ## Config
 
@@ -206,9 +206,9 @@ overrides the flags for one repo. Credentials come from `GITHUB_TOKEN` / `GH_TOK
 
 ```bash
 npm install
-npm run check        # THE build, exactly what CI runs: format check -> oxlint -> typecheck -> tests -> tsup
+npm run check        # THE build, exactly what CI runs: oxfmt check -> oxlint -> tsc (TS7) -> tests -> tsdown
 npm test             # vitest alone: graph engine · GitHub provider (nock) · cache service · MCP server
-npm run build        # tsup alone -> dist/ (cli, index, mcp)
+npm run build        # tsdown alone -> dist/ (cli, index, mcp)
 ```
 
 The GitHub provider is tested with **nock** — the tests drive the real Octokit client, and nock

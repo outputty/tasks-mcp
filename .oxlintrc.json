@@ -9,6 +9,7 @@
       { "max": 24, "skipBlankLines": true, "skipComments": true }
     ],
     "max-depth": ["error", 3],
+    "no-else-return": ["error", { "allowElseIf": false }],
     "no-unused-vars": [
       "error",
       {

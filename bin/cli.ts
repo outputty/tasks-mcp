@@ -18,9 +18,7 @@ const val = (name: string): string | undefined => {
   const eq = argv.find((a) => a.startsWith(`--${name}=`));
   if (eq) return eq.slice(name.length + 3);
   const i = argv.indexOf(`--${name}`);
-  return i !== -1 && argv[i + 1] && !argv[i + 1].startsWith("--")
-    ? argv[i + 1]
-    : undefined;
+  return i !== -1 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : undefined;
 };
 const list = (name: string): string[] =>
   (val(name) ?? "")
@@ -30,8 +28,7 @@ const list = (name: string): string[] =>
 
 const options: ServerOptions = {};
 if (val("provider")) options.provider = val("provider");
-if (val("project-number"))
-  options.projectNumber = Number(val("project-number"));
+if (val("project-number")) options.projectNumber = Number(val("project-number"));
 if (has("no-projects") || val("projects") === "off") options.projects = false;
 if (val("board")) options.board = val("board");
 if (val("cache-dir")) options.cacheDir = val("cache-dir");
@@ -57,8 +54,7 @@ const COMMANDS: Record<string, (ctx: Ctx, id: string) => Promise<unknown>> = {
   list: (ctx) => service.list(ctx),
   ready: async (ctx) => ready(await service.list(ctx)).map((t) => t.id),
   planning: async (ctx) => planning(await service.list(ctx)).map((t) => t.id),
-  schedule: async (ctx) =>
-    schedule(await service.list(ctx)).map((layer) => layer.map((t) => t.id)),
+  schedule: async (ctx) => schedule(await service.list(ctx)).map((layer) => layer.map((t) => t.id)),
   get: (ctx, id) => service.get(ctx, id),
   add: (ctx, id) => service.create(ctx, taskFromFlags(id)),
   close: async (ctx, id) => {
@@ -75,14 +71,13 @@ async function runBusiness(): Promise<boolean> {
   return true;
 }
 
-if (await runBusiness()) {
-  process.exit(0);
-} else if (has("http")) {
+/** The MCP server, on whichever transport the flags pick: `--http`, or stdio (the default). */
+async function runServer(): Promise<void> {
+  if (!has("http")) return runStdio(service);
   const port = Number(val("port") || 3917);
-  console.error(
-    `tasks-mcp (http) listening on http://localhost:${port}/mcp  (health: /health)`,
-  );
+  console.error(`tasks-mcp (http) listening on http://localhost:${port}/mcp  (health: /health)`);
   createHttpServer(service).listen(port);
-} else {
-  await runStdio(service); // `mcp` (default): stdio transport
 }
+
+if (await runBusiness()) process.exit(0);
+await runServer();

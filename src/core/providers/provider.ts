@@ -45,16 +45,11 @@ const PROVIDERS: Record<string, (options: ServerOptions) => Provider> = {
 const instances = new Map<string, Provider>();
 
 /** The provider a project uses, from its config (default "github"). */
-export function providerFor(
-  project: string,
-  options: ServerOptions = {},
-): Provider {
+export function providerFor(project: string, options: ServerOptions = {}): Provider {
   const name = loadConfig(project, options).provider ?? "github";
   const make = PROVIDERS[name];
   if (!make)
-    throw new Error(
-      `unknown provider '${name}' (known: ${Object.keys(PROVIDERS).join(", ")})`,
-    );
+    throw new Error(`unknown provider '${name}' (known: ${Object.keys(PROVIDERS).join(", ")})`);
   let instance = instances.get(name);
   if (!instance) {
     instance = make(options);

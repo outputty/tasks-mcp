@@ -18,10 +18,7 @@ export class Cache {
   constructor(private readonly file: string) {}
 
   /** The cache file for a project: `<cacheDir>/<basename>-<hash>.yaml`, keyed by the project's path. */
-  static forProject(
-    project: string,
-    cacheDir: string = defaultCacheDir(),
-  ): Cache {
+  static forProject(project: string, cacheDir: string = defaultCacheDir()): Cache {
     const base = path.basename(project) || "repo";
     const hash = createHash("sha256").update(project).digest("hex").slice(0, 8);
     return new Cache(path.join(cacheDir, `${base}-${hash}.yaml`));
@@ -40,9 +37,6 @@ export class Cache {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     const sorted = [...entries].sort((a, b) => (a.id < b.id ? -1 : 1));
     const body = stringify({ tasks: sorted });
-    fs.writeFileSync(
-      this.file,
-      HEADER + (body.endsWith("\n") ? body : body + "\n"),
-    );
+    fs.writeFileSync(this.file, HEADER + (body.endsWith("\n") ? body : body + "\n"));
   }
 }
