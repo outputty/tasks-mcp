@@ -5,10 +5,12 @@
 // pushed, not deleted) and deletions never propagate — a task closes everywhere but only vanishes by
 // hand. Layer errors bubble; there is no fallback to decide at this altitude.
 
-import type { ProjectContext, Task } from "./types.ts";
+import { isDeepStrictEqual } from "node:util";
+import type { ProjectConfig, ProjectContext, Task } from "./types.ts";
 import type { Provider, ProviderState } from "./providers/provider.ts";
-import type { ServerOptions } from "./config.ts";
-import { stackFor } from "./providers/provider.ts";
+import type { ServerOptions } from "./types.ts";
+import { ConfigProvider, type ConfigSources } from "./providers/config.ts";
+import { buildStack } from "./providers/provider.ts";
 import { withDefaults } from "./graph.ts";
 
 export interface SyncResult {
@@ -32,18 +34,50 @@ export interface TaskService {
   update(ctx: ProjectContext, id: string, patch: Partial<Task>): Promise<Task>;
   close(ctx: ProjectContext, id: string): Promise<void>;
   sync(ctx: ProjectContext): Promise<SyncResult>;
+  /** Every layer of the configuration for this project, plus the effective result. */
+  getConfig(ctx: ProjectContext): Promise<ConfigSources>;
+  /** Write preferences centrally: into the global spec, or one repo's override. */
+  setConfig(
+    ctx: ProjectContext,
+    scope: "global" | "repo",
+    patch: ProjectConfig,
+  ): Promise<ProjectConfig>;
 }
 
 export class TaskStack implements TaskService {
   // `options` carries the CLI-set knobs (cacheDir, provider, board…). A whole stack may be injected
   // for tests — ordered top-first, deepest layer last and most authoritative.
+  // One stack per remote name — layers cache their per-project init (repo, board, index), so handing
+  // out fresh instances would redo that remote work on every call.
+  private readonly stacks = new Map<string, Provider[]>();
+
   constructor(
     private readonly options: ServerOptions = {},
     private readonly providers?: Provider[],
+    private readonly config: ConfigProvider = new ConfigProvider(options),
   ) {}
 
   private layers(ctx: ProjectContext): Provider[] {
-    return this.providers ?? stackFor(ctx.project, this.options);
+    if (this.providers) return this.providers;
+    const remote = this.config.get(ctx.project).provider ?? "github";
+    let stack = this.stacks.get(remote);
+    if (!stack) {
+      stack = buildStack(remote, this.options, this.config);
+      this.stacks.set(remote, stack);
+    }
+    return stack;
+  }
+
+  async getConfig(ctx: ProjectContext): Promise<ConfigSources> {
+    return this.config.sources(ctx.project);
+  }
+
+  async setConfig(
+    ctx: ProjectContext,
+    scope: "global" | "repo",
+    patch: ProjectConfig,
+  ): Promise<ProjectConfig> {
+    return this.config.set(ctx.project, scope, patch);
   }
 
   /** The top layer alone, initialised — reads stay local and never touch a remote. */
@@ -91,11 +125,16 @@ export class TaskStack implements TaskService {
 
   async sync(ctx: ProjectContext): Promise<SyncResult> {
     const layers = await this.all(ctx);
-    const pulls: Array<[Provider, Map<string, ProviderState>]> = [];
-    for (const layer of layers) pulls.push([layer, await layer.pull(ctx)]);
+    // Layers only read their own store on pull, so the pulls run concurrently; array order (and with
+    // it deepest-wins precedence) is preserved by Promise.all.
+    const pulls = await Promise.all(
+      layers.map(
+        async (layer) => [layer, await layer.pull(ctx)] as [Provider, Map<string, ProviderState>],
+      ),
+    );
     const merged = mergeStack(pulls);
     const pushed = await this.reconcile(ctx, layers[0], pulls, merged);
-    return { pulled: merged.size, pushed, conflicts: 0 };
+    return { pulled: merged.size, pushed, conflicts: conflictCount(pulls) };
   }
 
   /** Write one task through every layer, top to bottom. */
@@ -112,14 +151,19 @@ export class TaskStack implements TaskService {
   ): Promise<number> {
     let pushed = 0;
     for (const [layer, states] of pulls) {
-      for (const [id, task] of merged) {
-        if (!needsPush(states.get(id), task)) continue;
-        await layer.upsert(ctx, task);
-        if (layer !== top) pushed++;
-      }
+      const need = [...merged.values()].filter((task) => needsPush(states.get(task.id), task));
+      if (need.length === 0) continue;
+      await pushAll(layer, ctx, need);
+      if (layer !== top) pushed += need.length;
     }
     return pushed;
   }
+}
+
+/** One layer's batch of pushes: the batch method when the layer has one, else task by task. */
+async function pushAll(layer: Provider, ctx: ProjectContext, tasks: Task[]): Promise<void> {
+  if (layer.upsertMany) return layer.upsertMany(ctx, tasks);
+  for (const task of tasks) await layer.upsert(ctx, task);
 }
 
 /** Deepest wins: apply every layer's pull in stack order, so the last layer's version of a task lands
@@ -127,9 +171,18 @@ export class TaskStack implements TaskService {
 function mergeStack(pulls: Array<[Provider, Map<string, ProviderState>]>): Map<string, Task> {
   const merged = new Map<string, Task>();
   for (const [, states] of pulls) {
-    for (const [id, state] of states) merged.set(id, withDefaults({ ...state.task }));
+    for (const [id, state] of states) merged.set(id, withDefaults(state.task));
   }
   return merged;
+}
+
+/** Task ids any layer flagged as conflicted (duplicate remote items claiming one id). */
+function conflictCount(pulls: Array<[Provider, Map<string, ProviderState>]>): number {
+  const ids = new Set<string>();
+  for (const [, states] of pulls) {
+    for (const [id, state] of states) if (state.conflict) ids.add(id);
+  }
+  return ids.size;
 }
 
 /** A layer needs the merged task pushed when it lacks it, flagged it reconcile, or disagrees. */
@@ -139,20 +192,9 @@ function needsPush(state: ProviderState | undefined, merged: Task): boolean {
   return !sameTask(state.task, merged);
 }
 
-/** Structural equality over normalized tasks, key order ignored. */
+/** Structural equality over normalized tasks, key order ignored (node:util; Bun implements it). */
 function sameTask(a: Task, b: Task): boolean {
-  return canonical(withDefaults(a)) === canonical(withDefaults(b));
-}
-
-const canonical = (value: unknown): string => JSON.stringify(sortKeys(value));
-
-function sortKeys(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortKeys);
-  if (value === null || typeof value !== "object") return value;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([k, v]) => [k, sortKeys(v)]);
-  return Object.fromEntries(entries);
+  return isDeepStrictEqual(withDefaults(a), withDefaults(b));
 }
 
 /** The production service: the file layer on top, the project's configured remote beneath it. */

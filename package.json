@@ -1,6 +1,6 @@
 {
   "name": "@outputty/tasks-mcp",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "outputty's task tracker as an MCP server and a library: a local task graph synced two-way to GitHub Issues and Projects.",
   "keywords": [
     "github-issues",
@@ -48,6 +48,10 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "commander": "^15.0.0",
+    "graphology": "^0.26.0",
+    "graphology-dag": "^0.4.1",
+    "graphology-traversal": "^0.3.1",
     "octokit": "^4.0.2",
     "ts-pattern": "^5.9.0",
     "yaml": "^2.9.0",

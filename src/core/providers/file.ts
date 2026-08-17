@@ -5,16 +5,28 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { parse, stringify } from "yaml";
 import type { ProjectContext, Task } from "../types.ts";
-import type { ServerOptions } from "../config.ts";
-import { defaultCacheDir } from "../config.ts";
+import type { ServerOptions } from "../types.ts";
+import { defaultCacheDir, projectSlug } from "./config.ts";
 import { withDefaults } from "../graph.ts";
 import type { Provider, ProviderState } from "./provider.ts";
 
 const HEADER =
   "# tasks-mcp cache — rebuilt from the stack by `sync`. Safe to delete; not committed.\n";
+
+/** The file's tasks ([] for an empty file), or null when the YAML is unreadable or the wrong shape. */
+function tryParse(text: string): Task[] | null {
+  try {
+    const parsed = parse(text) as { tasks?: unknown } | null;
+    if (parsed === null || parsed === undefined) return [];
+    if (typeof parsed !== "object") return null;
+    if (parsed.tasks === undefined) return [];
+    return Array.isArray(parsed.tasks) ? (parsed.tasks as Task[]) : null;
+  } catch {
+    return null;
+  }
+}
 
 export class FileProvider implements Provider {
   readonly name = "file";
@@ -30,30 +42,46 @@ export class FileProvider implements Provider {
   }
 
   async upsert(ctx: ProjectContext, task: Task): Promise<void> {
-    const tasks = this.load(ctx.project);
-    const at = tasks.findIndex((t) => t.id === task.id);
-    if (at === -1) tasks.push(task);
-    else tasks[at] = task;
-    this.save(ctx.project, tasks);
+    await this.upsertMany(ctx, [task]);
+  }
+
+  /** The batch form the service prefers: one read and one write however many tasks change. */
+  async upsertMany(ctx: ProjectContext, tasks: Task[]): Promise<void> {
+    const all = this.load(ctx.project);
+    for (const task of tasks) {
+      const at = all.findIndex((t) => t.id === task.id);
+      if (at === -1) all.push(task);
+      else all[at] = task;
+    }
+    this.save(ctx.project, all);
   }
 
   /** The file for a project: `<cacheDir>/<basename>-<hash>.yaml`, keyed by the project's path. */
   private fileFor(project: string): string {
-    const base = path.basename(project) || "repo";
-    const hash = createHash("sha256").update(project).digest("hex").slice(0, 8);
-    return path.join(this.options.cacheDir ?? defaultCacheDir(), `${base}-${hash}.yaml`);
+    return path.join(this.options.cacheDir ?? defaultCacheDir(), `${projectSlug(project)}.yaml`);
   }
 
   private load(project: string): Task[] {
     const file = this.fileFor(project);
     if (!fs.existsSync(file)) return [];
-    const parsed = parse(fs.readFileSync(file, "utf8")) as { tasks?: Task[] } | null;
+    const tasks = tryParse(fs.readFileSync(file, "utf8"));
+    if (tasks === null) return this.quarantine(file);
     // Files written before the stack carried per-provider refs alongside each task; the layers own
     // their handles now, so a legacy `refs` key is dropped on read.
-    return (parsed?.tasks ?? []).map((t) => {
+    return tasks.map((t) => {
       const { refs: _refs, ...task } = t as Task & { refs?: unknown };
       return withDefaults(task);
     });
+  }
+
+  /** A file that cannot be parsed is set aside, not fatal: the layer continues empty and the next
+   *  sync refills it from the layers below (absence is not a claim; GitHub is deeper and wins). */
+  private quarantine(file: string): Task[] {
+    fs.renameSync(file, `${file}.corrupt`);
+    console.error(
+      `tasks-mcp: corrupt task file quarantined to ${file}.corrupt — run sync to rebuild`,
+    );
+    return [];
   }
 
   private save(project: string, tasks: Task[]): void {

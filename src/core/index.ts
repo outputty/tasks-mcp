@@ -8,18 +8,37 @@ export {
   type TaskService,
   type SyncResult,
 } from "./service.ts";
-export { loadConfig, defaultCacheDir, type ServerOptions } from "./config.ts";
+export {
+  ConfigProvider,
+  ProjectConfigSchema,
+  defaultCacheDir,
+  projectSlug,
+  type ConfigSources,
+} from "./providers/config.ts";
 export {
   ready,
   planning,
   schedule,
+  prereqs,
+  blockers,
   tierOf,
   qaOf,
+  priorityOf,
   specSettled,
   withDefaults,
   idList,
+  type Blocker,
 } from "./graph.ts";
-export type { Task, ProjectContext, ProjectConfig, QaLevel, SpecState } from "./types.ts";
-export { stackFor, type Provider, type ProviderState } from "./providers/provider.ts";
+export type {
+  Task,
+  ProjectContext,
+  ProjectConfig,
+  ServerOptions,
+  QaLevel,
+  SpecState,
+  Priority,
+  LabelFieldName,
+} from "./types.ts";
+export { buildStack, type Provider, type ProviderState } from "./providers/provider.ts";
 export { FileProvider } from "./providers/file.ts";
 export { GitHubProvider } from "./providers/github.ts";

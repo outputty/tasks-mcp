@@ -1,5 +1,15 @@
 import { test, expect } from "vitest";
-import { ready, planning, schedule, tierOf, qaOf, specSettled } from "../src/core/graph.ts";
+import {
+  ready,
+  planning,
+  schedule,
+  prereqs,
+  blockers,
+  tierOf,
+  qaOf,
+  priorityOf,
+  specSettled,
+} from "../src/core/graph.ts";
 import { task } from "./helpers.ts";
 
 test("ready: open task with all deps done is ready", () => {
@@ -63,4 +73,63 @@ test("qaOf: defaults to subagent, validates the set", () => {
   expect(qaOf(task({ id: "a", qa: "skip" }))).toBe("skip");
   // @ts-expect-error deliberately bad value
   expect(() => qaOf(task({ id: "a", qa: "sometimes" }))).toThrow(/unknown qa/);
+});
+
+// A small plan used by the prereqs/blockers rows: schema ← api ← ui, deploy ← {api, infra}.
+const plan = () => [
+  task({ id: "schema" }),
+  task({ id: "api", deps: ["schema"] }),
+  task({ id: "ui", deps: ["api"] }),
+  task({ id: "deploy", deps: ["api", "infra"] }),
+  task({ id: "infra" }),
+];
+
+test("prereqs: what must be done before I can start, in build order", () => {
+  const layers = prereqs(plan(), "ui").map((layer) => layer.map((t) => t.id));
+  expect(layers).toEqual([["schema"], ["api"]]);
+});
+
+test("prereqs: empty means start now", () => {
+  expect(prereqs(plan(), "schema")).toEqual([]);
+});
+
+test("prereqs: a done dependency ends the chain (nothing beyond it is needed)", () => {
+  const tasks = plan().map((t) => (t.id === "api" ? { ...t, status: "done" as const } : t));
+  expect(prereqs(tasks, "ui")).toEqual([]); // api done; schema's state no longer gates ui
+});
+
+test("prereqs: an unknown id throws", () => {
+  expect(() => prereqs(plan(), "nope")).toThrow(/no task nope/);
+});
+
+test("blockers: ranked by how much of the plan waits on each task", () => {
+  const ranked = blockers(plan()).map((b) => [b.task.id, b.blocks.length]);
+  expect(ranked[0]).toEqual(["schema", 3]); // api, ui, deploy all wait on schema
+  expect(ranked).toContainEqual(["infra", 1]);
+});
+
+test("blockers: equal impact breaks ties by priority", () => {
+  const tasks = [
+    task({ id: "a" }),
+    task({ id: "b", priority: "high" }),
+    task({ id: "x", deps: ["a"] }),
+    task({ id: "y", deps: ["b"] }),
+  ];
+  expect(blockers(tasks)[0].task.id).toBe("b");
+});
+
+test("blockers: a done task blocks nothing and hides its ancestors' reach", () => {
+  const tasks = [
+    task({ id: "a" }),
+    task({ id: "b", deps: ["a"], status: "done" }),
+    task({ id: "c", deps: ["b"] }),
+  ];
+  expect(blockers(tasks)).toEqual([]); // b is done, so a no longer gates c through it
+});
+
+test("priorityOf: defaults to normal, validates the set", () => {
+  expect(priorityOf(task({ id: "a" }))).toBe("normal");
+  expect(priorityOf(task({ id: "a", priority: "high" }))).toBe("high");
+  // @ts-expect-error deliberately bad value
+  expect(() => priorityOf(task({ id: "a", priority: "urgent" }))).toThrow(/unknown priority/);
 });

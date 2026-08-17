@@ -5,12 +5,25 @@
 // passed straight through to the backend.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { match, P } from "ts-pattern";
 import { z } from "zod";
 import pkg from "../../package.json";
 import type { TaskService } from "../core/service.ts";
 import type { ProjectContext, Task } from "../core/types.ts";
-import { ready, planning, schedule, tierOf, qaOf, idList } from "../core/graph.ts";
+import { QA_LEVELS, SPEC_STATES, PRIORITIES } from "../core/types.ts";
+import { ProjectConfigSchema } from "../core/providers/config.ts";
+import {
+  ready,
+  planning,
+  schedule,
+  prereqs,
+  blockers,
+  buildTask,
+  asArray,
+  tierOf,
+  qaOf,
+  priorityOf,
+  idList,
+} from "../core/graph.ts";
 
 // The single source of the server's identity: the name is the package's bare name, the version is the
 // package version — never a hand-maintained copy.
@@ -32,34 +45,6 @@ const ctxOf = (args: { project: string; branch?: string }): ProjectContext => ({
   branch: args.branch,
 });
 
-/** deps/scope come in as a string array or a comma string; anything absent is an empty list. */
-const asArray = (value: unknown): string[] =>
-  match(value)
-    .with(P.array(P.string), (v) => v)
-    .with(P.string, (v) =>
-      v
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-    )
-    .otherwise(() => []);
-
-// The optional task fields add_task passes through verbatim when present.
-const OPTIONAL_FIELDS = [
-  "brief",
-  "contract",
-  "tier",
-  "qa",
-  "spec",
-  "stage",
-  "discovered_from",
-] as const;
-function optionalFields(args: Record<string, unknown>): Partial<Task> {
-  const out: Record<string, unknown> = {};
-  for (const key of OPTIONAL_FIELDS) if (args[key] !== undefined) out[key] = args[key];
-  return out as Partial<Task>;
-}
-
 // A compact index row, the same shape the tracker's derived index has always emitted.
 const ROW = {
   id: z.string(),
@@ -68,6 +53,7 @@ const ROW = {
   summary: z.string(),
   tier: z.number(),
   qa: z.string(),
+  priority: z.string(),
 };
 const indexRow = (task: Task) => ({
   id: task.id,
@@ -76,7 +62,11 @@ const indexRow = (task: Task) => ({
   summary: task.title,
   tier: tierOf(task),
   qa: qaOf(task),
+  priority: priorityOf(task),
 });
+
+// The config object's zod shape — THE schema from core/config.ts, so the surfaces cannot drift.
+const CONFIG = ProjectConfigSchema.shape;
 
 // Tool results carry the JSON twice by MCP convention: `structuredContent` for typed consumers,
 // serialized `content` text for the rest.
@@ -188,27 +178,16 @@ export function createMcpServer(service: TaskService): McpServer {
           .optional()
           .describe("The done-condition, turned into a failing test first."),
         tier: z.number().optional().describe("1-4; how much model the work needs (default 3)."),
-        qa: z
-          .enum(["skip", "inline", "subagent"])
-          .optional()
-          .describe("How much review (default subagent)."),
-        spec: z.enum(["drafting", "settled", "replan"]).optional().describe("Planning lifecycle."),
+        qa: z.enum(QA_LEVELS).optional().describe("How much review (default subagent)."),
+        priority: z.enum(PRIORITIES).optional().describe("How urgent (default normal)."),
+        spec: z.enum(SPEC_STATES).optional().describe("Planning lifecycle."),
         stage: z.string().optional().describe("Narrative label on a staged deliverable."),
         discovered_from: z.string().optional().describe("Parent task, when split out mid-build."),
       },
       outputSchema: { task: z.unknown() },
     },
     async (args) => {
-      const task: Task = {
-        id: args.id,
-        title: args.title ?? "",
-        status: "open",
-        deps: asArray(args.deps),
-        scope: asArray(args.scope),
-        ...optionalFields(args),
-      };
-      tierOf(task); // validate before the write
-      qaOf(task);
+      const task = buildTask(args.id, args); // normalizes and validates before the write
       return result({ task: await service.create(ctxOf(args), task) });
     },
   );
@@ -276,6 +255,120 @@ export function createMcpServer(service: TaskService): McpServer {
     },
     async (args) => {
       return result({ ...(await service.sync(ctxOf(args))) });
+    },
+  );
+
+  server.registerTool(
+    "prereqs",
+    {
+      description:
+        "Answers: to start working on this task, what has to be done first? Returns its open " +
+        "prerequisites as dependency-ordered layers (work layer 1 first). startable=true means " +
+        "nothing is in the way.",
+      inputSchema: {
+        project: PROJECT,
+        branch: BRANCH,
+        id: z.string().describe("The task you want to start."),
+      },
+      outputSchema: {
+        id: z.string(),
+        startable: z.boolean(),
+        order: z.array(z.array(z.string())),
+        tasks: z.array(z.object(ROW)),
+      },
+    },
+    async (args) => {
+      const layers = prereqs(await service.list(ctxOf(args)), args.id);
+      return result({
+        id: args.id,
+        startable: layers.length === 0,
+        order: layers.map((layer) => layer.map((t) => t.id)),
+        tasks: layers.flat().map(indexRow),
+      });
+    },
+  );
+
+  server.registerTool(
+    "blockers",
+    {
+      description:
+        "Answers: what is the biggest blocker right now? Open tasks ranked by how much of the plan " +
+        "transitively waits on them — the first entry is the single biggest bottleneck. Each entry " +
+        "says what it blocks (with the high-priority subset called out) and what has to happen to " +
+        "get to it (unblockedBy, dependency-ordered).",
+      inputSchema: {
+        project: PROJECT,
+        branch: BRANCH,
+        limit: z.number().int().positive().optional().describe("Max entries (default 5)."),
+      },
+      outputSchema: {
+        blockers: z.array(
+          z.object({
+            id: z.string(),
+            summary: z.string(),
+            priority: z.string(),
+            blocks: z.number(),
+            blocked: z.array(z.string()),
+            highPriorityBlocked: z.array(z.string()),
+            unblockedBy: z.array(z.array(z.string())),
+          }),
+        ),
+      },
+    },
+    async (args) => {
+      const tasks = await service.list(ctxOf(args));
+      const ranked = blockers(tasks).slice(0, args.limit ?? 5);
+      return result({
+        blockers: ranked.map((b) => ({
+          id: b.task.id,
+          summary: b.task.title,
+          priority: priorityOf(b.task),
+          blocks: b.blocks.length,
+          blocked: b.blocks.map((t) => t.id),
+          highPriorityBlocked: b.blocks.filter((t) => priorityOf(t) === "high").map((t) => t.id),
+          unblockedBy: b.unblockedBy.map((layer) => layer.map((t) => t.id)),
+        })),
+      });
+    },
+  );
+
+  server.registerTool(
+    "get_config",
+    {
+      description:
+        "The configuration for a project, layer by layer: CLI flags, the global spec (applies to " +
+        "every repo), this repo's override, and the effective result.",
+      inputSchema: { project: PROJECT, branch: BRANCH },
+      outputSchema: {
+        flags: z.object(CONFIG),
+        global: z.object(CONFIG),
+        repo: z.object(CONFIG),
+        effective: z.object(CONFIG),
+      },
+    },
+    async (args) => {
+      return result({ ...(await service.getConfig(ctxOf(args))) });
+    },
+  );
+
+  server.registerTool(
+    "set_config",
+    {
+      description:
+        "Configure preferences centrally — they propagate to every provider layer. scope=global " +
+        "writes the spec that applies to all repos; scope=repo overrides it for this repo only.",
+      inputSchema: {
+        project: PROJECT,
+        branch: BRANCH,
+        scope: z.enum(["global", "repo"]).describe("Where the settings apply."),
+        config: z.object(CONFIG).describe("The settings to merge in."),
+      },
+      outputSchema: { effective: z.object(CONFIG) },
+    },
+    async (args) => {
+      return result({
+        effective: await service.setConfig(ctxOf(args), args.scope, args.config),
+      });
     },
   );
 

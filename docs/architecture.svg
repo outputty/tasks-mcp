@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 720" role="img">
+  <title>tasks-mcp architecture: the provider stack as a swimlane</title>
+  <desc>Rows are the layers of the system: clients, the server, then the provider stack — file layer,
+  GitHub, and a future layer. Columns are the stages of one call: call, orchestrate, read, write,
+  sync. Reads stop at the file layer; writes fan down through every layer; sync pulls every layer,
+  merges with the deepest winning, and pushes back where a layer differs.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5"
+      orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5"
+      stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="arrowp" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5"
+      orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#6B5BD6" stroke-width="1.5"
+      stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="arrowg" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5"
+      orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#0F6E56" stroke-width="1.5"
+      stroke-linecap="round" stroke-linejoin="round"/></marker>
+  </defs>
+  <style>
+    .stage{font-family:system-ui,sans-serif;font-size:14px;font-weight:700;fill:#3A3A37;text-anchor:middle}
+    .lvl{font-family:system-ui,sans-serif;font-size:11px;font-weight:700;fill:#5F5E5A;text-anchor:middle;letter-spacing:.05em}
+    .th{font-family:system-ui,sans-serif;font-size:13px;font-weight:600;fill:#2C2C2A}
+    .ts{font-family:system-ui,sans-serif;font-size:10.5px;fill:#5F5E5A}
+    .chip{font-family:system-ui,sans-serif;font-size:9.5px;font-weight:700}
+    .leg{font-family:system-ui,sans-serif;font-size:10.5px;fill:#5F5E5A}
+    .nbox{fill:#F3F2EF;stroke:#C9C7C0;stroke-width:1.3}
+    .file{fill:#FFFFFF;stroke:#0F6E56;stroke-width:1.6}
+    .remote{fill:#FFFFFF;stroke:#6B5BD6;stroke-width:1.6}
+    .future{fill:#FBFAF7;stroke:#A9A79F;stroke-width:1.3;stroke-dasharray:5 4}
+  </style>
+
+  <rect x="8" y="8" width="1164" height="694" rx="12" fill="#FBFAF7" stroke="#E5E3DC"/>
+
+  <!-- layer rows -->
+  <rect x="48" y="68" width="1084" height="88" fill="#F6F5F1"/>
+  <rect x="48" y="156" width="1084" height="138" fill="#EFEEE9"/>
+  <rect x="48" y="294" width="1084" height="88" fill="#EAF6EF"/>
+  <rect x="48" y="382" width="1084" height="88" fill="#EEEDFE"/>
+  <rect x="48" y="470" width="1084" height="80" fill="#F6F5F1"/>
+  <line x1="48" y1="156" x2="1132" y2="156" stroke="#E5E3DC" stroke-width="1"/>
+  <line x1="48" y1="294" x2="1132" y2="294" stroke="#E5E3DC" stroke-width="1"/>
+  <line x1="48" y1="382" x2="1132" y2="382" stroke="#E5E3DC" stroke-width="1"/>
+  <line x1="48" y1="470" x2="1132" y2="470" stroke="#A9A79F" stroke-width="1" stroke-dasharray="4 4"/>
+  <text class="lvl" x="38" y="112" transform="rotate(-90 38 112)">clients</text>
+  <text class="lvl" x="38" y="225" transform="rotate(-90 38 225)">server</text>
+  <text class="lvl" x="38" y="338" transform="rotate(-90 38 338)">file layer</text>
+  <text class="lvl" x="38" y="426" transform="rotate(-90 38 426)">github</text>
+  <text class="lvl" x="38" y="510" transform="rotate(-90 38 510)">next layer</text>
+
+  <!-- stage columns -->
+  <text class="stage" x="170" y="48">1 · call</text>
+  <text class="stage" x="402" y="48">2 · orchestrate</text>
+  <text class="stage" x="609" y="48">3 · read</text>
+  <text class="stage" x="804" y="48">4 · write</text>
+  <text class="stage" x="1010" y="48">5 · sync</text>
+  <line x1="292" y1="56" x2="292" y2="620" stroke="#A9A79F" stroke-width="1.4" stroke-dasharray="3 4"/>
+  <line x1="512" y1="56" x2="512" y2="620" stroke="#A9A79F" stroke-width="1.4" stroke-dasharray="3 4"/>
+  <line x1="706" y1="56" x2="706" y2="620" stroke="#A9A79F" stroke-width="1.4" stroke-dasharray="3 4"/>
+  <line x1="902" y1="56" x2="902" y2="620" stroke="#A9A79F" stroke-width="1.4" stroke-dasharray="3 4"/>
+
+  <!-- clients -->
+  <rect class="nbox" x="70" y="84" width="200" height="52" rx="8"/>
+  <text class="th" x="170" y="105" text-anchor="middle">Coding agent (MCP)</text>
+  <text class="ts" x="170" y="122" text-anchor="middle">add_task · prereqs · blockers</text>
+  <rect class="nbox" x="302" y="84" width="200" height="52" rx="8"/>
+  <text class="th" x="402" y="105" text-anchor="middle">Human — CLI / library</text>
+  <text class="ts" x="402" y="122" text-anchor="middle">tasks-mcp blockers · npm import</text>
+
+  <!-- server -->
+  <rect class="nbox" x="70" y="172" width="200" height="52" rx="8"/>
+  <text class="th" x="170" y="193" text-anchor="middle">MCP transports</text>
+  <text class="ts" x="170" y="210" text-anchor="middle">@modelcontextprotocol/sdk</text>
+  <rect class="nbox" x="302" y="172" width="200" height="52" rx="8"/>
+  <text class="th" x="402" y="193" text-anchor="middle">TaskStack</text>
+  <text class="ts" x="402" y="210" text-anchor="middle">sequences the layers</text>
+  <rect class="nbox" x="70" y="234" width="200" height="48" rx="8"/>
+  <text class="th" x="170" y="253" text-anchor="middle">ConfigProvider</text>
+  <text class="ts" x="170" y="269" text-anchor="middle">flags &lt; global spec &lt; per-repo</text>
+  <rect class="nbox" x="920" y="172" width="180" height="52" rx="8"/>
+  <text class="th" x="1010" y="193" text-anchor="middle">merge · deepest wins</text>
+  <text class="ts" x="1010" y="210" text-anchor="middle">absence never deletes</text>
+
+  <!-- provider stack boxes -->
+  <rect class="file" x="519" y="310" width="180" height="52" rx="8"/>
+  <text class="th" x="609" y="331" text-anchor="middle">read the YAML</text>
+  <text class="ts" x="609" y="348" text-anchor="middle">instant · offline · stops here</text>
+
+  <rect class="file" x="714" y="310" width="180" height="52" rx="8"/>
+  <text class="th" x="804" y="331" text-anchor="middle">upsert task</text>
+  <text class="ts" x="804" y="348" text-anchor="middle">rewrite the YAML</text>
+  <rect class="remote" x="714" y="398" width="180" height="52" rx="8"/>
+  <text class="th" x="804" y="419" text-anchor="middle">upsert task</text>
+  <text class="ts" x="804" y="436" text-anchor="middle">issue · labels · board card</text>
+  <rect class="future" x="714" y="486" width="180" height="48" rx="8"/>
+  <text class="th" x="804" y="505" text-anchor="middle">upsert task</text>
+  <text class="ts" x="804" y="521" text-anchor="middle">free migration: backfilled</text>
+
+  <rect class="file" x="920" y="310" width="180" height="52" rx="8"/>
+  <text class="th" x="1010" y="331" text-anchor="middle">pull</text>
+  <text class="ts" x="1010" y="348" text-anchor="middle">tasks from the YAML</text>
+  <rect class="remote" x="920" y="398" width="180" height="52" rx="8"/>
+  <text class="th" x="1010" y="419" text-anchor="middle">pull</text>
+  <text class="ts" x="1010" y="436" text-anchor="middle">issues + labels + board</text>
+  <rect class="future" x="920" y="486" width="180" height="48" rx="8"/>
+  <text class="th" x="1010" y="505" text-anchor="middle">pull</text>
+  <text class="ts" x="1010" y="521" text-anchor="middle">whatever it holds</text>
+
+  <!-- flow: call -->
+  <line x1="170" y1="136" x2="170" y2="170" stroke="#888780" stroke-width="1.4" marker-end="url(#arrow)"/>
+  <line x1="402" y1="136" x2="402" y2="170" stroke="#888780" stroke-width="1.4" marker-end="url(#arrow)"/>
+  <line x1="270" y1="198" x2="300" y2="198" stroke="#888780" stroke-width="1.4" marker-end="url(#arrow)"/>
+  <path d="M270,258 L402,258 L402,228" fill="none" stroke="#888780" stroke-width="1.4" marker-end="url(#arrow)"/>
+  <rect x="290" y="238" width="94" height="16" rx="5" fill="#FFFFFF" stroke="#E5E3DC"/>
+  <text class="chip" x="337" y="249" text-anchor="middle" fill="#5F5E5A">propagates to all</text>
+
+  <!-- flow: read (top layer only) -->
+  <path d="M502,186 L609,186 L609,308" fill="none" stroke="#0F6E56" stroke-width="1.6" marker-end="url(#arrowg)"/>
+  <rect x="586" y="248" width="46" height="16" rx="5" fill="#FFFFFF" stroke="#E5E3DC"/>
+  <text class="chip" x="609" y="259" text-anchor="middle" fill="#0F6E56">reads</text>
+
+  <!-- flow: write (fan down every layer) -->
+  <path d="M502,210 L804,210 L804,308" fill="none" stroke="#888780" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="804" y1="362" x2="804" y2="396" stroke="#888780" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="804" y1="450" x2="804" y2="484" stroke="#888780" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <rect x="762" y="248" width="84" height="16" rx="5" fill="#FFFFFF" stroke="#E5E3DC"/>
+  <text class="chip" x="804" y="259" text-anchor="middle" fill="#5F5E5A">writes fan down</text>
+
+  <!-- flow: sync (pulls flow up to the merge; merged truth pushed back where a layer differs) -->
+  <line x1="1010" y1="484" x2="1010" y2="452" stroke="#6B5BD6" stroke-width="1.4" marker-end="url(#arrowp)"/>
+  <line x1="1010" y1="396" x2="1010" y2="364" stroke="#6B5BD6" stroke-width="1.4" marker-end="url(#arrowp)"/>
+  <line x1="1010" y1="308" x2="1010" y2="228" stroke="#6B5BD6" stroke-width="1.4" marker-end="url(#arrowp)"/>
+  <rect x="965" y="256" width="90" height="16" rx="5" fill="#FFFFFF" stroke="#E5E3DC"/>
+  <text class="chip" x="1010" y="267" text-anchor="middle" fill="#6B5BD6">pulls flow up</text>
+  <path d="M1104,224 L1116,224 L1116,505 L1102,505" fill="none" stroke="#6B5BD6" stroke-width="1.4"
+    stroke-dasharray="5 4" marker-end="url(#arrowp)"/>
+  <rect x="1084" y="352" width="64" height="16" rx="5" fill="#FFFFFF" stroke="#E5E3DC"/>
+  <text class="chip" x="1116" y="363" text-anchor="middle" fill="#6B5BD6">push back</text>
+
+  <!-- depth note -->
+  <text class="leg" x="48" y="576">Stack order is authority: the deeper the layer, the more authoritative on a sync disagreement — the next layer (dashed) becomes the source of truth the day it is added.</text>
+
+  <!-- legend -->
+  <rect x="48" y="640" width="12" height="12" class="file" rx="3"/>
+  <text class="leg" x="66" y="650">file layer (fast, disposable)</text>
+  <rect x="226" y="640" width="12" height="12" class="remote" rx="3"/>
+  <text class="leg" x="244" y="650">github layer</text>
+  <rect x="342" y="640" width="12" height="12" class="future" rx="3"/>
+  <text class="leg" x="360" y="650">not built yet</text>
+  <rect x="456" y="640" width="12" height="12" class="nbox" rx="3"/>
+  <text class="leg" x="474" y="650">machinery</text>
+  <text class="leg" x="590" y="650">flow: down a stage column, then right to the next stage</text>
+</svg>

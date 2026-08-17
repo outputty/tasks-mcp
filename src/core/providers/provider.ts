@@ -10,7 +10,8 @@
 //   - DELETIONS NEVER PROPAGATE: a task can close everywhere, but only vanishes by hand.
 
 import type { ProjectContext, Task } from "../types.ts";
-import { loadConfig, type ServerOptions } from "../config.ts";
+import type { ServerOptions } from "../types.ts";
+import { ConfigProvider } from "./config.ts";
 import { FileProvider } from "./file.ts";
 import { GitHubProvider } from "./github.ts";
 
@@ -20,6 +21,9 @@ export interface ProviderState {
   task: Task;
   /** The layer's own sides disagree (or an item needs adopting): push the merged task back to it. */
   reconcile?: boolean;
+  /** More than one remote item claims this task id — the layer resolved to the OLDEST one and the
+   *  newer duplicates are shadowed. Counted into SyncResult.conflicts; repair is a human call. */
+  conflict?: boolean;
 }
 
 export interface Provider {
@@ -35,30 +39,28 @@ export interface Provider {
   pull(ctx: ProjectContext): Promise<Map<string, ProviderState>>;
   /** Create-or-update one task; the layer resolves its own handles (issue number, card id, …). */
   upsert(ctx: ProjectContext, task: Task): Promise<void>;
+  /** Optional batch form of `upsert` — a layer with cheap batching (one file write) implements it. */
+  upsertMany?(ctx: ProjectContext, tasks: Task[]): Promise<void>;
 }
 
 // Registered remote layers. Adding Linear is one entry here plus its class — nothing else moves.
-const REMOTES: Record<string, (options: ServerOptions) => Provider> = {
-  github: (options) => new GitHubProvider(options),
+const REMOTES: Record<string, (config: ConfigProvider) => Provider> = {
+  github: (config) => new GitHubProvider(config),
 };
 
-// One stack per remote name — layers cache their per-project init (repo, board, index), so handing out
-// fresh instances would redo that remote work on every service call.
-const stacks = new Map<string, Provider[]>();
-
 /**
- * The project's provider stack, top-first: the file layer, then the configured remote (default
- * "github"). Order is authority order — the LAST layer is the source of truth.
+ * Build the stack for one remote, top-first: the file layer, then the named remote. Order is
+ * authority order — the LAST layer is the source of truth. A pure builder: the caller (TaskStack)
+ * owns memoization, and every remote layer shares the one ConfigProvider, so a preference set
+ * centrally propagates to all of them.
  */
-export function stackFor(project: string, options: ServerOptions = {}): Provider[] {
-  const name = loadConfig(project, options).provider ?? "github";
-  const make = REMOTES[name];
+export function buildStack(
+  remote: string,
+  options: ServerOptions,
+  config: ConfigProvider,
+): Provider[] {
+  const make = REMOTES[remote];
   if (!make)
-    throw new Error(`unknown provider '${name}' (known: ${Object.keys(REMOTES).join(", ")})`);
-  let stack = stacks.get(name);
-  if (!stack) {
-    stack = [new FileProvider(options), make(options)];
-    stacks.set(name, stack);
-  }
-  return stack;
+    throw new Error(`unknown provider '${remote}' (known: ${Object.keys(REMOTES).join(", ")})`);
+  return [new FileProvider(options), make(config)];
 }

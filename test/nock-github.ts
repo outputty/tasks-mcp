@@ -5,7 +5,8 @@
 import nock from "nock";
 import { Octokit } from "octokit";
 import { GitHubProvider } from "../src/core/providers/github.ts";
-import type { ServerOptions } from "../src/core/config.ts";
+import type { ServerOptions } from "../src/core/types.ts";
+import { ConfigProvider } from "../src/core/providers/config.ts";
 
 export interface FakeIssue {
   id: string;
@@ -13,6 +14,7 @@ export interface FakeIssue {
   title: string;
   body: string;
   state: "OPEN" | "CLOSED";
+  labels?: string[]; // label NAMES
 }
 
 export class NockGitHub {
@@ -21,12 +23,21 @@ export class NockGitHub {
     { id: "PROJ", number: 7, title: "Tasks" },
   ];
   items = new Map<string, { contentId: string; status: string | null }>();
+  /** Repo labels, name → node id. */
+  labels = new Map<string, string>();
   private issueSeq = 1;
   private itemSeq = 1;
+  private labelSeq = 1;
+
+  private labelName(id: string): string {
+    for (const [name, lid] of this.labels) if (lid === id) return name;
+    throw new Error(`unknown label id ${id}`);
+  }
 
   // Query → handler, matched on format-stable identifiers (GraphQL ignores spacing). ORDERED: first
   // match wins, and some needles ("on Issue", "repository(") are substrings of other queries' text.
   private readonly routes: Array<[string, (vars: Record<string, any>) => unknown]> = [
+    ["createLabel", (v) => this.createLabel(v)],
     ["createIssue", (v) => this.createIssue(v)],
     ["updateIssue", (v) => this.updateIssue(v)],
     ["closeIssue", (v) => this.setIssueState(v, "CLOSED", "closeIssue")],
@@ -53,6 +64,12 @@ export class NockGitHub {
     return route[1](vars);
   }
 
+  private createLabel(vars: Record<string, any>): unknown {
+    const id = `L_${this.labelSeq++}`;
+    this.labels.set(String(vars.n), id);
+    return { createLabel: { label: { id } } };
+  }
+
   private createIssue(vars: Record<string, any>): unknown {
     const n = this.issueSeq++;
     this.issues.push({
@@ -61,6 +78,7 @@ export class NockGitHub {
       title: String(vars.t),
       body: String(vars.b),
       state: "OPEN",
+      labels: ((vars.l as string[] | undefined) ?? []).map((id) => this.labelName(id)),
     });
     return { createIssue: { issue: { id: `I_${n}` } } };
   }
@@ -70,6 +88,7 @@ export class NockGitHub {
     if (i) {
       i.title = String(vars.t);
       i.body = String(vars.b);
+      if (vars.l !== undefined) i.labels = (vars.l as string[]).map((id) => this.labelName(id));
     }
     return { updateIssue: { issue: { id: vars.id } } };
   }
@@ -135,6 +154,7 @@ export class NockGitHub {
         id: "REPO",
         owner: { id: "OWNER" },
         projectsV2: { nodes: this.boards },
+        labels: { nodes: [...this.labels].map(([name, id]) => ({ id, name })) },
       },
     };
   }
@@ -144,7 +164,10 @@ export class NockGitHub {
       repository: {
         issues: {
           pageInfo: { hasNextPage: false, endCursor: null },
-          nodes: this.issues,
+          nodes: this.issues.map((i) => ({
+            ...i,
+            labels: { nodes: (i.labels ?? []).map((name) => ({ name })) },
+          })),
         },
       },
     };
@@ -152,7 +175,9 @@ export class NockGitHub {
 
   private issueBody(vars: Record<string, any>): unknown {
     const i = this.issues.find((x) => x.id === vars.id);
-    return { node: i ? { body: i.body } : null };
+    if (!i) return { node: null };
+    const nodes = (i.labels ?? []).map((name) => ({ id: this.labels.get(name) ?? name, name }));
+    return { node: { body: i.body, labels: { nodes } } };
   }
 }
 
@@ -178,5 +203,5 @@ export function nockProvider(options: ServerOptions = {}): GitHubProvider {
     throttle: { enabled: false },
     retry: { enabled: false },
   });
-  return new GitHubProvider(options, octokit);
+  return new GitHubProvider(new ConfigProvider(options), octokit);
 }

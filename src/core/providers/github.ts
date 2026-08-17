@@ -13,15 +13,17 @@
 // The layer owns its own bookkeeping: a per-project index from task id to issue/card node ids, built
 // from one listing pass and refreshed by every `pull`. Nothing above the seam sees a GitHub handle —
 // `upsert` decides create-vs-update from the index alone. The task id lives in a hidden YAML block in
-// the issue body (alongside deps/scope/tier/…) — no labels, nothing to keep in sync but the body
-// itself. An issue is "managed" iff it carries that block.
+// the issue body (alongside deps/scope/brief/…); the execution-modifying scalars (kind, tier, qa,
+// spec, stage, priority) are worn as `field:value` labels. An issue is "managed" iff it carries the
+// block.
 
 import { spawnSync } from "node:child_process";
 import { Octokit } from "octokit";
 import { match } from "ts-pattern";
 import { parse, stringify } from "yaml";
-import type { ProjectConfig, ProjectContext, RepoRef, Task } from "../types.ts";
-import { loadConfig, type ServerOptions } from "../config.ts";
+import type { LabelFieldName, ProjectConfig, ProjectContext, RepoRef, Task } from "../types.ts";
+import { LABEL_FIELD_NAMES, TIERS, QA_LEVELS, SPEC_STATES, PRIORITIES } from "../types.ts";
+import { ConfigProvider } from "./config.ts";
 import type { Provider, ProviderState } from "./provider.ts";
 import { withDefaults } from "../graph.ts";
 
@@ -67,7 +69,11 @@ function resolveRepo(project: string): RepoRef {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// The issue body block — how a full task (deps included) round-trips through its issue.
+// The issue body block and the labels — how a full task round-trips through its issue. The scalar
+// fields that modify execution (kind, tier, qa, spec, stage, priority) are worn as `field:value`
+// LABELS, so they are visible and editable in the GitHub UI and filterable in searches; the body block
+// keeps what labels cannot carry (the id, deps, scope, brief, contract, attempts, discovered_from).
+// Labels win over a legacy block that still carries those fields; foreign labels are never touched.
 
 interface GhIssue {
   id: string;
@@ -75,24 +81,70 @@ interface GhIssue {
   title: string;
   body: string | null;
   state: "OPEN" | "CLOSED";
+  labels?: { nodes: Array<{ name: string }> };
 }
 
 const META_OPEN = "<!-- outputty:task";
 const META_CLOSE = "-->";
-// Fields carried in the body block, in a stable order. `id` leads; title/status live outside the block.
-const META_KEYS = [
-  "kind",
-  "deps",
-  "scope",
-  "tier",
-  "qa",
-  "spec",
-  "stage",
-  "brief",
-  "contract",
-  "attempts",
-  "discovered_from",
-] as const;
+// Fields carried in the body block, in a stable order. `id` leads; title/status live outside the
+// block; the label-worn fields live on the issue as labels.
+const META_KEYS = ["deps", "scope", "brief", "contract", "attempts", "discovered_from"] as const;
+
+// The label-worn fields (LABEL_FIELD_NAMES is the one source), each with its label color.
+const LABEL_FIELDS: Record<LabelFieldName, string> = {
+  kind: "bfd4f2",
+  tier: "1d76db",
+  qa: "5319e7",
+  spec: "fbca04",
+  stage: "0e8a16",
+  priority: "b60205",
+};
+const labelField = (name: string): LabelFieldName | null => {
+  const at = name.indexOf(":");
+  if (at === -1) return null;
+  const field = name.slice(0, at);
+  return (LABEL_FIELD_NAMES as readonly string[]).includes(field)
+    ? (field as LabelFieldName)
+    : null;
+};
+
+/** The labels a task wears — one `field:value` per configured label-worn field that is set — or
+ *  null when the label sync is configured off (meaning: do not touch labels at all). */
+function labelsFor(task: Task, config: ProjectConfig): string[] | null {
+  if (config.labels === false) return null;
+  const fields = config.labelFields ?? LABEL_FIELD_NAMES;
+  const out: string[] = [];
+  for (const field of fields) {
+    if (task[field] !== undefined) out.push(`${field}:${task[field]}`);
+  }
+  return out;
+}
+
+/** A label's value parsed for its field — hand-typed junk (`tier:x`) is ignored, not crashed on.
+ *  The valid sets are the shared domains, so the parser can never drift from the validators. */
+function parseLabelValue(field: LabelFieldName, value: string): unknown {
+  const inSet = (set: readonly string[]) => (set.includes(value) ? value : undefined);
+  return match(field)
+    .with("tier", () =>
+      (TIERS as readonly number[]).includes(Number(value)) ? Number(value) : undefined,
+    )
+    .with("qa", () => inSet(QA_LEVELS))
+    .with("spec", () => inSet(SPEC_STATES))
+    .with("priority", () => inSet(PRIORITIES))
+    .otherwise(() => value); // kind and stage are free text
+}
+
+/** The task fields an issue's labels carry. */
+function labelFields(issue: GhIssue): Partial<Task> {
+  const out: Record<string, unknown> = {};
+  for (const { name } of issue.labels?.nodes ?? []) {
+    const field = labelField(name);
+    if (!field) continue;
+    const value = parseLabelValue(field, name.slice(field.length + 1));
+    if (value !== undefined) out[field] = value;
+  }
+  return out as Partial<Task>;
+}
 
 /** A meta value stays out of the block when absent, or an empty list where emptiness means nothing. */
 function skipMeta(key: string, value: unknown): boolean {
@@ -144,11 +196,13 @@ function managedId(issue: GhIssue): string | null {
   return typeof id === "string" && id ? id : null;
 }
 
-/** The full task an issue encodes (the body block wins; title/status come from the issue). */
+/** The full task an issue encodes: the body block, then labels win the fields they carry, then
+ *  title/status from the issue itself. */
 function issueToTask(issue: GhIssue): Task {
   const { meta } = parseBody(issue.body);
   return withDefaults({
     ...meta,
+    ...labelFields(issue),
     id: String(meta.id),
     title: issue.title || "",
     status: taskStatus(issue.state),
@@ -171,11 +225,12 @@ interface BoardCard {
   done: boolean;
 }
 
-/** What init's one repository query returns: the ids it needs plus the repo's linked boards. */
+/** What init's one repository query returns: the ids it needs, the repo's linked boards, its labels. */
 interface RepoSnapshot {
   id: string;
   owner: { id: string };
   projectsV2: { nodes: Array<{ id: string; number: number; title: string }> };
+  labels: { nodes: Array<{ id: string; name: string }> };
 }
 
 /** One page of a GraphQL connection. */
@@ -261,15 +316,45 @@ interface Scanned {
   card?: BoardCard;
 }
 
-function indexOf(scan: Scanned[]): Map<string, IssueHandle> {
+/** Both views of one scan: the pull states and the upsert index. FIRST WINS everywhere a task id
+ *  repeats — the listing is oldest-first, so pulls and upserts always resolve to the OLDEST issue
+ *  carrying an id (deterministic, and the one a human saw first); newer duplicates are flagged. */
+function collate(
+  scan: Scanned[],
+  boardOn: boolean,
+): { states: Map<string, ProviderState>; index: Map<string, IssueHandle> } {
+  const states = new Map<string, ProviderState>();
   const index = new Map<string, IssueHandle>();
   for (const { listed, card } of scan) {
+    const existing = states.get(listed.task.id);
+    if (existing) {
+      existing.conflict = true; // a newer issue also claims this id; the oldest stays the record
+      continue;
+    }
+    states.set(listed.task.id, providerState(listed, card, boardOn));
     index.set(
       listed.task.id,
       card ? { issueId: listed.issueId, projectItem: card.itemId } : { issueId: listed.issueId },
     );
   }
-  return index;
+  return { states, index };
+}
+
+/** The label node ids on an issue that are NOT ours — kept as-is on every update. */
+function foreignLabelIds(
+  node: { labels: { nodes: Array<{ id: string; name: string }> } } | null,
+): string[] {
+  return (node?.labels.nodes ?? []).filter((l) => labelField(l.name) === null).map((l) => l.id);
+}
+
+/** Duplicate ids are worth a line in the log every time they are seen — they mean two issues claim
+ *  one task and a human should merge or close one; sync counts them but never deletes. */
+function warnConflicts(repo: RepoRef, states: Map<string, ProviderState>): void {
+  const ids = [...states.entries()].filter(([, s]) => s.conflict).map(([id]) => id);
+  if (ids.length === 0) return;
+  console.error(
+    `tasks-mcp: ${repo.owner}/${repo.repo} has duplicate issues for task id(s): ${ids.join(", ")} — using the oldest of each`,
+  );
 }
 
 /** Everything init resolves for one project; every later call runs against this. */
@@ -279,6 +364,8 @@ interface ProjectState {
   /** The repository node id — what createIssue mutates against. */
   repoId: string;
   board: BoardMeta | null;
+  /** The repo's labels, name → node id; missing ones are created on demand during upsert. */
+  labels: Map<string, string>;
 }
 
 export class GitHubProvider implements Provider {
@@ -291,7 +378,7 @@ export class GitHubProvider implements Provider {
   private readonly indexes = new Map<string, Promise<Map<string, IssueHandle>>>();
 
   constructor(
-    private readonly options: ServerOptions = {},
+    private readonly config: ConfigProvider,
     octokit?: Octokit,
   ) {
     this.octokit = octokit ?? defaultOctokit();
@@ -310,21 +397,45 @@ export class GitHubProvider implements Provider {
     const state = await this.state(ctx.project);
     const index = await this.index(ctx.project, state);
     const known = index.get(task.id);
-    const issueId = await this.writeIssue(state, known?.issueId, task);
+    const wanted = labelsFor(task, state.config);
+    const labelIds = wanted === null ? undefined : await this.ensureLabels(state, wanted);
+    const issueId = await this.writeIssue(state, known?.issueId, task, labelIds);
     const projectItem = await this.withBoard(state, task, issueId, known?.projectItem);
     index.set(task.id, projectItem ? { issueId, projectItem } : { issueId });
   }
 
+  /** The node ids for these label names, creating any label the repo does not have yet. */
+  private async ensureLabels(state: ProjectState, names: string[]): Promise<string[]> {
+    const ids: string[] = [];
+    for (const name of names) {
+      const id = state.labels.get(name) ?? (await this.createLabel(state, name));
+      state.labels.set(name, id);
+      ids.push(id);
+    }
+    return ids;
+  }
+
+  private async createLabel(state: ProjectState, name: string): Promise<string> {
+    const field = labelField(name);
+    const res = await this.octokit.graphql<{ createLabel: { label: { id: string } } }>(
+      `mutation($r:ID!,$n:String!,$c:String!){ createLabel(input:{repositoryId:$r,name:$n,color:$c}){ label{ id } } }`,
+      {
+        r: state.repoId,
+        n: name,
+        c: field ? LABEL_FIELDS[field] : "ededed",
+        // Label mutations spent years behind this preview; the header is harmless once they are GA.
+        headers: { accept: "application/vnd.github.bane-preview+json" },
+      },
+    );
+    return res.createLabel.label.id;
+  }
+
   async pull(ctx: ProjectContext): Promise<Map<string, ProviderState>> {
     const state = await this.state(ctx.project);
-    const scan = await this.scan(state);
-    this.indexes.set(ctx.project, Promise.resolve(indexOf(scan)));
-    return new Map(
-      scan.map(({ listed, card }) => [
-        listed.task.id,
-        providerState(listed, card, state.board !== null),
-      ]),
-    );
+    const { states, index } = collate(await this.scan(state), state.board !== null);
+    this.indexes.set(ctx.project, Promise.resolve(index));
+    warnConflicts(state.repo, states);
+    return states;
   }
 
   // -------------------------------------------------------------------------------------------------
@@ -334,7 +445,7 @@ export class GitHubProvider implements Provider {
     let index = this.indexes.get(project);
     if (!index) {
       index = this.scan(state)
-        .then(indexOf)
+        .then((scan) => collate(scan, state.board !== null).index)
         .catch((err) => {
           this.indexes.delete(project);
           throw err;
@@ -358,9 +469,10 @@ export class GitHubProvider implements Provider {
     state: ProjectState,
     issueId: string | undefined,
     task: Task,
+    labelIds: string[] | undefined, // undefined = label sync configured off: never touch labels
   ): Promise<string> {
-    if (!issueId) return this.createIssue(state, task);
-    await this.updateIssue(issueId, task);
+    if (!issueId) return this.createIssue(state, task, labelIds);
+    await this.updateIssue(issueId, task, labelIds);
     return issueId;
   }
 
@@ -374,26 +486,30 @@ export class GitHubProvider implements Provider {
   // Init.
 
   private state(project: string): Promise<ProjectState> {
-    let state = this.states.get(project);
+    // The cache key carries the effective config, so ANY preference change (board, projects, labels)
+    // rebuilds the state on the next call — set_config propagates uniformly, no special cases.
+    const config = this.config.get(project);
+    const key = `${project}\u0000${JSON.stringify(config)}`;
+    let state = this.states.get(key);
     if (!state) {
-      state = this.buildState(project).catch((err) => {
-        this.states.delete(project); // a failed init retries next call instead of caching the error
+      state = this.buildState(project, config).catch((err) => {
+        this.states.delete(key); // a failed init retries next call instead of caching the error
         throw err;
       });
-      this.states.set(project, state);
+      this.states.set(key, state);
     }
     return state;
   }
 
-  private async buildState(project: string): Promise<ProjectState> {
+  private async buildState(project: string, config: ProjectConfig): Promise<ProjectState> {
     const repo = resolveRepo(project);
-    const config = loadConfig(project, this.options);
     const snapshot = await this.repoSnapshot(repo);
     return {
       repo,
       config,
       repoId: snapshot.id,
       board: await this.boardFor(snapshot, config, repo),
+      labels: new Map(snapshot.labels.nodes.map((l) => [l.name, l.id])),
     };
   }
 
@@ -401,7 +517,7 @@ export class GitHubProvider implements Provider {
    *  owner (createProjectV2 needs it), and the boards already linked to the repo. */
   private async repoSnapshot(repo: RepoRef): Promise<RepoSnapshot> {
     const res = await this.octokit.graphql<{ repository: RepoSnapshot }>(
-      `query($o:String!,$n:String!){ repository(owner:$o,name:$n){ id owner{ id } projectsV2(first:50){ nodes{ id number title } } } }`,
+      `query($o:String!,$n:String!){ repository(owner:$o,name:$n){ id owner{ id } projectsV2(first:50){ nodes{ id number title } } labels(first:100){ nodes{ id name } } } }`,
       { o: repo.owner, n: repo.repo },
     );
     return res.repository;
@@ -483,29 +599,47 @@ export class GitHubProvider implements Provider {
   // -------------------------------------------------------------------------------------------------
   // Issues — the primary record. A write here must succeed.
 
-  private async createIssue(state: ProjectState, task: Task): Promise<string> {
+  private async createIssue(
+    state: ProjectState,
+    task: Task,
+    labelIds: string[] | undefined,
+  ): Promise<string> {
+    const mutation =
+      labelIds === undefined
+        ? `mutation($r:ID!,$t:String!,$b:String!){ createIssue(input:{repositoryId:$r,title:$t,body:$b}){ issue{ id } } }`
+        : `mutation($r:ID!,$t:String!,$b:String!,$l:[ID!]){ createIssue(input:{repositoryId:$r,title:$t,body:$b,labelIds:$l}){ issue{ id } } }`;
     const res = await this.octokit.graphql<{
       createIssue: { issue: { id: string } };
-    }>(
-      `mutation($r:ID!,$t:String!,$b:String!){ createIssue(input:{repositoryId:$r,title:$t,body:$b}){ issue{ id } } }`,
-      { r: state.repoId, t: task.title || task.id, b: renderBody(task) },
-    );
+    }>(mutation, { r: state.repoId, t: task.title || task.id, b: renderBody(task), l: labelIds });
     const issueId = res.createIssue.issue.id;
     await this.setIssueState(issueId, task.status);
     return issueId;
   }
 
-  private async updateIssue(issueId: string, task: Task): Promise<void> {
+  private async updateIssue(
+    issueId: string,
+    task: Task,
+    labelIds: string[] | undefined,
+  ): Promise<void> {
     const current = await this.octokit.graphql<{
-      node: { body: string | null } | null;
-    }>(`query($id:ID!){ node(id:$id){ ... on Issue { body } } }`, {
-      id: issueId,
-    });
-    const human = parseBody(current.node?.body).human;
-    await this.octokit.graphql(
-      `mutation($id:ID!,$t:String!,$b:String!){ updateIssue(input:{id:$id,title:$t,body:$b}){ issue{ id } } }`,
-      { id: issueId, t: task.title || task.id, b: renderBody(task, human) },
+      node: { body: string | null; labels: { nodes: Array<{ id: string; name: string }> } } | null;
+    }>(
+      `query($id:ID!){ node(id:$id){ ... on Issue { body labels(first:50){ nodes{ id name } } } } }`,
+      { id: issueId },
     );
+    const human = parseBody(current.node?.body).human;
+    // updateIssue's labelIds REPLACES the whole set: keep every foreign label, replace only ours.
+    // Label sync off (labelIds undefined) leaves the labels field out of the mutation entirely.
+    const mutation =
+      labelIds === undefined
+        ? `mutation($id:ID!,$t:String!,$b:String!){ updateIssue(input:{id:$id,title:$t,body:$b}){ issue{ id } } }`
+        : `mutation($id:ID!,$t:String!,$b:String!,$l:[ID!]){ updateIssue(input:{id:$id,title:$t,body:$b,labelIds:$l}){ issue{ id } } }`;
+    await this.octokit.graphql(mutation, {
+      id: issueId,
+      t: task.title || task.id,
+      b: renderBody(task, human),
+      l: labelIds === undefined ? undefined : [...foreignLabelIds(current.node), ...labelIds],
+    });
     await this.setIssueState(issueId, task.status);
   }
 
@@ -536,7 +670,7 @@ export class GitHubProvider implements Provider {
 
   private async issuePage(repo: RepoRef, after: string | null): Promise<Page<GhIssue>> {
     const res: { repository: { issues: Page<GhIssue> } } = await this.octokit.graphql(
-      `query($o:String!,$n:String!,$c:String){ repository(owner:$o,name:$n){ issues(first:100,after:$c,states:[OPEN,CLOSED],orderBy:{field:CREATED_AT,direction:ASC}){ pageInfo{ hasNextPage endCursor } nodes{ id number title body state } } } }`,
+      `query($o:String!,$n:String!,$c:String){ repository(owner:$o,name:$n){ issues(first:100,after:$c,states:[OPEN,CLOSED],orderBy:{field:CREATED_AT,direction:ASC}){ pageInfo{ hasNextPage endCursor } nodes{ id number title body state labels(first:20){ nodes{ name } } } } } }`,
       { o: repo.owner, n: repo.repo, c: after },
     );
     return res.repository.issues;
