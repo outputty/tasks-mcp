@@ -132,3 +132,11 @@ test("a file written before the stack (with a refs key) still loads", async () =
   expect((await svc.get(ctx, "old")) as never).not.toHaveProperty("refs");
   cleanup();
 });
+
+test("a mistyped config file fails loudly, naming the file and the key", async () => {
+  const { svc, project, cleanup } = harness();
+  fs.mkdirSync(`${project}/.claude`, { recursive: true });
+  fs.writeFileSync(`${project}/.claude/tasks-mcp.config.yaml`, "projectNumber: seven\n");
+  await expect(svc.create({ project }, task({ id: "a" }))).rejects.toThrow(/invalid config/);
+  cleanup();
+});

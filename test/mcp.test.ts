@@ -144,6 +144,30 @@ test("a tool failure comes back as isError, not a protocol error", async () => {
   await cleanup();
 });
 
+test("prereqs and blockers answer the two planning questions over MCP", async () => {
+  const { client, project, cleanup } = await harness();
+  const add = (id: string, deps: string[] = [], priority?: string) =>
+    client.callTool({ name: "add_task", arguments: { project, id, deps, priority } });
+  await add("schema");
+  await add("api", ["schema"]);
+  await add("ui", ["api"], "high");
+
+  // Q1: I want to start on ui — what has to be done first?
+  const pre = structured(
+    await client.callTool({ name: "prereqs", arguments: { project, id: "ui" } }),
+  );
+  expect(pre.startable).toBe(false);
+  expect(pre.order).toEqual([["schema"], ["api"]]);
+
+  // Q2: what is the biggest blocker right now?
+  const blk = structured(await client.callTool({ name: "blockers", arguments: { project } }));
+  expect(blk.blockers[0].id).toBe("schema");
+  expect(blk.blockers[0].blocks).toBe(2);
+  expect(blk.blockers[0].highPriorityBlocked).toEqual(["ui"]);
+  expect(blk.blockers[0].unblockedBy).toEqual([]); // schema itself is startable now
+  await cleanup();
+});
+
 test("/health answers with the server info", async () => {
   const { base, cleanup } = await harness();
   const health = (await (await fetch(`${base}/health`)).json()) as any;

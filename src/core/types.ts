@@ -4,6 +4,7 @@
 
 export type SpecState = "drafting" | "settled" | "replan";
 export type QaLevel = "skip" | "inline" | "subagent";
+export type Priority = "high" | "normal" | "low";
 
 export interface Attempt {
   tried: string;
@@ -26,6 +27,8 @@ export interface Task {
   tier?: number;
   /** How much review the work earns. Absent means "subagent". */
   qa?: QaLevel;
+  /** How urgent the work is. Absent means "normal". */
+  priority?: Priority;
   /** Planning lifecycle. Absent means "settled". */
   spec?: SpecState;
   /** A narrative label on a staged deliverable (prototype/build/sweep). */

@@ -10,7 +10,17 @@ import { z } from "zod";
 import pkg from "../../package.json";
 import type { TaskService } from "../core/service.ts";
 import type { ProjectContext, Task } from "../core/types.ts";
-import { ready, planning, schedule, tierOf, qaOf, idList } from "../core/graph.ts";
+import {
+  ready,
+  planning,
+  schedule,
+  prereqs,
+  blockers,
+  tierOf,
+  qaOf,
+  priorityOf,
+  idList,
+} from "../core/graph.ts";
 
 // The single source of the server's identity: the name is the package's bare name, the version is the
 // package version — never a hand-maintained copy.
@@ -50,6 +60,7 @@ const OPTIONAL_FIELDS = [
   "contract",
   "tier",
   "qa",
+  "priority",
   "spec",
   "stage",
   "discovered_from",
@@ -68,6 +79,7 @@ const ROW = {
   summary: z.string(),
   tier: z.number(),
   qa: z.string(),
+  priority: z.string(),
 };
 const indexRow = (task: Task) => ({
   id: task.id,
@@ -76,6 +88,7 @@ const indexRow = (task: Task) => ({
   summary: task.title,
   tier: tierOf(task),
   qa: qaOf(task),
+  priority: priorityOf(task),
 });
 
 // Tool results carry the JSON twice by MCP convention: `structuredContent` for typed consumers,
@@ -192,6 +205,10 @@ export function createMcpServer(service: TaskService): McpServer {
           .enum(["skip", "inline", "subagent"])
           .optional()
           .describe("How much review (default subagent)."),
+        priority: z
+          .enum(["high", "normal", "low"])
+          .optional()
+          .describe("How urgent (default normal)."),
         spec: z.enum(["drafting", "settled", "replan"]).optional().describe("Planning lifecycle."),
         stage: z.string().optional().describe("Narrative label on a staged deliverable."),
         discovered_from: z.string().optional().describe("Parent task, when split out mid-build."),
@@ -276,6 +293,80 @@ export function createMcpServer(service: TaskService): McpServer {
     },
     async (args) => {
       return result({ ...(await service.sync(ctxOf(args))) });
+    },
+  );
+
+  server.registerTool(
+    "prereqs",
+    {
+      description:
+        "Answers: to start working on this task, what has to be done first? Returns its open " +
+        "prerequisites as dependency-ordered layers (work layer 1 first). startable=true means " +
+        "nothing is in the way.",
+      inputSchema: {
+        project: PROJECT,
+        branch: BRANCH,
+        id: z.string().describe("The task you want to start."),
+      },
+      outputSchema: {
+        id: z.string(),
+        startable: z.boolean(),
+        order: z.array(z.array(z.string())),
+        tasks: z.array(z.object(ROW)),
+      },
+    },
+    async (args) => {
+      const layers = prereqs(await service.list(ctxOf(args)), args.id);
+      return result({
+        id: args.id,
+        startable: layers.length === 0,
+        order: layers.map((layer) => layer.map((t) => t.id)),
+        tasks: layers.flat().map(indexRow),
+      });
+    },
+  );
+
+  server.registerTool(
+    "blockers",
+    {
+      description:
+        "Answers: what is the biggest blocker right now? Open tasks ranked by how much of the plan " +
+        "transitively waits on them — the first entry is the single biggest bottleneck. Each entry " +
+        "says what it blocks (with the high-priority subset called out) and what has to happen to " +
+        "get to it (unblockedBy, dependency-ordered).",
+      inputSchema: {
+        project: PROJECT,
+        branch: BRANCH,
+        limit: z.number().int().positive().optional().describe("Max entries (default 5)."),
+      },
+      outputSchema: {
+        blockers: z.array(
+          z.object({
+            id: z.string(),
+            summary: z.string(),
+            priority: z.string(),
+            blocks: z.number(),
+            blocked: z.array(z.string()),
+            highPriorityBlocked: z.array(z.string()),
+            unblockedBy: z.array(z.array(z.string())),
+          }),
+        ),
+      },
+    },
+    async (args) => {
+      const tasks = await service.list(ctxOf(args));
+      const ranked = blockers(tasks).slice(0, args.limit ?? 5);
+      return result({
+        blockers: ranked.map((b) => ({
+          id: b.task.id,
+          summary: b.task.title,
+          priority: priorityOf(b.task),
+          blocks: b.blocks.length,
+          blocked: b.blocks.map((t) => t.id),
+          highPriorityBlocked: b.blocks.filter((t) => priorityOf(t) === "high").map((t) => t.id),
+          unblockedBy: prereqs(tasks, b.task.id).map((layer) => layer.map((t) => t.id)),
+        })),
+      });
     },
   );
 

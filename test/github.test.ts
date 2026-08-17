@@ -18,13 +18,17 @@ function setup(options: Record<string, unknown> = { projects: false }) {
   return { gh, provider: nockProvider(options), ctx: { project: repo.dir } };
 }
 
-test("upsert of a new id creates an issue with the id in the body and no labels", async () => {
+test("upsert of a new id creates an issue: id and deps in the body, scalars as labels", async () => {
   const { gh, provider, ctx } = setup();
-  await provider.upsert(ctx, task({ id: "api", title: "API", tier: 2, deps: ["schema"] }));
+  await provider.upsert(
+    ctx,
+    task({ id: "api", title: "API", tier: 2, priority: "high", deps: ["schema"] }),
+  );
   expect(gh.issues).toHaveLength(1);
   expect(gh.issues[0].body).toContain("id: api");
-  expect(gh.issues[0].body).toContain("tier: 2");
   expect(gh.issues[0].body).toContain("schema");
+  expect(gh.issues[0].body).not.toContain("tier"); // label-worn, not in the block
+  expect(gh.issues[0].labels).toEqual(["tier:2", "priority:high"]);
 });
 
 test("upsert of a known id updates the issue instead of duplicating it", async () => {
@@ -47,8 +51,48 @@ test("upsert rewrites the body and preserves human prose below the block", async
   gh.issues[0].body += "\nHuman note: see the design.";
   await provider.upsert(ctx, task({ id: "t-1", title: "new", tier: 4 }));
   expect(gh.issues[0].title).toBe("new");
-  expect(gh.issues[0].body).toContain("tier: 4");
+  expect(gh.issues[0].labels).toContain("tier:4");
   expect(gh.issues[0].body).toContain("Human note: see the design.");
+});
+
+test("an update keeps foreign labels and replaces only the field labels", async () => {
+  const { gh, provider, ctx } = setup();
+  await provider.upsert(ctx, task({ id: "t-1", tier: 2 }));
+  gh.labels.set("bug", "L_BUG");
+  gh.issues[0].labels = ["bug", "tier:2"]; // a human added `bug` in the UI
+  await provider.upsert(ctx, task({ id: "t-1", tier: 3 }));
+  expect(gh.issues[0].labels).toEqual(["bug", "tier:3"]);
+});
+
+test("labels flow back on pull, and win over a legacy body block", async () => {
+  const { gh, provider, ctx } = setup();
+  gh.labels.set("tier:1", "L_T1");
+  gh.labels.set("qa:skip", "L_QS");
+  gh.issues.push({
+    id: "I_50",
+    number: 50,
+    title: "legacy",
+    body: "<!-- outputty:task\nid: legacy\ntier: 4\n-->",
+    state: "OPEN",
+    labels: ["tier:1", "qa:skip"],
+  });
+  const state = (await provider.pull(ctx)).get("legacy")!;
+  expect(state.task.tier).toBe(1); // the label wins over the block
+  expect(state.task.qa).toBe("skip");
+});
+
+test("a hand-typed junk label value is ignored, not crashed on", async () => {
+  const { gh, provider, ctx } = setup();
+  gh.labels.set("tier:banana", "L_TB");
+  gh.issues.push({
+    id: "I_60",
+    number: 60,
+    title: "typo",
+    body: "<!-- outputty:task\nid: typo\n-->",
+    state: "OPEN",
+    labels: ["tier:banana"],
+  });
+  expect((await provider.pull(ctx)).get("typo")!.task.tier).toBeUndefined();
 });
 
 test("the index survives a fresh provider: an existing issue is found, not re-created", async () => {

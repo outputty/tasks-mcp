@@ -3,12 +3,16 @@
 `@outputty/tasks-mcp`: outputty's task tracker as an MCP server **and** a library, Node-native, published
 to npm. It is split so the MCP layer wraps the core, never the reverse:
 
-- `src/core/` — the business logic: `service` (the `TaskStack` orchestrator), `graph`, `config`, and
-  `providers/` — a STACK of layers behind one `Provider` seam: `file.ts` on top (the local store all
-  reads hit), `github.ts` beneath it (Octokit, GraphQL only). Exported as the library (`.`).
+- `src/core/` — the business logic: `service` (the `TaskStack` orchestrator), `graph` (pure engine on
+  graphology: ready/schedule/prereqs/blockers), `config` (zod-parsed), and `providers/` — a STACK of
+  layers behind one `Provider` seam: `file.ts` on top (the local store all reads hit), `github.ts`
+  beneath it (Octokit, GraphQL only). Exported as the library (`.`).
 - `src/mcp/` — the wrapper on the official `@modelcontextprotocol/sdk`: the tool surface (`server`)
   and the `stdio` + `http` transports. Exported as `./mcp`.
-- `bin/cli.ts` — the entry: MCP server (stdio default, `--http`) or direct subcommands.
+- `bin/cli.ts` — the entry, on commander (user ruling: a real CLI library, never homebrew argv
+  parsing): MCP server (stdio default, `--http`) or direct subcommands.
+- `docs/` — architecture (with the committed SVG), CLI, development. The README is MCP-first; the CLI
+  is the secondary aspect.
 
 ## Code rules (the user's standing preferences — follow them in every change)
 
@@ -45,6 +49,15 @@ to npm. It is split so the MCP layer wraps the core, never the reverse:
   seam while issue errors always propagate.
 - **No imports inside functions.** All imports sit at the top of the module — no lazy
   `await import(...)` to shave startup or dodge a dependency in tests.
+- **GitHub labels carry the execution properties** (user ruling 2026-08-17: "leverage labels as much
+  as possible"). kind/tier/qa/spec/stage/priority are `field:value` labels — created on demand,
+  color-coded per field, editable in the GitHub UI and pulled back by sync; foreign labels are never
+  touched; junk values are ignored, not crashed on. The body block keeps only what labels cannot
+  carry (id, deps, scope, brief, contract, attempts, discovered_from).
+- **The two planning questions are first-class tools.** `prereqs` (what must be done before X, as
+  dependency-ordered layers) and `blockers` (open tasks ranked by transitive downstream impact, with
+  `unblockedBy` and `highPriorityBlocked`). Keep their answers simple and fast — they are the point
+  of the graph.
 - **The GitHub provider speaks GraphQL only** (user ruling, 2026-08-17). The Projects v2 board is
   GraphQL-only regardless (as of 2026-08, REST cannot create a board, link one to a repo, or list a
   repo's linked boards), and the user chose one protocol over a REST/GraphQL mix — one API, one kind
