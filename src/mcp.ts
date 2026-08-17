@@ -7,7 +7,7 @@ import type { TaskService } from "./service.ts";
 import { TOOLS, TOOLS_BY_NAME } from "./tools.ts";
 
 const PROTOCOL_VERSION = "2025-06-18";
-export const SERVER_INFO = { name: "tasks-mcp", version: "0.1.0" };
+export const SERVER_INFO = { name: "tasks-mcp", version: "0.2.0" };
 
 export interface RpcRequest {
   jsonrpc: "2.0";

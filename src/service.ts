@@ -1,16 +1,13 @@
-// The task service: the cache is the authority, the targets are mirrors. Reads come straight from the
-// committed cache (fast, and the only place with the dependency graph). Writes update the cache first,
-// then push the representable fields out to each target. The first target (Issues) is primary and must
-// succeed; the rest (Projects) are best-effort, so a board hiccup never loses a task.
+// The task service: the committed cache is the authority, the provider is the mirror. Reads come straight
+// from the cache (fast, and the only place with the dependency graph). Writes update the cache first,
+// then reflect the representable fields into the provider. `sync` reconciles both ways — provider status
+// wins for the fields it owns, deps stay the cache's alone.
 
-import type { CacheEntry, ProjectContext, Refs, Task } from "./types.ts";
-import type { Env } from "./config.ts";
-import type { SyncTarget } from "./sync/target.ts";
+import type { CacheEntry, ProjectContext, Task } from "./types.ts";
+import type { Provider } from "./providers/provider.ts";
 import { Cache } from "./cache.ts";
 import { withDefaults } from "./graph.ts";
-import { resolveEnv } from "./config.ts";
-import { GitHubIssuesTarget } from "./sync/github-issues.ts";
-import { GitHubProjectsTarget } from "./sync/github-projects.ts";
+import { providerFor } from "./providers/provider.ts";
 
 export interface SyncResult {
   pulled: number;
@@ -28,10 +25,12 @@ export interface TaskService {
 }
 
 export class CachedTaskService implements TaskService {
-  constructor(
-    private readonly resolve: (project: string) => Promise<Env>,
-    private readonly targets: SyncTarget[],
-  ) {}
+  // The provider is resolved per project (config picks it), unless one is injected for tests.
+  constructor(private readonly provider?: Provider) {}
+
+  private providerFor(ctx: ProjectContext): Provider {
+    return this.provider ?? providerFor(ctx.project);
+  }
 
   async list(ctx: ProjectContext): Promise<Task[]> {
     return Cache.forProject(ctx.project).load();
@@ -50,8 +49,7 @@ export class CachedTaskService implements TaskService {
     const entries = cache.load();
     if (entries.some((e) => e.id === task.id))
       throw new Error(`task ${task.id} already exists`);
-    const env = await this.resolve(ctx.project);
-    const refs = await this.pushAll(env, ctx, task, {});
+    const refs = await this.providerFor(ctx).create(ctx, task);
     entries.push({ ...task, refs });
     cache.save(entries);
     return task;
@@ -67,9 +65,7 @@ export class CachedTaskService implements TaskService {
     const entry = entries.find((e) => e.id === id);
     if (!entry) throw new Error(`no task ${id}`);
     const merged: CacheEntry = { ...entry, ...patch, id };
-    const env = await this.resolve(ctx.project);
-    merged.refs = await this.pushAll(
-      env,
+    merged.refs = await this.providerFor(ctx).update(
       ctx,
       stripRefs(merged),
       entry.refs ?? {},
@@ -87,65 +83,38 @@ export class CachedTaskService implements TaskService {
     const cache = Cache.forProject(ctx.project);
     const entries = cache.load();
     const byId = new Map(entries.map((e) => [e.id, e]));
-    const env = await this.resolve(ctx.project);
-    let pulled = 0;
+    const provider = this.providerFor(ctx);
 
-    // Pull the fields each target owns (issue open/closed) back into the cache, and adopt any task that
-    // was created directly in a target (e.g. someone opened an outputty issue in the GitHub UI).
-    for (const target of this.targets) {
-      if (!target.enabled(env)) continue;
-      const changes = await target.pull(env, ctx);
-      for (const [id, patch] of changes) {
-        const entry = byId.get(id);
-        if (entry) {
-          Object.assign(entry, patch);
-        } else {
-          const created: CacheEntry = withDefaults({ id, ...patch });
-          byId.set(id, created);
-          entries.push(created);
-        }
-        pulled++;
+    // Pull the fields the provider owns (title, status) back into the cache, learning each task's ref.
+    const remote = await provider.pull(ctx);
+    let pulled = 0;
+    for (const [id, state] of remote) {
+      const entry = byId.get(id);
+      if (entry) {
+        Object.assign(entry, state.patch, {
+          refs: { ...entry.refs, ...state.refs },
+        });
+      } else {
+        const created: CacheEntry = {
+          ...withDefaults({ id, ...state.patch }),
+          refs: state.refs,
+        };
+        byId.set(id, created);
+        entries.push(created);
       }
+      pulled++;
     }
 
-    // Push every cache task out, so missing issues/board items get created. Idempotent.
+    // Push cache tasks the provider has never seen (created offline), so the mirror catches up.
     let pushed = 0;
     for (const entry of entries) {
-      entry.refs = await this.pushAll(
-        env,
-        ctx,
-        stripRefs(entry),
-        entry.refs ?? {},
-      );
+      if (remote.has(entry.id)) continue;
+      entry.refs = await provider.create(ctx, stripRefs(entry));
       pushed++;
     }
 
     cache.save(entries);
     return { pulled, pushed, conflicts: 0 };
-  }
-
-  // Push a task to every enabled target, merging the refs each returns. The primary target's failure is
-  // fatal; a secondary target's is a warning, because the task already exists as an issue.
-  private async pushAll(
-    env: Env,
-    ctx: ProjectContext,
-    task: Task,
-    refs: Refs,
-  ): Promise<Refs> {
-    let merged = { ...refs };
-    for (let i = 0; i < this.targets.length; i++) {
-      const target = this.targets[i];
-      if (!target.enabled(env)) continue;
-      try {
-        merged = { ...merged, ...(await target.push(env, ctx, task, merged)) };
-      } catch (err) {
-        if (i === 0) throw err;
-        console.error(
-          `tasks-mcp: ${target.name} sync skipped for ${task.id}: ${(err as Error).message}`,
-        );
-      }
-    }
-    return merged;
   }
 }
 
@@ -154,11 +123,7 @@ const stripRefs = (entry: CacheEntry): Task => {
   return task;
 };
 
-/** The production service: committed cache, GitHub Issues (primary), GitHub Projects (best-effort). */
+/** The production service: committed cache plus the project's configured provider (GitHub by default). */
 export function makeService(): TaskService {
-  const issues = new GitHubIssuesTarget();
-  const projects = new GitHubProjectsTarget((env, id) =>
-    issues.issueNodeId(env, id),
-  );
-  return new CachedTaskService(resolveEnv, [issues, projects]);
+  return new CachedTaskService();
 }

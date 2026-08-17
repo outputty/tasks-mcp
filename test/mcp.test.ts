@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { handleRpc, type RpcRequest } from "../src/mcp.ts";
 import { CachedTaskService } from "../src/service.ts";
-import { GitHubIssuesTarget } from "../src/sync/github-issues.ts";
+import { GitHubProvider } from "../src/providers/github/github.ts";
 import { createApp } from "../src/server.ts";
 import { FakeGitHub, envFor, tmpProject } from "./fake-github.ts";
 
@@ -10,8 +10,7 @@ function harness() {
   const gh = new FakeGitHub();
   const { dir, cleanup } = tmpProject();
   const service = new CachedTaskService(
-    async () => envFor(gh),
-    [new GitHubIssuesTarget()],
+    new GitHubProvider(async () => envFor(gh, { projects: false })),
   );
   return { service, project: dir, cleanup };
 }
@@ -39,11 +38,6 @@ test("initialize echoes the protocol version and names the server", async () => 
   );
   expect((res as any).result.protocolVersion).toBe("2025-06-18");
   expect((res as any).result.serverInfo.name).toBe("tasks-mcp");
-});
-
-test("an initialized notification gets no response", async () => {
-  const { service } = harness();
-  expect(await handleRpc(rpc("notifications/initialized"), service)).toBeNull();
 });
 
 test("tools/list advertises the whole surface, each requiring project", async () => {

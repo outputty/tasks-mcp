@@ -50,22 +50,22 @@ export interface RepoRef {
   repo: string;
 }
 
-/** Where a task already lives in each sync target, so the service never re-looks-it-up. */
+/** Where a task already lives in its provider, so the service never re-looks-it-up. */
 export interface Refs {
-  /** The GitHub issue number backing this task. */
-  issue?: number;
-  /** The issue's GraphQL node id, which Projects needs to add it to a board. */
-  issueNodeId?: string;
+  /** The backing issue's GraphQL node id (the provider's stable handle for the task). */
+  issueId?: string;
   /** The Projects v2 item node id, when the task is on a board. */
   projectItem?: string;
 }
 
-/** A task as it sits in the committed cache: the full task plus its per-target refs. */
+/** A task as it sits in the committed cache: the full task plus its provider refs. */
 export type CacheEntry = Task & { refs?: Refs };
 
 /** Per-project settings, read from `.claude/tasks-mcp.config.*` (all optional). */
 export interface ProjectConfig {
-  /** Turn the Projects v2 board sync on or off. Default on. */
+  /** Which provider backs this project. Default "github". A future value is "linear". */
+  provider?: string;
+  /** Turn the Projects v2 board sync on or off (GitHub only). Default on. */
   projects?: boolean;
   /** Target an existing Projects v2 board by number. Absent means find/create one named `board`. */
   projectNumber?: number;
