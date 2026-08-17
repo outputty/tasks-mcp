@@ -4,7 +4,7 @@
 import { test, expect, beforeEach, afterAll } from "vitest";
 import fs from "node:fs";
 import nock from "nock";
-import { CachedTaskService } from "../src/core/service.ts";
+import { CachedTaskService, DuplicateTaskError } from "../src/core/service.ts";
 import { ready } from "../src/core/graph.ts";
 import { task, tmp, tmpRepo } from "./helpers.ts";
 import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
@@ -68,7 +68,7 @@ test("a duplicate id is refused", async () => {
   const { svc, project, cleanup } = harness();
   await svc.create({ project }, task({ id: "dup" }));
   await expect(svc.create({ project }, task({ id: "dup" }))).rejects.toThrow(
-    /already exists/,
+    DuplicateTaskError,
   );
   cleanup();
 });

@@ -4,6 +4,7 @@
 export {
   makeService,
   CachedTaskService,
+  DuplicateTaskError,
   type TaskService,
   type SyncResult,
 } from "./service.ts";

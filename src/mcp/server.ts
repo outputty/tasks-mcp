@@ -50,6 +50,23 @@ const asArray = (value: unknown): string[] =>
           .filter(Boolean)
       : [];
 
+// The optional task fields add_task passes through verbatim when present.
+const OPTIONAL_FIELDS = [
+  "brief",
+  "contract",
+  "tier",
+  "qa",
+  "spec",
+  "stage",
+  "discovered_from",
+] as const;
+function optionalFields(args: Record<string, unknown>): Partial<Task> {
+  const out: Record<string, unknown> = {};
+  for (const key of OPTIONAL_FIELDS)
+    if (args[key] !== undefined) out[key] = args[key];
+  return out as Partial<Task>;
+}
+
 // A compact index row, the same shape the tracker's derived index has always emitted.
 const ROW = {
   id: z.string(),
@@ -78,6 +95,10 @@ const result = <T extends Record<string, unknown>>(structured: T) => ({
 });
 
 /** The MCP server over one task service. A transport (stdio or HTTP) connects to it. */
+// Deviation from the 24-line cap, justified: this is a declarative tool table — eight registerTool
+// calls that are schema data plus one-expression handlers. Splitting it into arbitrary function
+// groups would hide the surface, and every handler body is under the cap on its own.
+// oxlint-disable-next-line max-lines-per-function
 export function createMcpServer(service: TaskService): McpServer {
   const server = new McpServer(SERVER_INFO);
 
@@ -210,15 +231,7 @@ export function createMcpServer(service: TaskService): McpServer {
         status: "open",
         deps: asArray(args.deps),
         scope: asArray(args.scope),
-        ...(args.brief !== undefined ? { brief: args.brief } : {}),
-        ...(args.contract !== undefined ? { contract: args.contract } : {}),
-        ...(args.tier !== undefined ? { tier: args.tier } : {}),
-        ...(args.qa !== undefined ? { qa: args.qa } : {}),
-        ...(args.spec !== undefined ? { spec: args.spec } : {}),
-        ...(args.stage !== undefined ? { stage: args.stage } : {}),
-        ...(args.discovered_from !== undefined
-          ? { discovered_from: args.discovered_from }
-          : {}),
+        ...optionalFields(args),
       };
       tierOf(task); // validate before the write
       qaOf(task);

@@ -1,0 +1,21 @@
+{
+  // Lint = the build-enforced working-set caps (complexity ≤ 7, a method fits one screen, shallow
+  // nesting) on top of oxlint's correctness defaults. A deviation is a targeted disable comment WITH a
+  // written why — never a loosened threshold here.
+  "rules": {
+    "complexity": ["error", 7],
+    "max-lines-per-function": [
+      "error",
+      { "max": 24, "skipBlankLines": true, "skipComments": true }
+    ],
+    "max-depth": ["error", 3],
+    "no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "ignoreRestSiblings": true
+      }
+    ]
+  }
+}

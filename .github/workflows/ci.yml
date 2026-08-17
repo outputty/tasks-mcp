@@ -18,6 +18,5 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm run format:check
-      - run: npm test
-      - run: npm run build
+      # The one build command — identical to what runs locally, so CI can never drift from `npm run check`.
+      - run: npm run check

@@ -24,109 +24,142 @@ export class NockGitHub {
   private issueSeq = 1;
   private itemSeq = 1;
 
-  /** Answer one GraphQL request. Matches on format-stable identifiers (GraphQL ignores spacing). */
+  // Query → handler, matched on format-stable identifiers (GraphQL ignores spacing). ORDERED: first
+  // match wins, and some needles ("on Issue", "repository(") are substrings of other queries' text.
+  private readonly routes: Array<
+    [string, (vars: Record<string, any>) => unknown]
+  > = [
+    ["createIssue", (v) => this.createIssue(v)],
+    ["updateIssue", (v) => this.updateIssue(v)],
+    ["closeIssue", (v) => this.setIssueState(v, "CLOSED", "closeIssue")],
+    ["reopenIssue", (v) => this.setIssueState(v, "OPEN", "reopenIssue")],
+    ["addProjectV2ItemById", (v) => this.addItem(v)],
+    ["updateProjectV2ItemFieldValue", (v) => this.setItemStatus(v)],
+    ["createProjectV2", (v) => this.createBoard(v)],
+    [
+      "linkProjectV2ToRepository",
+      () => ({ linkProjectV2ToRepository: { repository: { id: "REPO" } } }),
+    ],
+    ["ProjectV2SingleSelectField", () => this.statusField()],
+    ["ProjectV2ItemFieldSingleSelectValue", () => this.boardItems()],
+    ["projectsV2(", () => this.repoBoards()],
+    ["issues(first", () => this.repoIssues()],
+    ["on Issue", (v) => this.issueBody(v)],
+    ["repository(", () => ({ repository: { id: "REPO" } })],
+  ];
+
+  /** Answer one GraphQL request. */
   reply(q: string, vars: Record<string, any>): unknown {
-    if (q.includes("createIssue")) {
-      const n = this.issueSeq++;
-      this.issues.push({
-        id: `I_${n}`,
-        number: n,
-        title: String(vars.t),
-        body: String(vars.b),
-        state: "OPEN",
-      });
-      return { createIssue: { issue: { id: `I_${n}` } } };
+    const route = this.routes.find(([needle]) => q.includes(needle));
+    if (!route)
+      throw new Error(
+        `unexpected graphql: ${q.replace(/\s+/g, " ").slice(0, 90)}`,
+      );
+    return route[1](vars);
+  }
+
+  private createIssue(vars: Record<string, any>): unknown {
+    const n = this.issueSeq++;
+    this.issues.push({
+      id: `I_${n}`,
+      number: n,
+      title: String(vars.t),
+      body: String(vars.b),
+      state: "OPEN",
+    });
+    return { createIssue: { issue: { id: `I_${n}` } } };
+  }
+
+  private updateIssue(vars: Record<string, any>): unknown {
+    const i = this.issues.find((x) => x.id === vars.id);
+    if (i) {
+      i.title = String(vars.t);
+      i.body = String(vars.b);
     }
-    if (q.includes("updateIssue")) {
-      const i = this.issues.find((x) => x.id === vars.id);
-      if (i) {
-        i.title = String(vars.t);
-        i.body = String(vars.b);
-      }
-      return { updateIssue: { issue: { id: vars.id } } };
-    }
-    if (q.includes("closeIssue")) {
-      const i = this.issues.find((x) => x.id === vars.id);
-      if (i) i.state = "CLOSED";
-      return { closeIssue: { issue: { id: vars.id } } };
-    }
-    if (q.includes("reopenIssue")) {
-      const i = this.issues.find((x) => x.id === vars.id);
-      if (i) i.state = "OPEN";
-      return { reopenIssue: { issue: { id: vars.id } } };
-    }
-    if (q.includes("addProjectV2ItemById")) {
-      const id = `ITEM${this.itemSeq++}`;
-      this.items.set(id, { contentId: String(vars.c), status: null });
-      return { addProjectV2ItemById: { item: { id } } };
-    }
-    if (q.includes("updateProjectV2ItemFieldValue")) {
-      const it = this.items.get(String(vars.i));
-      if (it) it.status = String(vars.o);
-      return {
-        updateProjectV2ItemFieldValue: { projectV2Item: { id: vars.i } },
-      };
-    }
-    if (q.includes("createProjectV2")) {
-      const created = { id: "PROJ", number: 7, title: String(vars.title) };
-      this.boards.push(created);
-      return { createProjectV2: { projectV2: created } };
-    }
-    if (q.includes("linkProjectV2ToRepository"))
-      return { linkProjectV2ToRepository: { repository: { id: "REPO" } } };
-    if (q.includes("ProjectV2SingleSelectField")) {
-      return {
-        node: {
-          field: {
-            id: "FIELD",
-            options: [
-              { id: "OPT_TODO", name: "Todo" },
-              { id: "OPT_DONE", name: "Done" },
-            ],
-          },
+    return { updateIssue: { issue: { id: vars.id } } };
+  }
+
+  private setIssueState(
+    vars: Record<string, any>,
+    state: FakeIssue["state"],
+    mutation: string,
+  ): unknown {
+    const i = this.issues.find((x) => x.id === vars.id);
+    if (i) i.state = state;
+    return { [mutation]: { issue: { id: vars.id } } };
+  }
+
+  private addItem(vars: Record<string, any>): unknown {
+    const id = `ITEM${this.itemSeq++}`;
+    this.items.set(id, { contentId: String(vars.c), status: null });
+    return { addProjectV2ItemById: { item: { id } } };
+  }
+
+  private setItemStatus(vars: Record<string, any>): unknown {
+    const it = this.items.get(String(vars.i));
+    if (it) it.status = String(vars.o);
+    return { updateProjectV2ItemFieldValue: { projectV2Item: { id: vars.i } } };
+  }
+
+  private createBoard(vars: Record<string, any>): unknown {
+    const created = { id: "PROJ", number: 7, title: String(vars.title) };
+    this.boards.push(created);
+    return { createProjectV2: { projectV2: created } };
+  }
+
+  private statusField(): unknown {
+    return {
+      node: {
+        field: {
+          id: "FIELD",
+          options: [
+            { id: "OPT_TODO", name: "Todo" },
+            { id: "OPT_DONE", name: "Done" },
+          ],
         },
-      };
-    }
-    if (q.includes("ProjectV2ItemFieldSingleSelectValue")) {
-      const nodes = [...this.items.entries()].map(([id, it]) => ({
-        id,
-        content: { id: it.contentId },
-        fieldValueByName: it.status
-          ? { name: it.status === "OPT_DONE" ? "Done" : "Todo" }
-          : null,
-      }));
-      return {
-        node: {
-          items: { pageInfo: { hasNextPage: false, endCursor: null }, nodes },
+      },
+    };
+  }
+
+  private boardItems(): unknown {
+    const nodes = [...this.items.entries()].map(([id, it]) => ({
+      id,
+      content: { id: it.contentId },
+      fieldValueByName: it.status
+        ? { name: it.status === "OPT_DONE" ? "Done" : "Todo" }
+        : null,
+    }));
+    return {
+      node: {
+        items: { pageInfo: { hasNextPage: false, endCursor: null }, nodes },
+      },
+    };
+  }
+
+  private repoBoards(): unknown {
+    return {
+      repository: {
+        id: "REPO",
+        owner: { id: "OWNER" },
+        projectsV2: { nodes: this.boards },
+      },
+    };
+  }
+
+  private repoIssues(): unknown {
+    return {
+      repository: {
+        issues: {
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: this.issues,
         },
-      };
-    }
-    if (q.includes("projectsV2("))
-      return {
-        repository: {
-          id: "REPO",
-          owner: { id: "OWNER" },
-          projectsV2: { nodes: this.boards },
-        },
-      };
-    if (q.includes("issues(first")) {
-      return {
-        repository: {
-          issues: {
-            pageInfo: { hasNextPage: false, endCursor: null },
-            nodes: this.issues,
-          },
-        },
-      };
-    }
-    if (q.includes("on Issue")) {
-      const i = this.issues.find((x) => x.id === vars.id);
-      return { node: i ? { body: i.body } : null };
-    }
-    if (q.includes("repository(")) return { repository: { id: "REPO" } };
-    throw new Error(
-      `unexpected graphql: ${q.replace(/\s+/g, " ").slice(0, 90)}`,
-    );
+      },
+    };
+  }
+
+  private issueBody(vars: Record<string, any>): unknown {
+    const i = this.issues.find((x) => x.id === vars.id);
+    return { node: i ? { body: i.body } : null };
   }
 }
 

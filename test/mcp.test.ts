@@ -22,6 +22,23 @@ afterAll(() => {
   nock.enableNetConnect();
 });
 
+/** The real HTTP server on an ephemeral port, plus an SDK client connected to it. */
+async function startHttp(service: CachedTaskService) {
+  const server = createHttpServer(service);
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const addr = server.address();
+  const base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
+  const client = new Client({ name: "test-client", version: "0.0.0" });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`${base}/mcp`)),
+  );
+  const close = async () => {
+    await client.close();
+    await new Promise<void>((r) => server.close(() => r()));
+  };
+  return { base, client, close };
+}
+
 // The whole stack on an ephemeral port: nock GitHub, real provider + service, real HTTP transport.
 async function harness() {
   installNock(new NockGitHub());
@@ -31,23 +48,13 @@ async function harness() {
     { cacheDir: cache.dir },
     nockProvider({ projects: false }),
   );
-  const server = createHttpServer(service);
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const addr = server.address();
-  const base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
-
-  const client = new Client({ name: "test-client", version: "0.0.0" });
-  await client.connect(
-    new StreamableHTTPClientTransport(new URL(`${base}/mcp`)),
-  );
-
+  const { base, client, close } = await startHttp(service);
   return {
     client,
     base,
     project: project.dir,
     cleanup: async () => {
-      await client.close();
-      await new Promise<void>((r) => server.close(() => r()));
+      await close();
       project.cleanup();
       cache.cleanup();
     },

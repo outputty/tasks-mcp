@@ -206,8 +206,9 @@ overrides the flags for one repo. Credentials come from `GITHUB_TOKEN` / `GH_TOK
 
 ```bash
 npm install
-npm test             # vitest: graph engine · GitHub provider (nock) · cache service · MCP server
-npm run build        # tsup -> dist/ (cli, index, mcp)
+npm run check        # THE build, exactly what CI runs: format check -> oxlint -> typecheck -> tests -> tsup
+npm test             # vitest alone: graph engine · GitHub provider (nock) · cache service · MCP server
+npm run build        # tsup alone -> dist/ (cli, index, mcp)
 ```
 
 The GitHub provider is tested with **nock** — the tests drive the real Octokit client, and nock

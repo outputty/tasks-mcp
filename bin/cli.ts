@@ -41,51 +41,38 @@ const positional = argv.filter((a) => !a.startsWith("--"));
 const command = positional[0] ?? "mcp";
 const out = (v: unknown) => console.log(JSON.stringify(v, null, 2));
 
+/** The task the `add` flags describe. */
+const taskFromFlags = (id: string) => ({
+  id,
+  title: val("title") ?? "",
+  status: "open" as const,
+  deps: list("deps"),
+  scope: list("scope"),
+  ...(val("tier") ? { tier: Number(val("tier")) } : {}),
+});
+
+// The direct-CLI surface: each subcommand returns the value to print.
+type Ctx = { project: string };
+const COMMANDS: Record<string, (ctx: Ctx, id: string) => Promise<unknown>> = {
+  list: (ctx) => service.list(ctx),
+  ready: async (ctx) => ready(await service.list(ctx)).map((t) => t.id),
+  planning: async (ctx) => planning(await service.list(ctx)).map((t) => t.id),
+  schedule: async (ctx) =>
+    schedule(await service.list(ctx)).map((layer) => layer.map((t) => t.id)),
+  get: (ctx, id) => service.get(ctx, id),
+  add: (ctx, id) => service.create(ctx, taskFromFlags(id)),
+  close: async (ctx, id) => {
+    await service.close(ctx, id);
+    return { closed: id };
+  },
+  sync: (ctx) => service.sync(ctx),
+};
+
 async function runBusiness(): Promise<boolean> {
-  const ctx = { project: val("project") || process.cwd() };
-  const id = positional[1];
-  switch (command) {
-    case "list":
-      out(await service.list(ctx));
-      return true;
-    case "ready":
-      out(ready(await service.list(ctx)).map((t) => t.id));
-      return true;
-    case "planning":
-      out(planning(await service.list(ctx)).map((t) => t.id));
-      return true;
-    case "schedule":
-      out(
-        schedule(await service.list(ctx)).map((layer) =>
-          layer.map((t) => t.id),
-        ),
-      );
-      return true;
-    case "get":
-      out(await service.get(ctx, id));
-      return true;
-    case "add":
-      out(
-        await service.create(ctx, {
-          id,
-          title: val("title") ?? "",
-          status: "open",
-          deps: list("deps"),
-          scope: list("scope"),
-          ...(val("tier") ? { tier: Number(val("tier")) } : {}),
-        }),
-      );
-      return true;
-    case "close":
-      await service.close(ctx, id);
-      out({ closed: id });
-      return true;
-    case "sync":
-      out(await service.sync(ctx));
-      return true;
-    default:
-      return false;
-  }
+  const run = COMMANDS[command];
+  if (!run) return false;
+  out(await run({ project: val("project") || process.cwd() }, positional[1]));
+  return true;
 }
 
 if (await runBusiness()) {

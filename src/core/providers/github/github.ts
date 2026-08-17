@@ -101,20 +101,23 @@ const META_KEYS = [
   "discovered_from",
 ] as const;
 
+/** A meta value stays out of the block when absent, or an empty list where emptiness means nothing. */
+function skipMeta(key: string, value: unknown): boolean {
+  if (value === undefined) return true;
+  return (
+    Array.isArray(value) &&
+    value.length === 0 &&
+    key !== "deps" &&
+    key !== "scope"
+  );
+}
+
 /** Serialise a task into an issue body: the hidden block (id first), then any human prose kept below. */
 function renderBody(task: Task, human = ""): string {
   const meta: Record<string, unknown> = { id: task.id };
   for (const key of META_KEYS) {
     const value = (task as unknown as Record<string, unknown>)[key];
-    if (value === undefined) continue;
-    if (
-      Array.isArray(value) &&
-      value.length === 0 &&
-      key !== "deps" &&
-      key !== "scope"
-    )
-      continue;
-    meta[key] = value;
+    if (!skipMeta(key, value)) meta[key] = value;
   }
   const yaml = stringify(meta).trim();
   const block = `${META_OPEN}\n${yaml}\n${META_CLOSE}`;
@@ -167,6 +170,91 @@ interface BoardMeta {
   options: Map<string, string>; // lower-cased option name -> option id
 }
 
+/** One board card: its item node id, and whether its Status column reads as a Done column. */
+interface BoardCard {
+  itemId: string;
+  done: boolean;
+}
+
+/** What init's one repository query returns: the ids it needs plus the repo's linked boards. */
+interface RepoSnapshot {
+  id: string;
+  owner: { id: string };
+  projectsV2: { nodes: Array<{ id: string; number: number; title: string }> };
+}
+
+/** One page of a GraphQL connection. */
+interface Page<T> {
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+  nodes: T[];
+}
+
+/** One raw item from the board's items connection. */
+interface BoardItem {
+  id: string;
+  content: { id?: string } | null;
+  fieldValueByName: { name?: string } | null;
+}
+
+/** Record one board item as a card — skipping draft cards and non-issue content. */
+function collectCard(out: Map<string, BoardCard>, item: BoardItem): void {
+  const issueId = item.content?.id;
+  if (!issueId) return;
+  const name = (item.fieldValueByName?.name ?? "").toLowerCase();
+  out.set(issueId, {
+    itemId: item.id,
+    done: name === "done" || name === "closed",
+  });
+}
+
+/** One issue as pull sees it: the full task it encodes, its ref, whether it carries our block. */
+interface ListedIssue {
+  task: Task;
+  issueId: string;
+  managed: boolean;
+}
+
+function listedIssue(issue: GhIssue): ListedIssue {
+  const mid = managedId(issue);
+  const task = mid
+    ? issueToTask(issue)
+    : withDefaults({
+        id: `gh-${issue.number}`,
+        title: issue.title || "",
+        status: issue.state === "CLOSED" ? "done" : "open",
+      });
+  return { task, issueId: issue.id, managed: mid !== null };
+}
+
+/** Push back when the sides disagree, the card is missing, or the issue needs adopting — the push
+ *  makes the issue, the body block, and the board card all consistent. */
+function needsReconcile(
+  listed: ListedIssue,
+  card: BoardCard | undefined,
+  done: boolean,
+  boardOn: boolean,
+): boolean {
+  if (!listed.managed) return true;
+  if ((listed.task.status === "done") !== done) return true;
+  return boardOn && (!card || card.done !== done);
+}
+
+/** Reconcile one issue with its board card into the state pull reports to the service. */
+function remoteState(
+  listed: ListedIssue,
+  card: BoardCard | undefined,
+  boardOn: boolean,
+): RemoteState {
+  // Done if the issue is closed OR the card sits in a Done column.
+  const done = listed.task.status === "done" || card?.done === true;
+  // The patch is the whole task rebuilt from the body (deps included), with status reconciled.
+  return {
+    patch: { ...listed.task, status: done ? "done" : "open" },
+    refs: { issueId: listed.issueId, projectItem: card?.itemId },
+    reconcile: needsReconcile(listed, card, done, boardOn),
+  };
+}
+
 /** Everything init resolves for one project; every later call runs against this. */
 interface ProjectState {
   repo: RepoRef;
@@ -213,32 +301,23 @@ export class GitHubProvider implements Provider {
 
   async pull(ctx: ProjectContext): Promise<Map<string, RemoteState>> {
     const state = await this.state(ctx.project);
-    // Read the board too (best-effort), so a card moved to Done flows back into the cache.
-    const board = state.board
-      ? await this.readBoard(state.board).catch(
-          () => new Map<string, { itemId: string; done: boolean }>(),
-        )
-      : new Map<string, { itemId: string; done: boolean }>();
-
+    const cards = await this.boardCards(state);
     const out = new Map<string, RemoteState>();
-    for (const { task, issueId, managed } of await this.listIssues(state)) {
-      const card = board.get(issueId);
-      const issueDone = task.status === "done";
-      const done = issueDone || card?.done === true; // done if the issue is closed OR the card is in Done
-      // Reconcile (push back) when the sides disagree, the card is missing, or an issue needs adopting —
-      // the push makes the issue, the body block, and the board card all consistent.
-      const reconcile =
-        !managed ||
-        issueDone !== done ||
-        (state.board !== null && (!card || card.done !== done));
-      // The patch is the whole task rebuilt from the body (deps included), with status reconciled.
-      out.set(task.id, {
-        patch: { ...task, status: done ? "done" : "open" },
-        refs: { issueId, projectItem: card?.itemId },
-        reconcile,
-      });
+    for (const listed of await this.listIssues(state)) {
+      out.set(
+        listed.task.id,
+        remoteState(listed, cards.get(listed.issueId), state.board !== null),
+      );
     }
     return out;
+  }
+
+  /** The board's cards (best-effort — a read failure means no cards), so Done cards flow back in. */
+  private async boardCards(
+    state: ProjectState,
+  ): Promise<Map<string, BoardCard>> {
+    if (!state.board) return new Map();
+    return this.readBoard(state.board).catch(() => new Map());
   }
 
   // -------------------------------------------------------------------------------------------------
@@ -259,70 +338,87 @@ export class GitHubProvider implements Provider {
   private async buildState(project: string): Promise<ProjectState> {
     const repo = resolveRepo(project);
     const config = loadConfig(project, this.options);
-    // One query for the ids init needs: the repository node (createIssue mutates against it), its
-    // owner (createProjectV2 needs it), and the boards already linked to the repo.
-    const found = await this.octokit.graphql<{
-      repository: {
-        id: string;
-        owner: { id: string };
-        projectsV2: {
-          nodes: Array<{ id: string; number: number; title: string }>;
-        };
-      };
-    }>(
+    const snapshot = await this.repoSnapshot(repo);
+    return {
+      repo,
+      config,
+      repoId: snapshot.id,
+      board: await this.boardFor(snapshot, config, repo),
+    };
+  }
+
+  /** One query for the ids init needs: the repository node (createIssue mutates against it), its
+   *  owner (createProjectV2 needs it), and the boards already linked to the repo. */
+  private async repoSnapshot(repo: RepoRef): Promise<RepoSnapshot> {
+    const res = await this.octokit.graphql<{ repository: RepoSnapshot }>(
       `query($o:String!,$n:String!){ repository(owner:$o,name:$n){ id owner{ id } projectsV2(first:50){ nodes{ id number title } } } }`,
       { o: repo.owner, n: repo.repo },
     );
+    return res.repository;
+  }
 
-    // The board is a mirror: init failing to produce one must not take the provider down with it.
-    let board: BoardMeta | null = null;
-    if (config.projects !== false) {
-      try {
-        board = await this.resolveBoard(found.repository, config);
-      } catch (err) {
-        console.error(
-          `tasks-mcp: github-projects board unavailable for ${repo.owner}/${repo.repo}, syncing issues only: ${(err as Error).message}`,
-        );
-      }
+  /** The board to mirror onto, or null: turned off, or unavailable — a mirror failing to init must
+   *  not take the provider down with it, so that error is logged and swallowed here. */
+  private async boardFor(
+    snapshot: RepoSnapshot,
+    config: ProjectConfig,
+    repo: RepoRef,
+  ): Promise<BoardMeta | null> {
+    if (config.projects === false) return null;
+    try {
+      return await this.resolveBoard(snapshot, config);
+    } catch (err) {
+      console.error(
+        `tasks-mcp: github-projects board unavailable for ${repo.owner}/${repo.repo}, syncing issues only: ${(err as Error).message}`,
+      );
+      return null;
     }
-    return { repo, config, repoId: found.repository.id, board };
   }
 
   /** Find the board by number (config.projectNumber) or title (config.board, default "Tasks") among
    *  the repo's linked boards — or create it and link it to the repo — then read its Status field. */
   private async resolveBoard(
-    repository: {
-      id: string;
-      owner: { id: string };
-      projectsV2: {
-        nodes: Array<{ id: string; number: number; title: string }>;
-      };
-    },
+    repository: RepoSnapshot,
     config: ProjectConfig,
   ): Promise<BoardMeta> {
+    const found = await this.findOrCreateBoard(repository, config);
+    return this.statusField(found.id);
+  }
+
+  private async findOrCreateBoard(
+    repository: RepoSnapshot,
+    config: ProjectConfig,
+  ): Promise<{ id: string }> {
     const number = config.projectNumber;
     const title = config.board ?? "Tasks";
-    let project = number
+    const project = number
       ? repository.projectsV2.nodes.find((p) => p.number === number)
       : repository.projectsV2.nodes.find((p) => p.title === title);
+    if (project) return project;
+    if (number) throw new Error(`Projects v2 board #${number} not found`);
+    return this.createBoard(repository, title);
+  }
 
-    if (!project) {
-      if (number) throw new Error(`Projects v2 board #${number} not found`);
-      const created = await this.octokit.graphql<{
-        createProjectV2: {
-          projectV2: { id: string; number: number; title: string };
-        };
-      }>(
-        `mutation($owner:ID!,$title:String!){ createProjectV2(input:{ownerId:$owner,title:$title}){ projectV2{ id number title } } }`,
-        { owner: repository.owner.id, title },
-      );
-      project = created.createProjectV2.projectV2;
-      await this.octokit.graphql(
-        `mutation($p:ID!,$r:ID!){ linkProjectV2ToRepository(input:{projectId:$p,repositoryId:$r}){ repository{ id } } }`,
-        { p: project.id, r: repository.id },
-      );
-    }
+  private async createBoard(
+    repository: RepoSnapshot,
+    title: string,
+  ): Promise<{ id: string }> {
+    const created = await this.octokit.graphql<{
+      createProjectV2: { projectV2: { id: string } };
+    }>(
+      `mutation($owner:ID!,$title:String!){ createProjectV2(input:{ownerId:$owner,title:$title}){ projectV2{ id number title } } }`,
+      { owner: repository.owner.id, title },
+    );
+    const project = created.createProjectV2.projectV2;
+    await this.octokit.graphql(
+      `mutation($p:ID!,$r:ID!){ linkProjectV2ToRepository(input:{projectId:$p,repositoryId:$r}){ repository{ id } } }`,
+      { p: project.id, r: repository.id },
+    );
+    return project;
+  }
 
+  /** The board's Status single-select field and its options — how open/done map onto columns. */
+  private async statusField(projectId: string): Promise<BoardMeta> {
     const fields = await this.octokit.graphql<{
       node: {
         field: {
@@ -332,14 +428,13 @@ export class GitHubProvider implements Provider {
       };
     }>(
       `query($id:ID!){ node(id:$id){ ... on ProjectV2 { field(name:"Status"){ ... on ProjectV2SingleSelectField { id options{ id name } } } } } }`,
-      { id: project.id },
+      { id: projectId },
     );
-
     const options = new Map<string, string>();
     const status = fields.node.field;
     for (const opt of status?.options ?? [])
       options.set(opt.name.toLowerCase(), opt.id);
-    return { projectId: project.id, statusFieldId: status?.id, options };
+    return { projectId, statusFieldId: status?.id, options };
   }
 
   // -------------------------------------------------------------------------------------------------
@@ -387,38 +482,28 @@ export class GitHubProvider implements Provider {
    * task from its body block. A managed issue keeps its block id; a hand-opened one is given
    * `gh-<number>` so `sync` can adopt it. This is what lets a deleted cache be rebuilt from GitHub.
    */
-  private async listIssues(
-    state: ProjectState,
-  ): Promise<Array<{ task: Task; issueId: string; managed: boolean }>> {
-    const out: Array<{ task: Task; issueId: string; managed: boolean }> = [];
+  private async listIssues(state: ProjectState): Promise<ListedIssue[]> {
+    const out: ListedIssue[] = [];
     let after: string | null = null;
     for (;;) {
-      const res: {
-        repository: {
-          issues: {
-            pageInfo: { hasNextPage: boolean; endCursor: string | null };
-            nodes: GhIssue[];
-          };
-        };
-      } = await this.octokit.graphql(
-        `query($o:String!,$n:String!,$c:String){ repository(owner:$o,name:$n){ issues(first:100,after:$c,states:[OPEN,CLOSED],orderBy:{field:CREATED_AT,direction:ASC}){ pageInfo{ hasNextPage endCursor } nodes{ id number title body state } } } }`,
-        { o: state.repo.owner, n: state.repo.repo, c: after },
-      );
-      for (const issue of res.repository.issues.nodes) {
-        const mid = managedId(issue);
-        const task = mid
-          ? issueToTask(issue)
-          : withDefaults({
-              id: `gh-${issue.number}`,
-              title: issue.title || "",
-              status: issue.state === "CLOSED" ? "done" : "open",
-            });
-        out.push({ task, issueId: issue.id, managed: mid !== null });
-      }
-      if (!res.repository.issues.pageInfo.hasNextPage) break;
-      after = res.repository.issues.pageInfo.endCursor;
+      const page = await this.issuePage(state.repo, after);
+      out.push(...page.nodes.map(listedIssue));
+      if (!page.pageInfo.hasNextPage) break;
+      after = page.pageInfo.endCursor;
     }
     return out;
+  }
+
+  private async issuePage(
+    repo: RepoRef,
+    after: string | null,
+  ): Promise<Page<GhIssue>> {
+    const res: { repository: { issues: Page<GhIssue> } } =
+      await this.octokit.graphql(
+        `query($o:String!,$n:String!,$c:String){ repository(owner:$o,name:$n){ issues(first:100,after:$c,states:[OPEN,CLOSED],orderBy:{field:CREATED_AT,direction:ASC}){ pageInfo{ hasNextPage endCursor } nodes{ id number title body state } } } }`,
+        { o: repo.owner, n: repo.repo, c: after },
+      );
+    return res.repository.issues;
   }
 
   // -------------------------------------------------------------------------------------------------
@@ -453,70 +538,60 @@ export class GitHubProvider implements Provider {
     existingItem: string | undefined,
     status: Task["status"],
   ): Promise<string> {
-    let itemId = existingItem;
-    if (!itemId) {
-      const added = await this.octokit.graphql<{
-        addProjectV2ItemById: { item: { id: string } };
-      }>(
-        `mutation($p:ID!,$c:ID!){ addProjectV2ItemById(input:{projectId:$p,contentId:$c}){ item{ id } } }`,
-        { p: board.projectId, c: issueId },
-      );
-      itemId = added.addProjectV2ItemById.item.id;
-    }
-
-    if (board.statusFieldId) {
-      const wanted =
-        status === "done" ? ["done", "closed"] : ["todo", "to do", "backlog"];
-      const optionId = wanted.map((w) => board.options.get(w)).find(Boolean);
-      if (optionId) {
-        await this.octokit.graphql(
-          `mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){ updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){ projectV2Item{ id } } }`,
-          {
-            p: board.projectId,
-            i: itemId,
-            f: board.statusFieldId,
-            o: optionId,
-          },
-        );
-      }
-    }
+    const itemId = existingItem ?? (await this.addCard(board, issueId));
+    await this.setCardStatus(board, itemId, status);
     return itemId;
   }
 
-  /** Read the board back: every card keyed by its content issue's node id. Powers board → cache sync. */
-  private async readBoard(
+  private async addCard(board: BoardMeta, issueId: string): Promise<string> {
+    const added = await this.octokit.graphql<{
+      addProjectV2ItemById: { item: { id: string } };
+    }>(
+      `mutation($p:ID!,$c:ID!){ addProjectV2ItemById(input:{projectId:$p,contentId:$c}){ item{ id } } }`,
+      { p: board.projectId, c: issueId },
+    );
+    return added.addProjectV2ItemById.item.id;
+  }
+
+  /** Move the card's Status to the first column that matches the task status, if one exists. */
+  private async setCardStatus(
     board: BoardMeta,
-  ): Promise<Map<string, { itemId: string; done: boolean }>> {
-    const out = new Map<string, { itemId: string; done: boolean }>();
+    itemId: string,
+    status: Task["status"],
+  ): Promise<void> {
+    if (!board.statusFieldId) return;
+    const wanted =
+      status === "done" ? ["done", "closed"] : ["todo", "to do", "backlog"];
+    const optionId = wanted.map((w) => board.options.get(w)).find(Boolean);
+    if (!optionId) return;
+    await this.octokit.graphql(
+      `mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){ updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){ projectV2Item{ id } } }`,
+      { p: board.projectId, i: itemId, f: board.statusFieldId, o: optionId },
+    );
+  }
+
+  /** Read the board back: every card keyed by its content issue's node id. Powers board → cache sync. */
+  private async readBoard(board: BoardMeta): Promise<Map<string, BoardCard>> {
+    const out = new Map<string, BoardCard>();
     let after: string | null = null;
     for (;;) {
-      const res: {
-        node: {
-          items: {
-            pageInfo: { hasNextPage: boolean; endCursor: string | null };
-            nodes: Array<{
-              id: string;
-              content: { id?: string } | null;
-              fieldValueByName: { name?: string } | null;
-            }>;
-          };
-        };
-      } = await this.octokit.graphql(
+      const page = await this.boardPage(board, after);
+      for (const item of page.nodes) collectCard(out, item);
+      if (!page.pageInfo.hasNextPage) break;
+      after = page.pageInfo.endCursor;
+    }
+    return out;
+  }
+
+  private async boardPage(
+    board: BoardMeta,
+    after: string | null,
+  ): Promise<Page<BoardItem>> {
+    const res: { node: { items: Page<BoardItem> } } =
+      await this.octokit.graphql(
         `query($p:ID!,$c:String){ node(id:$p){ ... on ProjectV2 { items(first:100,after:$c){ pageInfo{ hasNextPage endCursor } nodes{ id content{ ... on Issue { id } } fieldValueByName(name:"Status"){ ... on ProjectV2ItemFieldSingleSelectValue { name } } } } } } }`,
         { p: board.projectId, c: after },
       );
-      for (const item of res.node.items.nodes) {
-        const issueId = item.content?.id;
-        if (!issueId) continue; // draft cards or non-issue content
-        const name = (item.fieldValueByName?.name ?? "").toLowerCase();
-        out.set(issueId, {
-          itemId: item.id,
-          done: name === "done" || name === "closed",
-        });
-      }
-      if (!res.node.items.pageInfo.hasNextPage) break;
-      after = res.node.items.pageInfo.endCursor;
-    }
-    return out;
+    return res.node.items;
   }
 }

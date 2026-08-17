@@ -38,8 +38,13 @@ to npm. It is split so the MCP layer wraps the core, never the reverse:
 
 ## Commands
 
+- `npm run check` — THE build: format check → oxlint → typecheck → tests → tsup. This is the exact
+  command CI runs; run it before calling any change done.
 - `npm test` — vitest. **Not `bun test`:** the GitHub provider tests use **nock**, which needs Node's
   fetch; nock can't intercept Bun's.
+- `npm run lint` — oxlint, which enforces the working-set caps: complexity ≤ 7, ≤ 24 lines per
+  function, nesting ≤ 3 (see `.oxlintrc.json`). Fix by decomposing; a deviation is a targeted
+  disable comment with a written why, never a loosened threshold.
 - `npm run build` — tsup → `dist/` (cli, index, mcp).
 - `npm run format` — prettier.
 
