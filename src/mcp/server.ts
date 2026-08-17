@@ -9,7 +9,7 @@ import { z } from "zod";
 import pkg from "../../package.json";
 import type { TaskService } from "../core/service.ts";
 import type { ProjectContext, Task } from "../core/types.ts";
-import { QA_LEVELS, SPEC_STATES, PRIORITIES } from "../core/types.ts";
+import { QA_LEVELS, SPEC_STATES, PRIORITIES, TRAIL_KINDS } from "../core/types.ts";
 import { ProjectConfigSchema } from "../core/providers/config.ts";
 import {
   ready,
@@ -65,6 +65,13 @@ const indexRow = (task: Task) => ({
   priority: priorityOf(task),
 });
 
+// One trail entry, as the trail tools return it.
+const TRAIL_ENTRY = z.object({
+  kind: z.string(),
+  note: z.string(),
+  link: z.string().optional(),
+});
+
 // The config object's zod shape — THE schema from core/config.ts, so the surfaces cannot drift.
 const CONFIG = ProjectConfigSchema.shape;
 
@@ -76,7 +83,7 @@ const result = <T extends Record<string, unknown>>(structured: T) => ({
 });
 
 /** The MCP server over one task service. A transport (stdio or HTTP) connects to it. */
-// Deviation from the 24-line cap, justified: this is a declarative tool table — eight registerTool
+// Deviation from the 24-line cap, justified: this is a declarative tool table — fourteen registerTool
 // calls that are schema data plus one-expression handlers. Splitting it into arbitrary function
 // groups would hide the surface, and every handler body is under the cap on its own.
 // oxlint-disable-next-line max-lines-per-function
@@ -238,6 +245,47 @@ export function createMcpServer(service: TaskService): McpServer {
     async (args) => {
       await service.close(ctxOf(args), args.id);
       return result({ closed: args.id });
+    },
+  );
+
+  server.registerTool(
+    "get_trail",
+    {
+      description:
+        "A task's trail: the append-only, local journal of the decisions and actions behind it, " +
+        "oldest entry first. Empty when the task has no trail yet.",
+      inputSchema: {
+        project: PROJECT,
+        branch: BRANCH,
+        id: z.string().describe("The task id."),
+      },
+      outputSchema: { trail: z.array(TRAIL_ENTRY) },
+    },
+    async (args) => {
+      return result({ trail: await service.getTrail(ctxOf(args), args.id) });
+    },
+  );
+
+  server.registerTool(
+    "append_trail",
+    {
+      description:
+        "Append one entry to a task's trail so a later session can backtrack it. The append never " +
+        "rewrites earlier entries, and trails are local — never synced to a remote. Refuses an " +
+        "unknown id.",
+      inputSchema: {
+        project: PROJECT,
+        branch: BRANCH,
+        id: z.string().describe("The task id."),
+        kind: z.enum(TRAIL_KINDS).optional().describe("decision | action | note (default note)."),
+        note: z.string().describe("What was decided, done, or noticed."),
+        link: z.string().optional().describe("Where it landed — a file:line, URL, or commit."),
+      },
+      outputSchema: { trail: z.array(TRAIL_ENTRY) },
+    },
+    async (args) => {
+      const entry = { kind: args.kind ?? ("note" as const), note: args.note, link: args.link };
+      return result({ trail: await service.appendTrail(ctxOf(args), args.id, entry) });
     },
   );
 

@@ -29,6 +29,11 @@ export const ProjectConfigSchema = z
       .array(z.enum(LABEL_FIELD_NAMES))
       .optional()
       .describe("Which fields become labels (default: all)."),
+    trailsDir: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Where per-task trails live (default .trails in the repo root)."),
   })
   .strict();
 

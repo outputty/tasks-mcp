@@ -2,7 +2,7 @@
 // The package entry, on commander. With no subcommand it runs the MCP server — stdio by default (for
 // `.mcp.json` -> `bunx @outputty/tasks-mcp`), or `--http` for the standalone HTTP server. The
 // subcommands drive the same core directly, no MCP involved: `add`, `list`, `ready`, `planning`,
-// `schedule`, `prereqs`, `blockers`, `get`, `close`, `sync`.
+// `schedule`, `prereqs`, `blockers`, `get`, `close`, `trail`, `trail-add`, `sync`.
 
 import { Command } from "commander";
 import { runStdio } from "../src/mcp/stdio.ts";
@@ -10,7 +10,7 @@ import { createHttpServer } from "../src/mcp/http.ts";
 import { SERVER_INFO } from "../src/mcp/server.ts";
 import { makeService } from "../src/core/service.ts";
 import type { ServerOptions } from "../src/core/types.ts";
-import type { ProjectContext } from "../src/core/types.ts";
+import type { ProjectContext, TrailEntry, TrailKind } from "../src/core/types.ts";
 import {
   ready,
   planning,
@@ -35,6 +35,7 @@ const program = new Command()
   .option("--no-projects", "disable the Projects board sync")
   .option("--board <title>", "board title to find or create (default Tasks)")
   .option("--cache-dir <dir>", "where the file layer keeps its task files")
+  .option("--trails-dir <dir>", "where per-task trails live (default .trails in the repo root)")
   .option("--project <path>", "target repo for subcommands (default: cwd)");
 
 /** The CLI-set knobs, in ServerOptions shape. `projects` is only carried when actually turned off. */
@@ -46,6 +47,7 @@ function serverOptions(): ServerOptions {
     ...(opts.projects === false ? { projects: false } : {}),
     ...(opts.board ? { board: opts.board } : {}),
     ...(opts.cacheDir ? { cacheDir: opts.cacheDir } : {}),
+    ...(opts.trailsDir ? { trailsDir: opts.trailsDir } : {}),
   };
 }
 
@@ -129,6 +131,28 @@ program
   .action(async (id: string) => {
     await service().close(ctx(), id);
     out({ closed: id });
+  });
+
+program
+  .command("trail")
+  .description("a task's trail: the append-only journal of decisions and actions behind it")
+  .argument("<id>", "the task id")
+  .action(async (id: string) => out(await service().getTrail(ctx(), id)));
+
+program
+  .command("trail-add")
+  .description("append one entry to a task's trail (never rewrites earlier entries)")
+  .argument("<id>", "the task id")
+  .requiredOption("--note <text>", "what was decided, done, or noticed")
+  .option("--kind <kind>", "decision | action | note (default note)")
+  .option("--link <ref>", "where it landed — a file:line, URL, or commit")
+  .action(async (id: string, opts: Record<string, unknown>) => {
+    const entry: TrailEntry = {
+      kind: (opts.kind as TrailKind | undefined) ?? "note",
+      note: opts.note as string,
+      ...(opts.link ? { link: opts.link as string } : {}),
+    };
+    out(await service().appendTrail(ctx(), id, entry)); // the store validates kind and note
   });
 
 program

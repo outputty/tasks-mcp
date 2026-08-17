@@ -112,18 +112,20 @@ working directory of its own. Reads are answered from the local file layer and n
 network; the first GitHub-touching call (a write, or `sync`) resolves repo, credentials, labels, and
 the board once.
 
-| Tool            | Answers                                                        | Writes |
-| --------------- | -------------------------------------------------------------- | ------ |
-| `prereqs`       | what must be done before this task can start, in build order   | —      |
-| `blockers`      | which tasks hold up the most work, ranked                      | —      |
-| `list_ready`    | which tasks can be worked right now (open, settled, deps done) | —      |
-| `list_planning` | which tasks planning still owns (drafting / replan)            | —      |
-| `schedule`      | the whole open plan as dependency layers; errors on a cycle    | —      |
-| `get_task`      | one task's full record                                         | —      |
-| `add_task`      | create a task (file + issue + labels + board card)             | ✎      |
-| `amend_task`    | widen an open task's scope, or set its brief                   | ✎      |
-| `close_task`    | mark done (closes the issue, moves the card)                   | ✎      |
-| `sync`          | reconcile every layer both ways; adopt hand-opened issues      | ✎      |
+| Tool            | Answers                                                        | Writes  |
+| --------------- | -------------------------------------------------------------- | ------- |
+| `prereqs`       | what must be done before this task can start, in build order   | —       |
+| `blockers`      | which tasks hold up the most work, ranked                      | —       |
+| `list_ready`    | which tasks can be worked right now (open, settled, deps done) | —       |
+| `list_planning` | which tasks planning still owns (drafting / replan)            | —       |
+| `schedule`      | the whole open plan as dependency layers; errors on a cycle    | —       |
+| `get_task`      | one task's full record                                         | —       |
+| `add_task`      | create a task (file + issue + labels + board card)             | ✎       |
+| `amend_task`    | widen an open task's scope, or set its brief                   | ✎       |
+| `close_task`    | mark done (closes the issue, moves the card)                   | ✎       |
+| `get_trail`     | a task's trail: the decisions/actions behind it, oldest first  | —       |
+| `append_trail`  | append one entry to a task's trail (local file, never synced)  | ✎ local |
+| `sync`          | reconcile every layer both ways; adopt hand-opened issues      | ✎       |
 
 A task carries: `id`, `title`, `status`, `deps`, `scope`, the execution-modifying properties `tier`
 (1–4), `qa` (skip/inline/subagent), `priority` (high/normal/low), `spec`, `stage`, `kind`, and
@@ -131,6 +133,39 @@ A task carries: `id`, `title`, `status`, `deps`, `scope`, the execution-modifyin
 (`tier:2`, `priority:high`, …) — visible, filterable, and editable in the GitHub UI; edit a label
 there and `sync` pulls the change back. See [docs/architecture.md](docs/architecture.md) for the full
 mapping.
+
+## Trails — the decisions behind a task
+
+Every task carries an append-only **trail**: a local journal of the decisions and actions behind it, so
+a later session can reconstruct _why_. `append_trail` adds one entry; `get_trail` reads the journal back,
+oldest first.
+
+```jsonc
+// append_trail  { "project": "/abs/repo", "id": "readme-prereqs-order",
+//                 "kind": "decision", "note": "prereqs example outputs [[schema],[api,infra]]",
+//                 "link": "README.md:42" }
+{
+  "trail": [
+    {
+      "kind": "decision",
+      "note": "prereqs example outputs [[schema],[api,infra]]",
+      "link": "README.md:42",
+    },
+  ],
+}
+```
+
+`kind` is `decision`, `action`, or `note` (default `note`). Trails live per task in `.trails/<id>.yaml`
+at the repo root (path set by `trailsDir`) — **local, committable, and never synced to a remote**. An
+append never rewrites earlier entries, so hand-editing a trail between appends is safe; the file is plain
+YAML:
+
+```yaml
+# tasks-mcp trails — per-task journal, append-only. Safe to commit; never synced to a remote.
+- kind: decision
+  note: prereqs example outputs [[schema],[api,infra]]
+  link: README.md:42
+```
 
 ## Configuration
 
@@ -147,19 +182,21 @@ provider layer:
 
 Precedence, weakest first: defaults < CLI flags < global spec < per-repo override. `get_config` shows
 every layer plus the effective result. Configurable: `provider`, `projects`, `projectNumber`,
-`board`, `labels` (label sync on/off), `labelFields` (which properties become labels). Everything is
-zod-validated — a typo'd key or mistyped value fails loudly, naming the file.
+`board`, `labels` (label sync on/off), `labelFields` (which properties become labels), and `trailsDir`
+(where per-task trails live, default `.trails` in the repo root). Everything is zod-validated — a typo'd
+key or mistyped value fails loudly, naming the file.
 
 Deployment flags (in `.mcp.json`'s `args`, e.g. `["-y", "@outputty/tasks-mcp", "--no-projects"]`):
 
-| Flag                    | Description                             | Default       |
-| ----------------------- | --------------------------------------- | ------------- |
-| `--http` / `--port <n>` | standalone HTTP server instead of stdio | stdio, `3917` |
-| `--provider <name>`     | the remote layer backing each project   | `github`      |
-| `--project-number <n>`  | target an existing Projects board       | find/create   |
-| `--no-projects`         | disable the board sync                  | board on      |
-| `--board <title>`       | board title to find/create              | `Tasks`       |
-| `--cache-dir <dir>`     | where the file layer + config live      | OS cache dir  |
+| Flag                    | Description                             | Default           |
+| ----------------------- | --------------------------------------- | ----------------- |
+| `--http` / `--port <n>` | standalone HTTP server instead of stdio | stdio, `3917`     |
+| `--provider <name>`     | the remote layer backing each project   | `github`          |
+| `--project-number <n>`  | target an existing Projects board       | find/create       |
+| `--no-projects`         | disable the board sync                  | board on          |
+| `--board <title>`       | board title to find/create              | `Tasks`           |
+| `--cache-dir <dir>`     | where the file layer + config live      | OS cache dir      |
+| `--trails-dir <dir>`    | where per-task trails live              | `.trails` in repo |
 
 Credentials come from `GITHUB_TOKEN` / `GH_TOKEN`, else `gh auth token`.
 

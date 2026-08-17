@@ -29,6 +29,7 @@ export {
   idList,
   type Blocker,
 } from "./graph.ts";
+export { TrailStore } from "./trails.ts";
 export type {
   Task,
   ProjectContext,
@@ -38,6 +39,8 @@ export type {
   SpecState,
   Priority,
   LabelFieldName,
+  TrailEntry,
+  TrailKind,
 } from "./types.ts";
 export { buildStack, type Provider, type ProviderState } from "./providers/provider.ts";
 export { FileProvider } from "./providers/file.ts";

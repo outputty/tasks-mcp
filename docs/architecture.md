@@ -85,6 +85,20 @@ skipped with a warning and issues remain the status source.
   instead of crashing reads; the layer continues empty and the next `sync` rebuilds it from the
   layers below — safe because absence is not a claim and GitHub is deeper.
 
+## Trails — durable local memory, outside the stack
+
+A **trail** is a per-task, append-only journal: the decisions and actions behind a task, kept so a later
+session can reconstruct _why_. It is deliberately **not** part of the provider stack. Unlike the
+disposable file cache, a trail is durable local memory — one YAML file per task in `.trails/<id>.yaml`
+at the repo root (path via `trailsDir`), committable, and **never synced to a remote**. `TrailStore`
+owns it; `append_trail` / `get_trail` are the surface.
+
+Writes are a **text append, never a rewrite**: a new entry is concatenated as one YAML list item, so
+every earlier byte — including any hand-editing between appends — survives untouched. (outputty's
+original tracker refused to write trails at all for exactly this reason: a full re-serialize flattens
+`|` block scalars and destroys prose.) Nothing rebuilds a trail, so a corrupt one fails loud with its
+path rather than being quarantined like the rebuildable cache.
+
 ## Configuration — its own provider
 
 The server carries no user preferences of its own: `ConfigProvider` is a class of its own, and the MCP

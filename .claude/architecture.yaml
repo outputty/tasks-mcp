@@ -294,6 +294,35 @@ features:
     doc: architecture/surfaces.md
     example: ""
     related: [MCP server]
+  - name: trail store
+    kind: feature
+    what: |
+      A per-task, append-only journal — the decisions and actions behind a task — so a later
+      session can backtrack why. Durable local memory, the opposite of the disposable file cache;
+      never synced to a remote.
+    how: |
+      TrailStore (its own component, NOT a Provider) keeps one YAML file per task at
+      <trailsDir>/<id>.yaml (default .trails in the repo root). append_trail concatenates one
+      list item as TEXT — never a re-serialize — so hand-authored prose survives every later
+      entry (the reason tasks.js refused to write trails). get_trail reads the list oldest-first;
+      append_trail guards on the task existing in the top file layer (no network). Entry:
+      { kind: decision|action|note, note, link? }. A corrupt trail fails loud, never quarantined
+      (nothing rebuilds it). sync never touches trails.
+    doc: architecture/trails.md
+    example: "trail-journal"
+    related: [file layer, trails-dir knob, MCP server, CLI]
+  - name: trails-dir knob
+    kind: knob
+    what: |
+      Where per-task trails live — default `.trails` in the repo root, configurable.
+    how: |
+      trailsDir is a ProjectConfigSchema key AND a --trails-dir flag (ServerOptions), so it
+      resolves with the full config precedence (defaults < flags < global < per-repo). A
+      relative value hangs off the repo root; absolute is used as-is. Ruled 2026-08-17: repo-root
+      .trails over a GitHub-synced or cache-only home, so decision prose stays local.
+    doc: architecture/trails.md
+    example: "trail-journal"
+    related: [trail store, central config]
   - name: central config
     kind: feature
     what: |

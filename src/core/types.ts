@@ -9,14 +9,32 @@ export const QA_LEVELS = ["skip", "inline", "subagent"] as const;
 export const PRIORITIES = ["high", "normal", "low"] as const;
 export const TIERS = [1, 2, 3, 4] as const;
 export const LABEL_FIELD_NAMES = ["kind", "tier", "qa", "spec", "stage", "priority"] as const;
+// The kinds of thing a trail entry records — a decision made, an action taken, or a bare note. Stated
+// once here; the type, the zod enum, and the store's validator all derive from it.
+export const TRAIL_KINDS = ["decision", "action", "note"] as const;
 
 export type SpecState = (typeof SPEC_STATES)[number];
 export type QaLevel = (typeof QA_LEVELS)[number];
 export type Priority = (typeof PRIORITIES)[number];
+export type TrailKind = (typeof TRAIL_KINDS)[number];
 
 export interface Attempt {
   tried: string;
   killed_by: string;
+}
+
+/**
+ * One entry in a task's trail: the append-only, per-task journal that lets a later session backtrack
+ * the decisions and actions behind a task. Local-only — trails never sync to a remote. Order is append
+ * order; entries are never rewritten, so hand-authored prose in `note` survives every later append.
+ */
+export interface TrailEntry {
+  /** decision made · action taken · bare note. Absent means "note". */
+  kind: TrailKind;
+  /** The prose: what was decided, done, or noticed. */
+  note: string;
+  /** Optional pointer to where it landed — a file:line, a URL, a commit. */
+  link?: string;
 }
 
 export interface Task {
@@ -64,7 +82,7 @@ export interface RepoRef {
 /** Server-wide options, set once from CLI args — deployment knobs, not user preferences. */
 export type ServerOptions = Pick<
   ProjectConfig,
-  "provider" | "projects" | "projectNumber" | "board"
+  "provider" | "projects" | "projectNumber" | "board" | "trailsDir"
 > & {
   /** Where the file layer and the config files live. Defaults to the OS cache dir; never the repo. */
   cacheDir?: string;
@@ -87,4 +105,9 @@ export interface ProjectConfig {
   labels?: boolean;
   /** Which fields become labels when `labels` is on. Default: all of them. */
   labelFields?: LabelFieldName[];
+  /**
+   * Where per-task trails live. A relative path hangs off the repo root; absolute is used as-is.
+   * Default `.trails` in the repo root — trails are durable local memory, unlike the throwaway cache.
+   */
+  trailsDir?: string;
 }

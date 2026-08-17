@@ -90,6 +90,8 @@ test("tools/list advertises the whole surface, each requiring project", async ()
       "add_task",
       "amend_task",
       "close_task",
+      "get_trail",
+      "append_trail",
       "sync",
     ]),
   );
@@ -166,6 +168,36 @@ test("prereqs and blockers answer the two planning questions over MCP", async ()
   expect(blk.blockers[0].blocks).toBe(2);
   expect(blk.blockers[0].highPriorityBlocked).toEqual(["ui"]);
   expect(blk.blockers[0].unblockedBy).toEqual([]); // schema itself is startable now
+  await cleanup();
+});
+
+test("append_trail journals a task and get_trail reads it back over MCP", async () => {
+  const { client, project, cleanup } = await harness();
+  await client.callTool({ name: "add_task", arguments: { project, id: "api", title: "API" } });
+  await client.callTool({
+    name: "append_trail",
+    arguments: { project, id: "api", kind: "decision", note: "GraphQL only", link: "types.ts:79" },
+  });
+  const res = await client.callTool({
+    name: "append_trail",
+    arguments: { project, id: "api", note: "cut the branch param" }, // kind defaults to note
+  });
+  expect(structured(res).trail).toEqual([
+    { kind: "decision", note: "GraphQL only", link: "types.ts:79" },
+    { kind: "note", note: "cut the branch param" },
+  ]);
+  const got = await client.callTool({ name: "get_trail", arguments: { project, id: "api" } });
+  expect(structured(got).trail).toHaveLength(2);
+  await cleanup();
+});
+
+test("append_trail refuses an unknown task id", async () => {
+  const { client, project, cleanup } = await harness();
+  const res = await client.callTool({
+    name: "append_trail",
+    arguments: { project, id: "ghost", note: "x" },
+  });
+  expect(res.isError).toBe(true);
   await cleanup();
 });
 
