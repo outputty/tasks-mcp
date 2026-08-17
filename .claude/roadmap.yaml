@@ -114,8 +114,8 @@
     journal oldest-first; the on-disk .trails/<id>.yaml is header-stamped, append-only YAML;
     npm run check green (63 tests, +10 over v0.8.0).
   status: "✅ shipped"
-  status_detail: v0.9.0; trails are local-only (outside the provider stack), path configurable via trailsDir.
+  status_detail: v0.9.0 (PR #21); trails are local-only (outside the provider stack), path configurable via trailsDir.
   depends_on: [1]
   doc: roadmap/task-trails.md
   absorbs: []
-  links: []
+  links: ["https://github.com/outputty/tasks-mcp/pull/21"]
