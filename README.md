@@ -117,6 +117,15 @@ bridge — it materialises the full remote state into an in-repo `.claude/tasks.
 any task in `.claude/tasks.seed.yaml` that has no issue yet. GitHub is the source of truth, so a pull
 never edits an existing issue and there are no conflicts to resolve.
 
+## Limitations
+
+- **GitHub's list endpoint is eventually consistent.** An issue created a moment ago may not appear in
+  the very next `list_ready` / `schedule` until GitHub finishes indexing it (usually sub-second). In real
+  use — creates and reads seconds or minutes apart, often across sessions — this is invisible; a
+  back-to-back create-then-list in a script can briefly miss the new task.
+- **The REST issues endpoint is on a deprecation clock** (GitHub is retiring the current version by
+  2028). Octokit prints a notice; nothing breaks today. Moving to the newer issues API is a follow-up.
+
 ## The MCP transport
 
 A tools-only server sends no server-initiated messages, so the Streamable HTTP transport collapses to
