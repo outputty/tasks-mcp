@@ -3,8 +3,9 @@
 `@outputty/tasks-mcp`: outputty's task tracker as an MCP server **and** a library, Node-native, published
 to npm. It is split so the MCP layer wraps the core, never the reverse:
 
-- `src/core/` — the business logic: `service`, `cache`, `graph`, `config`, `providers/` (GitHub via
-  Octokit, GraphQL only). Exported as the library (`.`).
+- `src/core/` — the business logic: `service` (the `TaskStack` orchestrator), `graph`, `config`, and
+  `providers/` — a STACK of layers behind one `Provider` seam: `file.ts` on top (the local store all
+  reads hit), `github.ts` beneath it (Octokit, GraphQL only). Exported as the library (`.`).
 - `src/mcp/` — the wrapper on the official `@modelcontextprotocol/sdk`: the tool surface (`server`)
   and the `stdio` + `http` transports. Exported as `./mcp`.
 - `bin/cli.ts` — the entry: MCP server (stdio default, `--http`) or direct subcommands.
@@ -15,6 +16,12 @@ to npm. It is split so the MCP layer wraps the core, never the reverse:
   and it wraps its own API client (`GitHubProvider` holds its `Octokit`) — no satellite modules
   (client/issues/projects were folded into the class by request). The client is the one injection
   point — constructor parameter, defaulted for production, passed explicitly by tests.
+- **Providers form a STACK, and stack order is authority** (user ruling 2026-08-17). The file layer
+  sits on top (every read hits it, nothing else), remotes below; the DEEPEST layer wins a sync
+  disagreement. Absence is not a claim — a task missing from a layer is pushed into it, never deleted
+  from the others (that is what makes adding a layer a free migration) — and deletions never
+  propagate. Each layer owns its own handles (issue ids, card ids) in a private index; nothing above
+  the seam sees them. The seam is `init` / `pull` / `upsert` — create-vs-update is the layer's call.
 - **All remote setup happens in `init()`.** There are no async constructors, so every provider has an
   explicit `async init(ctx)` — credentials, repo resolution, and container selection/creation (for
   GitHub: finding or creating the Projects v2 board) run there, once per project, never lazily inside

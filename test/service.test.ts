@@ -1,10 +1,11 @@
-// Service tests, end to end: a real CachedTaskService over a real GitHubProvider whose HTTP lands on
-// the nock GitHub. The only fakes are the wire responses.
+// Service tests, end to end: a real TaskStack over the real file layer and a real GitHub layer whose
+// HTTP lands on the nock GitHub. The only fakes are the wire responses.
 
 import { test, expect, beforeEach, afterAll } from "vitest";
 import fs from "node:fs";
 import nock from "nock";
-import { CachedTaskService, DuplicateTaskError } from "../src/core/service.ts";
+import { TaskStack, DuplicateTaskError } from "../src/core/service.ts";
+import { FileProvider } from "../src/core/providers/file.ts";
 import { ready } from "../src/core/graph.ts";
 import { task, tmp, tmpRepo } from "./helpers.ts";
 import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
@@ -22,7 +23,10 @@ function harness() {
   const gh = installNock(new NockGitHub());
   const project = tmpRepo();
   const cache = tmp();
-  const svc = new CachedTaskService({ cacheDir: cache.dir }, nockProvider({ projects: false }));
+  const svc = new TaskStack({}, [
+    new FileProvider({ cacheDir: cache.dir }),
+    nockProvider({ projects: false }),
+  ]);
   return {
     svc,
     gh,
@@ -35,7 +39,7 @@ function harness() {
   };
 }
 
-test("the cache lives outside the repo, in the given cacheDir", async () => {
+test("the file layer lives outside the repo, in the given cacheDir", async () => {
   const { svc, project, cacheDir, cleanup } = harness();
   const ctx = { project };
   await svc.create(ctx, task({ id: "schema" }));
@@ -48,7 +52,7 @@ test("the cache lives outside the repo, in the given cacheDir", async () => {
   cleanup();
 });
 
-test("reads come from the cache; deps gate readiness", async () => {
+test("reads come from the top layer; deps gate readiness", async () => {
   const { svc, project, cleanup } = harness();
   const ctx = { project };
   await svc.create(ctx, task({ id: "schema" }));
@@ -66,15 +70,18 @@ test("a duplicate id is refused", async () => {
   cleanup();
 });
 
-test("a deleted cache is rebuilt from the issues, deps and all", async () => {
+test("a deleted file layer is rebuilt from the issues, deps and all", async () => {
   const { svc, project, cleanup } = harness();
   const ctx = { project };
   await svc.create(ctx, task({ id: "schema" }));
   await svc.create(ctx, task({ id: "api", deps: ["schema"], tier: 2 }));
 
-  // Fresh cache dir, same "remote" (the nock GitHub keeps its issues).
+  // Fresh file layer, same "remote" (the nock GitHub keeps its issues).
   const cache2 = tmp();
-  const svc2 = new CachedTaskService({ cacheDir: cache2.dir }, nockProvider({ projects: false }));
+  const svc2 = new TaskStack({}, [
+    new FileProvider({ cacheDir: cache2.dir }),
+    nockProvider({ projects: false }),
+  ]);
   expect(await svc2.list(ctx)).toEqual([]);
   await svc2.sync(ctx);
   const api = (await svc2.list(ctx)).find((t) => t.id === "api")!;
@@ -84,7 +91,7 @@ test("a deleted cache is rebuilt from the issues, deps and all", async () => {
   cleanup();
 });
 
-test("sync pushes a task the provider never saw (created offline)", async () => {
+test("sync pushes a task the remote never saw (created offline)", async () => {
   const { svc, gh, project, cleanup } = harness();
   const ctx = { project };
   await svc.create(ctx, task({ id: "a" }));
@@ -109,5 +116,19 @@ test("sync adopts a hand-opened issue and stamps our block onto it", async () =>
   expect((await svc.get(ctx, "gh-9"))?.title).toBe("reported bug");
   expect(gh.issues[0].body).toContain("id: gh-9"); // stamped back
   expect(gh.issues[0].body).toContain("someone typed this into github"); // prose kept
+  cleanup();
+});
+
+test("a file written before the stack (with a refs key) still loads", async () => {
+  const { svc, project, cacheDir, cleanup } = harness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "old" }));
+  const file = `${cacheDir}/${fs.readdirSync(cacheDir)[0]}`;
+  fs.writeFileSync(
+    file,
+    "tasks:\n  - id: old\n    title: from before\n    status: open\n    refs:\n      issueId: I_1\n",
+  );
+  expect((await svc.get(ctx, "old"))?.title).toBe("from before");
+  expect((await svc.get(ctx, "old")) as never).not.toHaveProperty("refs");
   cleanup();
 });

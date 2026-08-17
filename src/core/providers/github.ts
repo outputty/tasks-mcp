@@ -1,26 +1,29 @@
-// The GitHub provider: one class wrapping one Octokit client, implementing the Provider seam. It
-// bundles Issues (the primary record) and the Projects v2 board (a best-effort kanban mirror), both
-// over GraphQL — the board has no complete REST API, and one protocol keeps one kind of handle (node
-// ids) end to end. Issues must succeed; a board failure is logged at init and skipped after, so a
-// Projects hiccup never loses a task.
+// The GitHub layer: one class wrapping one Octokit client, implementing the Provider seam. It bundles
+// Issues (the primary record) and the Projects v2 board (a best-effort kanban mirror), both over
+// GraphQL — the board has no complete REST API, and one protocol keeps one kind of handle (node ids)
+// end to end. Issues must succeed; a board failure is logged at init and skipped after, so a Projects
+// hiccup never loses a task.
 //
 // Lifecycle: construct (optionally passing your own Octokit — the one test seam; nock intercepts its
 // HTTP so the real request path is always exercised), then `await init(ctx)`. There are no async
 // constructors, so init is where everything remote is resolved ONCE per project: the repo behind the
 // project's `origin`, its config, the repository node id, and the Projects v2 board — found by
-// number/title, or created and linked to the repo. Task calls after that only touch issues and cards.
+// number/title, or created and linked to the repo.
 //
-// The task id lives in a hidden YAML block in the issue body (alongside deps/scope/tier/…) — no
-// labels, nothing to keep in sync but the body itself. An issue is "managed" iff it carries that block.
+// The layer owns its own bookkeeping: a per-project index from task id to issue/card node ids, built
+// from one listing pass and refreshed by every `pull`. Nothing above the seam sees a GitHub handle —
+// `upsert` decides create-vs-update from the index alone. The task id lives in a hidden YAML block in
+// the issue body (alongside deps/scope/tier/…) — no labels, nothing to keep in sync but the body
+// itself. An issue is "managed" iff it carries that block.
 
 import { spawnSync } from "node:child_process";
 import { Octokit } from "octokit";
 import { match } from "ts-pattern";
 import { parse, stringify } from "yaml";
-import type { ProjectConfig, ProjectContext, Refs, RepoRef, Task } from "../../types.ts";
-import { loadConfig, type ServerOptions } from "../../config.ts";
-import type { Provider, RemoteState } from "../provider.ts";
-import { withDefaults } from "../../graph.ts";
+import type { ProjectConfig, ProjectContext, RepoRef, Task } from "../types.ts";
+import { loadConfig, type ServerOptions } from "../config.ts";
+import type { Provider, ProviderState } from "./provider.ts";
+import { withDefaults } from "../graph.ts";
 
 // ---------------------------------------------------------------------------------------------------
 // Local credentials — a token from the user's existing setup (env, then the gh CLI), no new login.
@@ -232,19 +235,41 @@ function needsReconcile(
 }
 
 /** Reconcile one issue with its board card into the state pull reports to the service. */
-function remoteState(
+function providerState(
   listed: ListedIssue,
   card: BoardCard | undefined,
   boardOn: boolean,
-): RemoteState {
+): ProviderState {
   // Done if the issue is closed OR the card sits in a Done column.
   const done = listed.task.status === "done" || card?.done === true;
-  // The patch is the whole task rebuilt from the body (deps included), with status reconciled.
+  // The task is rebuilt whole from the body (deps included), with status reconciled.
   return {
-    patch: { ...listed.task, status: done ? "done" : "open" },
-    refs: { issueId: listed.issueId, projectItem: card?.itemId },
+    task: { ...listed.task, status: done ? "done" : "open" },
     reconcile: needsReconcile(listed, card, done, boardOn),
   };
+}
+
+/** Where one task already sits in GitHub: its issue node id, and its board card when known. */
+interface IssueHandle {
+  issueId: string;
+  projectItem?: string;
+}
+
+/** One issue joined with its board card — pull and the index are both derived from this scan. */
+interface Scanned {
+  listed: ListedIssue;
+  card?: BoardCard;
+}
+
+function indexOf(scan: Scanned[]): Map<string, IssueHandle> {
+  const index = new Map<string, IssueHandle>();
+  for (const { listed, card } of scan) {
+    index.set(
+      listed.task.id,
+      card ? { issueId: listed.issueId, projectItem: card.itemId } : { issueId: listed.issueId },
+    );
+  }
+  return index;
 }
 
 /** Everything init resolves for one project; every later call runs against this. */
@@ -261,6 +286,9 @@ export class GitHubProvider implements Provider {
   private readonly octokit: Octokit;
   // One init per project path, shared by concurrent callers; a failed init is forgotten so it retries.
   private readonly states = new Map<string, Promise<ProjectState>>();
+  // The layer's own bookkeeping: task id → issue/card handles, one listing pass per project (refreshed
+  // by every pull). A failed build is forgotten so it retries.
+  private readonly indexes = new Map<string, Promise<Map<string, IssueHandle>>>();
 
   constructor(
     private readonly options: ServerOptions = {},
@@ -278,27 +306,62 @@ export class GitHubProvider implements Provider {
     await this.state(ctx.project);
   }
 
-  async create(ctx: ProjectContext, task: Task): Promise<Refs> {
+  async upsert(ctx: ProjectContext, task: Task): Promise<void> {
     const state = await this.state(ctx.project);
-    const issueId = await this.createIssue(state, task);
-    return this.withBoard(state, task, { issueId });
+    const index = await this.index(ctx.project, state);
+    const known = index.get(task.id);
+    const issueId = await this.writeIssue(state, known?.issueId, task);
+    const projectItem = await this.withBoard(state, task, issueId, known?.projectItem);
+    index.set(task.id, projectItem ? { issueId, projectItem } : { issueId });
   }
 
-  async update(ctx: ProjectContext, task: Task, refs: Refs): Promise<Refs> {
+  async pull(ctx: ProjectContext): Promise<Map<string, ProviderState>> {
     const state = await this.state(ctx.project);
-    if (!refs.issueId) return this.create(ctx, task); // lost the ref somehow — re-create rather than orphan
-    await this.updateIssue(refs.issueId, task);
-    return this.withBoard(state, task, refs);
+    const scan = await this.scan(state);
+    this.indexes.set(ctx.project, Promise.resolve(indexOf(scan)));
+    return new Map(
+      scan.map(({ listed, card }) => [
+        listed.task.id,
+        providerState(listed, card, state.board !== null),
+      ]),
+    );
   }
 
-  async pull(ctx: ProjectContext): Promise<Map<string, RemoteState>> {
-    const state = await this.state(ctx.project);
-    const cards = await this.boardCards(state);
-    const out = new Map<string, RemoteState>();
-    for (const listed of await this.listIssues(state)) {
-      out.set(listed.task.id, remoteState(listed, cards.get(listed.issueId), state.board !== null));
+  // -------------------------------------------------------------------------------------------------
+  // The index — how upsert decides create-vs-update without anything above the seam holding handles.
+
+  private index(project: string, state: ProjectState): Promise<Map<string, IssueHandle>> {
+    let index = this.indexes.get(project);
+    if (!index) {
+      index = this.scan(state)
+        .then(indexOf)
+        .catch((err) => {
+          this.indexes.delete(project);
+          throw err;
+        });
+      this.indexes.set(project, index);
     }
-    return out;
+    return index;
+  }
+
+  /** One listing pass: every issue joined with its board card. */
+  private async scan(state: ProjectState): Promise<Scanned[]> {
+    const cards = await this.boardCards(state);
+    return (await this.listIssues(state)).map((listed) => ({
+      listed,
+      card: cards.get(listed.issueId),
+    }));
+  }
+
+  /** Update the issue behind `issueId`, or create one when the id is new here. Returns the node id. */
+  private async writeIssue(
+    state: ProjectState,
+    issueId: string | undefined,
+    task: Task,
+  ): Promise<string> {
+    if (!issueId) return this.createIssue(state, task);
+    await this.updateIssue(issueId, task);
+    return issueId;
   }
 
   /** The board's cards (best-effort — a read failure means no cards), so Done cards flow back in. */
@@ -482,21 +545,20 @@ export class GitHubProvider implements Provider {
   // -------------------------------------------------------------------------------------------------
   // The Projects v2 board — the mirror. Best-effort: never let a board failure fail the task write.
 
-  private async withBoard(state: ProjectState, task: Task, refs: Refs): Promise<Refs> {
-    if (!state.board || !refs.issueId) return refs;
+  private async withBoard(
+    state: ProjectState,
+    task: Task,
+    issueId: string,
+    existingItem: string | undefined,
+  ): Promise<string | undefined> {
+    if (!state.board) return existingItem;
     try {
-      const projectItem = await this.syncToBoard(
-        state.board,
-        refs.issueId,
-        refs.projectItem,
-        task.status,
-      );
-      return { ...refs, projectItem };
+      return await this.syncToBoard(state.board, issueId, existingItem, task.status);
     } catch (err) {
       console.error(
         `tasks-mcp: github-projects sync skipped for ${task.id}: ${(err as Error).message}`,
       );
-      return refs;
+      return existingItem;
     }
   }
 

@@ -8,7 +8,8 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import pkg from "../package.json";
 import { createHttpServer } from "../src/mcp/http.ts";
 import { SERVER_INFO } from "../src/mcp/server.ts";
-import { CachedTaskService } from "../src/core/service.ts";
+import { TaskStack } from "../src/core/service.ts";
+import { FileProvider } from "../src/core/providers/file.ts";
 import { tmp, tmpRepo } from "./helpers.ts";
 import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
 
@@ -23,7 +24,7 @@ afterAll(() => {
 });
 
 /** The real HTTP server on an ephemeral port, plus an SDK client connected to it. */
-async function startHttp(service: CachedTaskService) {
+async function startHttp(service: TaskStack) {
   const server = createHttpServer(service);
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const addr = server.address();
@@ -47,7 +48,10 @@ async function harness() {
   installNock(new NockGitHub());
   const project = tmpRepo();
   const cache = tmp();
-  const service = new CachedTaskService({ cacheDir: cache.dir }, nockProvider({ projects: false }));
+  const service = new TaskStack({}, [
+    new FileProvider({ cacheDir: cache.dir }),
+    nockProvider({ projects: false }),
+  ]);
   const { base, client, close } = await startHttp(service);
   return {
     client,

@@ -50,17 +50,6 @@ export interface RepoRef {
   repo: string;
 }
 
-/** Where a task already lives in its provider, so the service never re-looks-it-up. */
-export interface Refs {
-  /** The backing issue's GraphQL node id (the provider's stable handle for the task). */
-  issueId?: string;
-  /** The Projects v2 item node id, when the task is on a board. */
-  projectItem?: string;
-}
-
-/** A task as it sits in the committed cache: the full task plus its provider refs. */
-export type CacheEntry = Task & { refs?: Refs };
-
 /** Per-project settings, read from `.claude/tasks-mcp.config.*` (all optional). */
 export interface ProjectConfig {
   /** Which provider backs this project. Default "github". A future value is "linear". */
