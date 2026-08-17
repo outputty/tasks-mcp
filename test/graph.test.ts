@@ -1,19 +1,9 @@
 import { test, expect } from "vitest";
-import {
-  ready,
-  planning,
-  schedule,
-  tierOf,
-  qaOf,
-  specSettled,
-} from "../src/core/graph.ts";
+import { ready, planning, schedule, tierOf, qaOf, specSettled } from "../src/core/graph.ts";
 import { task } from "./helpers.ts";
 
 test("ready: open task with all deps done is ready", () => {
-  const tasks = [
-    task({ id: "a", status: "done" }),
-    task({ id: "b", deps: ["a"] }),
-  ];
+  const tasks = [task({ id: "a", status: "done" }), task({ id: "b", deps: ["a"] })];
   expect(ready(tasks).map((x) => x.id)).toEqual(["b"]);
 });
 
@@ -23,10 +13,7 @@ test("ready: a task with an open dep is not ready", () => {
 });
 
 test("ready: a drafting or replan task is never ready", () => {
-  const tasks = [
-    task({ id: "a", spec: "drafting" }),
-    task({ id: "b", spec: "replan" }),
-  ];
+  const tasks = [task({ id: "a", spec: "drafting" }), task({ id: "b", spec: "replan" })];
   expect(ready(tasks)).toEqual([]);
 });
 
@@ -61,10 +48,7 @@ test("schedule: orders tasks into dependency layers", () => {
 });
 
 test("schedule: throws on a dependency cycle", () => {
-  const tasks = [
-    task({ id: "a", deps: ["b"] }),
-    task({ id: "b", deps: ["a"] }),
-  ];
+  const tasks = [task({ id: "a", deps: ["b"] }), task({ id: "b", deps: ["a"] })];
   expect(() => schedule(tasks)).toThrow(/cycle or unmet dependency/);
 });
 

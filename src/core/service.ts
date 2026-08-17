@@ -4,7 +4,7 @@
 // each task's full record (deps included) is mirrored into its issue body.
 
 import type { CacheEntry, ProjectContext, Task } from "./types.ts";
-import type { Provider } from "./providers/provider.ts";
+import type { Provider, RemoteState } from "./providers/provider.ts";
 import type { ServerOptions } from "./config.ts";
 import { Cache } from "./cache.ts";
 import { withDefaults } from "./graph.ts";
@@ -14,6 +14,14 @@ export interface SyncResult {
   pulled: number;
   pushed: number;
   conflicts: number;
+}
+
+/** Creating a task whose id the cache already holds. Typed so tests assert the type, not a message. */
+export class DuplicateTaskError extends Error {
+  constructor(id: string) {
+    super(`task ${id} already exists`);
+    this.name = "DuplicateTaskError";
+  }
 }
 
 export interface TaskService {
@@ -36,8 +44,11 @@ export class CachedTaskService implements TaskService {
     return Cache.forProject(project, this.options.cacheDir);
   }
 
-  private providerFor(ctx: ProjectContext): Provider {
-    return this.provider ?? providerFor(ctx.project, this.options);
+  /** The project's provider, initialised — repo, credentials, and board are resolved before any op. */
+  private async providerFor(ctx: ProjectContext): Promise<Provider> {
+    const provider = this.provider ?? providerFor(ctx.project, this.options);
+    await provider.init(ctx);
+    return provider;
   }
 
   async list(ctx: ProjectContext): Promise<Task[]> {
@@ -55,29 +66,22 @@ export class CachedTaskService implements TaskService {
   async create(ctx: ProjectContext, task: Task): Promise<Task> {
     const cache = this.cache(ctx.project);
     const entries = cache.load();
-    if (entries.some((e) => e.id === task.id))
-      throw new Error(`task ${task.id} already exists`);
-    const refs = await this.providerFor(ctx).create(ctx, task);
+    if (entries.some((e) => e.id === task.id)) throw new DuplicateTaskError(task.id);
+    const refs = await (await this.providerFor(ctx)).create(ctx, task);
     entries.push({ ...task, refs });
     cache.save(entries);
     return task;
   }
 
-  async update(
-    ctx: ProjectContext,
-    id: string,
-    patch: Partial<Task>,
-  ): Promise<Task> {
+  async update(ctx: ProjectContext, id: string, patch: Partial<Task>): Promise<Task> {
     const cache = this.cache(ctx.project);
     const entries = cache.load();
     const entry = entries.find((e) => e.id === id);
     if (!entry) throw new Error(`no task ${id}`);
     const merged: CacheEntry = { ...entry, ...patch, id };
-    merged.refs = await this.providerFor(ctx).update(
-      ctx,
-      stripRefs(merged),
-      entry.refs ?? {},
-    );
+    merged.refs = await (
+      await this.providerFor(ctx)
+    ).update(ctx, stripRefs(merged), entry.refs ?? {});
     entries[entries.indexOf(entry)] = merged;
     cache.save(entries);
     return stripRefs(merged);
@@ -90,30 +94,13 @@ export class CachedTaskService implements TaskService {
   async sync(ctx: ProjectContext): Promise<SyncResult> {
     const cache = this.cache(ctx.project);
     const entries = cache.load();
-    const byId = new Map(entries.map((e) => [e.id, e]));
-    const provider = this.providerFor(ctx);
+    const provider = await this.providerFor(ctx);
 
-    // Pull the fields the provider owns (title, status) back into the cache, adopting any issue it
-    // surfaces that the cache did not know (a hand-opened one), and learning each task's refs.
     const remote = await provider.pull(ctx);
-    const reconcile: CacheEntry[] = [];
-    let pulled = 0;
-    for (const [id, state] of remote) {
-      let entry = byId.get(id);
-      if (!entry) {
-        entry = withDefaults({ id, ...state.patch });
-        byId.set(id, entry);
-        entries.push(entry);
-      } else {
-        Object.assign(entry, state.patch);
-      }
-      entry.refs = { ...entry.refs, ...state.refs };
-      if (state.reconcile) reconcile.push(entry);
-      pulled++;
-    }
+    const { reconcile, pulled } = mergeRemote(entries, remote);
 
-    let pushed = 0;
     // Push cache tasks the provider has never seen (created offline), so the mirror catches up.
+    let pushed = 0;
     for (const entry of entries) {
       if (remote.has(entry.id)) continue;
       entry.refs = await provider.create(ctx, stripRefs(entry));
@@ -122,17 +109,52 @@ export class CachedTaskService implements TaskService {
     // Push back the disagreeing ones: close/reopen the issue to match, stamp an adopted issue's body
     // block, and set its board card — so issue, cache, and board converge.
     for (const entry of reconcile) {
-      entry.refs = await provider.update(
-        ctx,
-        stripRefs(entry),
-        entry.refs ?? {},
-      );
+      entry.refs = await provider.update(ctx, stripRefs(entry), entry.refs ?? {});
       pushed++;
     }
 
     cache.save(entries);
     return { pulled, pushed, conflicts: 0 };
   }
+}
+
+/**
+ * Pull the fields the provider owns (title, status) into the cache entries in place, adopting any
+ * issue the cache did not know (a hand-opened one) and learning each task's refs. Returns the entries
+ * the provider flagged for a push-back.
+ */
+function mergeRemote(
+  entries: CacheEntry[],
+  remote: Map<string, RemoteState>,
+): { reconcile: CacheEntry[]; pulled: number } {
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  const reconcile: CacheEntry[] = [];
+  let pulled = 0;
+  for (const [id, state] of remote) {
+    const entry = upsert(byId, entries, id, state);
+    entry.refs = { ...entry.refs, ...state.refs };
+    if (state.reconcile) reconcile.push(entry);
+    pulled++;
+  }
+  return { reconcile, pulled };
+}
+
+/** The cache entry for one pulled task: patched in place when known, adopted as new when not. */
+function upsert(
+  byId: Map<string, CacheEntry>,
+  entries: CacheEntry[],
+  id: string,
+  state: RemoteState,
+): CacheEntry {
+  const existing = byId.get(id);
+  if (existing) {
+    Object.assign(existing, state.patch);
+    return existing;
+  }
+  const entry = withDefaults({ id, ...state.patch });
+  byId.set(id, entry);
+  entries.push(entry);
+  return entry;
 }
 
 const stripRefs = (entry: CacheEntry): Task => {

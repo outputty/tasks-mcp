@@ -25,10 +25,7 @@ export function defaultCacheDir(): string {
 }
 
 /** The per-project config: the CLI defaults, overlaid by an optional in-repo config file if present. */
-export function loadConfig(
-  project: string,
-  options: ServerOptions = {},
-): ProjectConfig {
+export function loadConfig(project: string, options: ServerOptions = {}): ProjectConfig {
   const base: ProjectConfig = {
     provider: options.provider,
     projects: options.projects,
@@ -38,8 +35,7 @@ export function loadConfig(
   for (const name of ["tasks-mcp.config.yaml", "tasks-mcp.config.json"]) {
     const file = path.join(project, ".claude", name);
     if (fs.existsSync(file)) {
-      const fromFile =
-        (parse(fs.readFileSync(file, "utf8")) as ProjectConfig) || {};
+      const fromFile = (parse(fs.readFileSync(file, "utf8")) as ProjectConfig) || {};
       return { ...base, ...fromFile };
     }
   }

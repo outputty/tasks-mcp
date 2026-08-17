@@ -1,61 +1,67 @@
 {
   "name": "@outputty/tasks-mcp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "outputty's task tracker as an MCP server and a library: a local task graph synced two-way to GitHub Issues and Projects.",
+  "keywords": [
+    "github-issues",
+    "github-projects",
+    "mcp",
+    "model-context-protocol",
+    "outputty",
+    "tasks"
+  ],
+  "homepage": "https://github.com/outputty/tasks-mcp#readme",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/outputty/tasks-mcp.git"
   },
-  "homepage": "https://github.com/outputty/tasks-mcp#readme",
-  "keywords": [
-    "mcp",
-    "model-context-protocol",
-    "tasks",
-    "github-issues",
-    "github-projects",
-    "outputty"
-  ],
-  "type": "module",
   "bin": {
     "tasks-mcp": "dist/cli.js"
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",
   "exports": {
     ".": "./dist/index.js",
     "./mcp": "./dist/mcp.js"
   },
-  "files": [
-    "dist",
-    "README.md"
-  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
+    "build": "tsdown",
+    "dev": "tsdown --watch",
     "start": "node dist/cli.js --http",
     "test": "vitest run",
     "test:watch": "vitest",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "lint": "oxlint",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@hono/node-server": "^2.1.1",
-    "hono": "^4.6.14",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "octokit": "^4.0.2",
-    "yaml": "^2.9.0"
+    "ts-pattern": "^5.9.0",
+    "yaml": "^2.9.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
     "nock": "^14.0.17",
-    "prettier": "^3.9.4",
-    "tsup": "^8.5.1",
-    "typescript": "^5.9",
+    "oxfmt": "^0.63.0",
+    "oxlint": "^1.78.0",
+    "tsdown": "^0.22.14",
+    "typescript": "^7.0.2",
+    "unrun": "^0.3.1",
     "vitest": "^4.1.10"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "engines": {
     "node": ">=18"

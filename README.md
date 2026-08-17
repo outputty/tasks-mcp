@@ -52,7 +52,7 @@ The package is split into a **core** (all the business logic) and a thin **MCP w
 same logic is reachable three ways:
 
 ```bash
-# 1. MCP server — what a coding agent uses (stdio by default, --http for hono)
+# 1. MCP server — what a coding agent uses (stdio by default, --http for the standalone server)
 npx -y @outputty/tasks-mcp
 
 # 2. Direct CLI — the same core, no MCP involved
@@ -63,7 +63,7 @@ npx -y @outputty/tasks-mcp ready --project /abs/repo
 ```ts
 // 3. Library — embed the core (or the MCP layer) in your own program
 import { makeService, ready } from "@outputty/tasks-mcp";
-import { createApp, runStdio } from "@outputty/tasks-mcp/mcp";
+import { createHttpServer, runStdio } from "@outputty/tasks-mcp/mcp";
 
 const service = makeService({ projects: false });
 const tasks = await service.list({ project: "/abs/repo" });
@@ -73,8 +73,9 @@ console.log(ready(tasks).map((t) => t.id));
 ## What the tools do
 
 Every tool takes `project` — the absolute path to the repo it acts on — because the server has no working
-directory of its own. The first write to a repo it hasn't seen provisions the Projects board
-automatically (when the board sync is enabled).
+directory of its own. The first call that touches GitHub for a project (any write, or `sync`) runs the
+provider's init once: repo and credentials are resolved and the Projects board is found or created (when
+the board sync is enabled). Reads are cache-only and never touch the network.
 
 ```jsonc
 // add_task — a typed call, so a multi-line brief needs no shell quoting
@@ -96,7 +97,8 @@ body (no labels), and adds a card to the board.
 ```jsonc
 // list_ready — the graph engine over the cache
 { "project": "/abs/path/to/repo" }
-// -> { "ids": ["schema"], "tasks": [ { "id": "schema", "status": "open", "tier": 3, "qa": "subagent" } ] }
+// -> { "ids": ["schema"],
+//      "tasks": [ { "id": "schema", "status": "open", "deps": [], "summary": "Design the schema", "tier": 3, "qa": "subagent" } ] }
 ```
 
 `schema` is ready and `api` is not, because `api` waits on `schema`. Close `schema` (`close_task`) and
@@ -118,12 +120,12 @@ body (no labels), and adds a card to the board.
 ```
    bin/cli.ts   ── CLI subcommands  ·  MCP server (stdio / http)
         │
-   src/mcp/     ── the MCP WRAPPER: tools · JSON-RPC protocol · stdio + hono transports
+   src/mcp/     ── the MCP WRAPPER (@modelcontextprotocol/sdk): tools · stdio + streamable-http
         │  wraps ↓ ; never the other way round
    src/core/    ── the CORE (business logic): service · cache · graph engine · providers
         │  each call carries { project, branch? }
         ▼
-   CACHE  <os cache dir>/<repo>.yaml   ── the working task model; disposable, rebuilt from the provider
+   CACHE  <os cache dir>/<repo>-<hash>.yaml ── the working task model; disposable, rebuilt from the provider
         │  the pure graph engine (ready / schedule / planning) runs over this
         ▼
    Provider (one active, chosen by config)
@@ -138,11 +140,11 @@ must land there); the board is best-effort (a hiccup is a warning, never a lost 
 
 The task ↔ issue mapping (all GraphQL, no labels):
 
-| Task field                                                              | Issue home                                                     |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `id`                                                                    | leads the hidden YAML block in the issue body (the stable key) |
-| `title` / `status`                                                      | issue title / open ↔ closed                                    |
-| `deps` `scope` `brief` `contract` `tier` `qa` `spec` `stage` `attempts` | the rest of that hidden block                                  |
+| Task field                                                                                       | Issue home                                                     |
+| ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| `id`                                                                                             | leads the hidden YAML block in the issue body (the stable key) |
+| `title` / `status`                                                                               | issue title / open ↔ closed                                    |
+| `kind` `deps` `scope` `brief` `contract` `tier` `qa` `spec` `stage` `attempts` `discovered_from` | the rest of that hidden block                                  |
 
 An issue is "managed" iff its body carries that block. Prose a human writes below it is preserved across
 updates.
@@ -161,11 +163,10 @@ Turn it off with `--no-projects`, or aim it at an existing board with `--project
 
 ## The MCP transport
 
-A tools-only server sends no server-initiated messages. Over stdio it is newline-delimited JSON-RPC; over
-HTTP the Streamable HTTP transport collapses to one JSON-RPC message in, one JSON reply out — no SSE
-stream, no session id. Both handle `initialize`, `tools/list`, and `tools/call` (plus `ping` and the
-`initialized` notification). The whole server leans on just `hono` + `octokit` (plus `yaml` and
-`@hono/node-server`).
+The protocol is the official [`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk):
+`StdioServerTransport` for the spawned case, and stateless Streamable HTTP (JSON responses, no session
+ids) served from plain `node:http` for `--http`. Each tool declares zod input and output schemas, so
+results carry `structuredContent`. Runtime deps: the SDK, `octokit`, `ts-pattern`, `yaml`, and `zod`.
 
 ## Config
 
@@ -181,7 +182,7 @@ Everything is a CLI flag — pass them in `.mcp.json`'s `args` (e.g. `["-y", "@o
 | `--board <title>`      | board title to find/create           | `Tasks`      |
 | `--cache-dir <dir>`    | where task caches live               | OS cache dir |
 
-A per-project `.claude/tasks-mcp.config.yaml` (keys: `provider`, `projects`, `projectNumber`, `board`)
+A per-project `.claude/tasks-mcp.config.yaml` (or `.json`; keys: `provider`, `projects`, `projectNumber`, `board`)
 overrides the flags for one repo. Credentials come from `GITHUB_TOKEN` / `GH_TOKEN`, else `gh auth token`.
 
 ## Sync semantics
@@ -207,13 +208,16 @@ overrides the flags for one repo. Credentials come from `GITHUB_TOKEN` / `GH_TOK
 
 ```bash
 npm install
-npm test             # vitest: graph engine · GitHub provider (nock) · cache service · MCP protocol
-npm run build        # tsup -> dist/ (cli, index, mcp)
+npm run check        # THE build, exactly what CI runs: oxfmt check -> oxlint -> tsc (TS7) -> tests -> tsdown
+npm test             # vitest alone: graph engine · GitHub provider (nock) · cache service · MCP server
+npm run build        # tsdown alone -> dist/ (cli, index, mcp)
 ```
+
+Developing needs **Node ≥ 22** (the tsdown toolchain); the published package itself still runs on 18.
 
 The GitHub provider is tested with **nock** — the tests drive the real Octokit client, and nock
 intercepts the HTTP so the actual queries and responses are exercised without a network or credentials.
-The service, cache, and protocol tests run against an in-memory fake provider.
+The service and MCP tests run the same way — the MCP suite drives the SDK client over real HTTP against the real server, end to end over the real provider, nock at the network boundary.
 
 ## Releasing
 
