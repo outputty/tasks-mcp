@@ -10,7 +10,8 @@
 //   - DELETIONS NEVER PROPAGATE: a task can close everywhere, but only vanishes by hand.
 
 import type { ProjectContext, Task } from "../types.ts";
-import { ConfigProvider, type ServerOptions } from "../config.ts";
+import type { ServerOptions } from "../types.ts";
+import { ConfigProvider } from "./config.ts";
 import { FileProvider } from "./file.ts";
 import { GitHubProvider } from "./github.ts";
 

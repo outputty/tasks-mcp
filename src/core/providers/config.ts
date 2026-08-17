@@ -1,4 +1,5 @@
-// Configuration — its own provider class. The server carries no user preferences of its own: they are
+// The configuration provider — a provider like the rest: one class in one file, beside the layers it
+// configures. The server carries no user preferences of its own: they are
 // configured CENTRALLY through the MCP tools (`get_config` / `set_config`) and stored next to the task
 // caches — one global spec that applies to every repo, overridable per repo. Precedence, weakest
 // first: defaults < CLI flags < global spec < per-repo override. Every file is PARSED with zod, not
@@ -10,17 +11,8 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { parse, stringify } from "yaml";
 import { z } from "zod";
-import type { ProjectConfig } from "./types.ts";
-import { LABEL_FIELD_NAMES } from "./types.ts";
-
-/** Server-wide options, set once from CLI args — deployment knobs, not user preferences. */
-export type ServerOptions = Pick<
-  ProjectConfig,
-  "provider" | "projects" | "projectNumber" | "board"
-> & {
-  /** Where the file layer and the config files live. Defaults to the OS cache dir; never the repo. */
-  cacheDir?: string;
-};
+import type { ProjectConfig, ServerOptions } from "../types.ts";
+import { LABEL_FIELD_NAMES } from "../types.ts";
 
 /** The config schema — the ONE definition of what may be configured; the MCP tools reuse its shape. */
 export const ProjectConfigSchema = z

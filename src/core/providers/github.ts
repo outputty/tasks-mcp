@@ -23,7 +23,7 @@ import { match } from "ts-pattern";
 import { parse, stringify } from "yaml";
 import type { LabelFieldName, ProjectConfig, ProjectContext, RepoRef, Task } from "../types.ts";
 import { LABEL_FIELD_NAMES, TIERS, QA_LEVELS, SPEC_STATES, PRIORITIES } from "../types.ts";
-import { ConfigProvider } from "../config.ts";
+import { ConfigProvider } from "./config.ts";
 import type { Provider, ProviderState } from "./provider.ts";
 import { withDefaults } from "../graph.ts";
 

@@ -4,9 +4,10 @@
 to npm. It is split so the MCP layer wraps the core, never the reverse:
 
 - `src/core/` — the business logic: `service` (the `TaskStack` orchestrator), `graph` (pure engine on
-  graphology: ready/schedule/prereqs/blockers), `config` (zod-parsed), and `providers/` — a STACK of
-  layers behind one `Provider` seam: `file.ts` on top (the local store all reads hit), `github.ts`
-  beneath it (Octokit, GraphQL only). Exported as the library (`.`).
+  graphology: ready/schedule/prereqs/blockers), and `providers/` — the task layers behind one
+  `Provider` seam (`file.ts` on top, the local store all reads hit; `github.ts` beneath it — Octokit,
+  GraphQL only) plus `config.ts`, the ConfigProvider (zod-parsed, global spec + per-repo override).
+  Exported as the library (`.`).
 - `src/mcp/` — the wrapper on the official `@modelcontextprotocol/sdk`: the tool surface (`server`)
   and the `stdio` + `http` transports. Exported as `./mcp`.
 - `bin/cli.ts` — the entry, on commander (user ruling: a real CLI library, never homebrew argv

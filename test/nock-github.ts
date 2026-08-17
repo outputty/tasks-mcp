@@ -5,7 +5,8 @@
 import nock from "nock";
 import { Octokit } from "octokit";
 import { GitHubProvider } from "../src/core/providers/github.ts";
-import { ConfigProvider, type ServerOptions } from "../src/core/config.ts";
+import type { ServerOptions } from "../src/core/types.ts";
+import { ConfigProvider } from "../src/core/providers/config.ts";
 
 export interface FakeIssue {
   id: string;

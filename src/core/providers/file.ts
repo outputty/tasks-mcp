@@ -7,8 +7,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { parse, stringify } from "yaml";
 import type { ProjectContext, Task } from "../types.ts";
-import type { ServerOptions } from "../config.ts";
-import { defaultCacheDir, projectSlug } from "../config.ts";
+import type { ServerOptions } from "../types.ts";
+import { defaultCacheDir, projectSlug } from "./config.ts";
 import { withDefaults } from "../graph.ts";
 import type { Provider, ProviderState } from "./provider.ts";
 

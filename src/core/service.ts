@@ -8,7 +8,8 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ProjectConfig, ProjectContext, Task } from "./types.ts";
 import type { Provider, ProviderState } from "./providers/provider.ts";
-import { ConfigProvider, type ConfigSources, type ServerOptions } from "./config.ts";
+import type { ServerOptions } from "./types.ts";
+import { ConfigProvider, type ConfigSources } from "./providers/config.ts";
 import { buildStack } from "./providers/provider.ts";
 import { withDefaults } from "./graph.ts";
 

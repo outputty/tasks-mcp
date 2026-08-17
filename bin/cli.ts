@@ -9,7 +9,7 @@ import { runStdio } from "../src/mcp/stdio.ts";
 import { createHttpServer } from "../src/mcp/http.ts";
 import { SERVER_INFO } from "../src/mcp/server.ts";
 import { makeService } from "../src/core/service.ts";
-import type { ServerOptions } from "../src/core/config.ts";
+import type { ServerOptions } from "../src/core/types.ts";
 import type { ProjectContext } from "../src/core/types.ts";
 import {
   ready,

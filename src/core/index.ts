@@ -10,11 +10,11 @@ export {
 } from "./service.ts";
 export {
   ConfigProvider,
+  ProjectConfigSchema,
   defaultCacheDir,
   projectSlug,
   type ConfigSources,
-  type ServerOptions,
-} from "./config.ts";
+} from "./providers/config.ts";
 export {
   ready,
   planning,
@@ -33,6 +33,7 @@ export type {
   Task,
   ProjectContext,
   ProjectConfig,
+  ServerOptions,
   QaLevel,
   SpecState,
   Priority,

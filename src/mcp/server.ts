@@ -10,7 +10,7 @@ import pkg from "../../package.json";
 import type { TaskService } from "../core/service.ts";
 import type { ProjectContext, Task } from "../core/types.ts";
 import { QA_LEVELS, SPEC_STATES, PRIORITIES } from "../core/types.ts";
-import { ProjectConfigSchema } from "../core/config.ts";
+import { ProjectConfigSchema } from "../core/providers/config.ts";
 import {
   ready,
   planning,

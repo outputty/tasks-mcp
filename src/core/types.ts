@@ -61,6 +61,15 @@ export interface RepoRef {
   repo: string;
 }
 
+/** Server-wide options, set once from CLI args — deployment knobs, not user preferences. */
+export type ServerOptions = Pick<
+  ProjectConfig,
+  "provider" | "projects" | "projectNumber" | "board"
+> & {
+  /** Where the file layer and the config files live. Defaults to the OS cache dir; never the repo. */
+  cacheDir?: string;
+};
+
 /** A field a task can wear as a `field:value` GitHub label. */
 export type LabelFieldName = (typeof LABEL_FIELD_NAMES)[number];
 
