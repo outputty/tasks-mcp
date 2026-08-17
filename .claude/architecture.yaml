@@ -1,0 +1,397 @@
+# architecture.yaml — the coverage index: one record per feature/knob/limitation/pattern.
+# Depth lives in .claude/architecture/<topic>.md — self-contained, Mermaid INLINE (no .mmd files).
+target_program: |
+  Register the server, then ask the graph its two questions. Both outputs below are REAL
+  OBSERVED (2026-08-17, v0.8.0, the canonical graph from examples.yaml):
+
+      // .mcp.json
+      { "mcpServers": { "tasks": { "command": "npx", "args": ["-y", "@outputty/tasks-mcp"] } } }
+
+      // tool: prereqs
+      { "project": "/abs/repo", "id": "deploy" }
+
+  Input:
+
+      { "project": "/abs/repo", "id": "deploy" }
+
+  Output:
+
+      { "id": "deploy", "startable": false, "order": [["infra", "schema"], ["api"]],
+        "tasks": [
+          { "id": "infra", "status": "open", "deps": [], "summary": "Provision infra", "tier": 3, "qa": "subagent", "priority": "normal" },
+          { "id": "schema", "status": "open", "deps": [], "summary": "Design the schema", "tier": 3, "qa": "subagent", "priority": "normal" },
+          { "id": "api", "status": "open", "deps": ["schema"], "summary": "Build the API", "tier": 2, "qa": "inline", "priority": "high" }
+        ] }
+
+  Every write lands on GitHub too: one issue per task, field:value labels, a card on the
+  Tasks board (observed live: issue #13 of outputty/tasks-mcp, board "Tasks" number 2).
+features:
+  - name: provider stack
+    kind: feature
+    what: |
+      Tasks live in an ordered list of layers; reads come from the top, truth comes from the
+      bottom, and sync makes every layer agree.
+    how: |
+      TaskStack orchestrates Provider[] (buildStack: [FileProvider, <remote>]). Three rules:
+      deepest wins a disagreement; absence is not a claim (missing tasks are pushed in, never
+      deleted); deletions never propagate. Adding a layer is a free migration.
+    doc: architecture/provider-stack.md
+    example: "sync"
+    related: [file layer, GitHub layer, first-wins duplicates, corrupt-file quarantine, orchestrator/executor]
+  - name: file layer
+    kind: feature
+    what: |
+      The top layer: one YAML file per project under the OS cache dir. Every read is answered
+      here — instant, offline, disposable.
+    how: |
+      FileProvider writes <cacheDir>/<basename>-<hash>.yaml, never inside the repo. A deleted
+      or corrupt file rebuilds from the layers below on the next sync. Legacy refs: keys are
+      dropped on read.
+    doc: architecture/provider-stack.md
+    example: "ready-and-planning"
+    related: [provider stack, corrupt-file quarantine]
+  - name: GitHub layer
+    kind: feature
+    what: |
+      One issue per task, a card on a Projects v2 board, all over GraphQL; the layer keeps
+      GitHub's ids to itself.
+    how: |
+      GitHubProvider wraps its own Octokit (constructor-injected). A private index (task id ->
+      issue/card node ids) is built from one listing pass, so a same-id upsert can never
+      duplicate an issue. Issues are primary; the board is best-effort.
+    doc: architecture/provider-stack.md
+    example: "add-task"
+    related: [provider stack, body block, field:value labels, kanban board, GraphQL-only, first-wins duplicates]
+  - name: corrupt-file quarantine
+    kind: feature
+    what: |
+      An unparseable task file never takes reads down; it is set aside and rebuilt.
+    how: |
+      FileProvider renames the file .corrupt and continues empty; the next sync rebuilds it
+      from the layers below — safe because absence is not a claim and the remote is deeper.
+      Empty and header-only files read as empty, not corrupt.
+    doc: architecture/provider-stack.md
+    example: ""
+    related: [file layer, provider stack]
+  - name: first-wins duplicates
+    kind: feature
+    what: |
+      Two issues claiming one task id resolve deterministically to the oldest; nothing is
+      auto-deleted.
+    how: |
+      collate() owns the rule once for both the pull map and the upsert index. The collision
+      is logged, flagged per task (ProviderState.conflict), and counted in SyncResult.conflicts.
+      Merging or closing the newer duplicate stays a human call.
+    doc: architecture/provider-stack.md
+    example: ""
+    related: [GitHub layer, provider stack]
+  - name: init-once
+    kind: pattern
+    what: |
+      Everything remote resolves once per project, in an explicit init — never lazily inside a
+      task call.
+    how: |
+      No async constructors: each provider has async init(ctx) (credentials, repo from origin,
+      repository node id, labels, board find/create). Reads never trigger it; the first write
+      or sync does. A failed init is forgotten so it retries.
+    doc: architecture/provider-stack.md
+    example: ""
+    related: [GitHub layer, one class per provider]
+  - name: orchestrator/executor
+    kind: pattern
+    what: |
+      Public methods sequence executor calls and know nothing of their internals; errors
+      bubble except where business logic demands a fallback.
+    how: |
+      TaskStack.create = issue then board; sync = pull, merge, push. Executors (createIssue,
+      syncToBoard, mergeRemote) own the specifics. The one catch: the board is best-effort, so
+      board errors warn at the orchestration seam while issue errors always propagate.
+    doc: architecture/provider-stack.md
+    example: ""
+    related: [provider stack, kanban board]
+  - name: one class per provider
+    kind: pattern
+    what: |
+      A provider is ONE class in ONE file wrapping its own API client — no satellite modules.
+    how: |
+      GitHubProvider holds its Octokit; the client is the sole injection point (constructor
+      param, defaulted for production, passed by tests). ConfigProvider follows the same shape
+      in providers/config.ts. All imports top-level — no lazy import().
+    doc: architecture/provider-stack.md
+    example: ""
+    related: [GitHub layer, central config, init-once]
+  - name: GraphQL-only
+    kind: pattern
+    what: |
+      The GitHub layer speaks one protocol with one kind of handle (node ids) end to end.
+    how: |
+      User ruling 2026-08-17. Projects v2 is GraphQL-only anyway (REST cannot create a board,
+      link one, or list a repo's boards — re-verify against GitHub's REST docs before ever
+      porting); issues use GraphQL createIssue/updateIssue/closeIssue/reopenIssue and a
+      paginated issues query.
+    doc: architecture/provider-stack.md
+    example: ""
+    related: [GitHub layer, kanban board]
+  - name: body block
+    kind: feature
+    what: |
+      The hidden YAML block leading a managed issue's body carries what labels cannot; human
+      prose below it survives every update.
+    how: |
+      <!-- outputty:task ... --> with id first (the stable key), then deps, scope, brief,
+      contract, attempts, discovered_from. The block IS the management marker. Labels win over
+      a legacy block still carrying scalar fields.
+    doc: architecture/github-mapping.md
+    example: "add-task"
+    related: [GitHub layer, field:value labels, adoption]
+  - name: field:value labels
+    kind: feature
+    what: |
+      A task's execution properties are visible, filterable, HAND-EDITABLE GitHub labels that
+      sync back.
+    how: |
+      kind/tier/qa/spec/stage/priority become one label each (tier:2), created on demand,
+      color-coded per field. Foreign labels are never touched; junk values (tier:banana) parse
+      to undefined and are ignored. labelFields config narrows the set; labels:false turns it
+      off.
+    doc: architecture/github-mapping.md
+    example: "add-task"
+    related: [body block, central config, label mutations need a preview header]
+  - name: kanban board
+    kind: feature
+    what: |
+      Each task-issue gets a card on a Projects v2 board; the Status column tracks the task
+      and flows back.
+    how: |
+      Find-or-create a board named "Tasks" (or projectNumber targets an existing one;
+      --no-projects turns it off). open -> Todo, done -> Done; a card dragged to Done marks
+      the task done on the next sync. Best-effort: board errors warn, never fail the write.
+    doc: architecture/github-mapping.md
+    example: ""
+    related: [GitHub layer, project scope requirement, orchestrator/executor]
+  - name: adoption
+    kind: feature
+    what: |
+      Issues humans open by hand become tracked tasks instead of invisible strangers.
+    how: |
+      sync imports any repo issue without the block as task gh-<number> and stamps its body,
+      preserving the human's prose below the block. From then on it round-trips like any task.
+    doc: architecture/github-mapping.md
+    example: ""
+    related: [body block, provider stack]
+  - name: project scope requirement
+    kind: limitation
+    what: |
+      The board needs the token's project scope; without it tasks still land as issues and the
+      board is skipped with a warning.
+    how: |
+      gh auth refresh -s project (one-time). Verified live 2026-08-17 (9f28db0). Probe: run a
+      write with a token lacking the scope and watch for the warning.
+    doc: architecture/github-mapping.md
+    example: ""
+    related: [kanban board]
+  - name: label mutations need a preview header
+    kind: limitation
+    what: |
+      GitHub's createLabel GraphQL mutation still sits behind an API preview.
+    how: |
+      Label mutations send accept: application/vnd.github.bane-preview+json
+      (src/core/providers/github.ts:427). Probe: drop the header and createLabel fails.
+      Re-verify against GitHub's changelog before removing.
+    doc: architecture/github-mapping.md
+    example: ""
+    related: [field:value labels]
+  - name: graph engine
+    kind: feature
+    what: |
+      Every graph question is a pure function of Task[] — no I/O, no provider, instantly
+      testable.
+    how: |
+      src/core/graph.ts. Reachability (prereqs, blockers) runs on graphology; traversal prunes
+      at done tasks because a finished task already satisfied its side. schedule keeps its
+      15-line peel because its error contract (naming the cycle) is API.
+    doc: architecture/graph-engine.md
+    example: "schedule"
+    related: [prereqs, blockers, ready / planning / schedule]
+  - name: prereqs
+    kind: feature
+    what: |
+      "I want to start on X — what has to be done first?", answered as dependency-ordered
+      layers.
+    how: |
+      Walks X's transitive open deps, layers them (a layer's tasks have no undone deps outside
+      earlier layers), returns startable, order, and the full task records. Done deps end the
+      chain and never appear.
+    doc: architecture/graph-engine.md
+    example: "prereqs"
+    related: [graph engine, blockers]
+  - name: blockers
+    kind: feature
+    what: |
+      "What holds up the most work?", ranked by transitive downstream impact.
+    how: |
+      For each open task: blocks (count of open tasks transitively waiting), blocked (their
+      ids), highPriorityBlocked (the high-priority ones), unblockedBy (the dependency-ordered
+      path to make it workable; empty means work it now). One graph, computed once.
+    doc: architecture/graph-engine.md
+    example: "blockers"
+    related: [graph engine, prereqs]
+  - name: ready / planning / schedule
+    kind: feature
+    what: |
+      The working set: what can be built now, what planning still owns, and the whole plan in
+      layers.
+    how: |
+      ready = open + spec settled + every dep done. planning = spec drafting or replan.
+      schedule = layered peel of the open graph; a cycle is a loud error naming its members.
+    doc: architecture/graph-engine.md
+    example: "ready-and-planning"
+    related: [graph engine]
+  - name: MCP server
+    kind: feature
+    what: |
+      The primary surface: 12 typed tools on the official SDK, over stdio (default) or
+      stateless HTTP.
+    how: |
+      @modelcontextprotocol/sdk McpServer; every tool declares zod input AND output schemas
+      and returns structuredContent. Transports: StdioServerTransport, and Streamable HTTP
+      (JSON responses) on plain node:http — non-POST /mcp answered 405 by the server itself.
+      SERVER_INFO reads name/version from package.json at build time.
+    doc: architecture/surfaces.md
+    example: "mcp-registration"
+    related: [CLI, library, branch parameter unused]
+  - name: CLI
+    kind: feature
+    what: |
+      The same tracker as shell commands for humans and scripts; no MCP involved.
+    how: |
+      bin/cli.ts on commander: list/ready/planning/schedule/prereqs/blockers/get/add/close/
+      config/sync; with no command it runs the MCP server (--http switches transport). No
+      amend subcommand; config is read-only (set via set_config).
+    doc: architecture/surfaces.md
+    example: "ready-and-planning"
+    related: [MCP server, library]
+  - name: library
+    kind: feature
+    what: |
+      The core is importable; the MCP layer is a wrapper, never a requirement.
+    how: |
+      "." exports makeService/TaskStack, FileProvider/GitHubProvider/buildStack, the pure
+      graph functions, ConfigProvider + ProjectConfigSchema, and the types; "./mcp" exports
+      createMcpServer/createHttpServer/runStdio.
+    doc: architecture/surfaces.md
+    example: "library-blockers"
+    related: [MCP server, CLI, graph engine]
+  - name: branch parameter unused
+    kind: limitation
+    what: |
+      Every tool accepts branch; nothing reads it — declared at the initial import, never
+      implemented.
+    how: |
+      ProjectContext.branch (src/core/types.ts:55) is threaded through every schema and read
+      by no provider in any of the 16 commits. Tracked as task unused-branch-param (spec:
+      drafting — implement or remove). Probe: rg '\.branch' src/.
+    doc: architecture/surfaces.md
+    example: ""
+    related: [MCP server]
+  - name: central config
+    kind: feature
+    what: |
+      Preferences are configured through the server and stored beside the caches — never by
+      files inside the user's repo.
+    how: |
+      ConfigProvider (one class, providers/config.ts): a global spec (<cacheDir>/config.yaml)
+      overridable per repo (<cacheDir>/<slug>.config.yaml), written only via set_config,
+      zod-parsed (unknown keys fail loudly, naming the file). Precedence: defaults < CLI flags
+      < global < per-repo. Read live: a set_config affects the very next write.
+    doc: architecture/config.md
+    example: ""
+    related: [deployment flags, field:value labels, one class per provider]
+  - name: deployment flags
+    kind: knob
+    what: |
+      How the server is deployed, as CLI flags in the .mcp.json args — distinct from user
+      preferences.
+    how: |
+      --http/--port (transport), --provider (default github), --project-number, --no-projects,
+      --board (default Tasks), --cache-dir (default OS cache dir). Credentials come from
+      GITHUB_TOKEN / GH_TOKEN, else gh auth token.
+    doc: architecture/config.md
+    example: "mcp-registration"
+    related: [central config]
+  - name: oxc toolchain with working-set caps
+    kind: pattern
+    what: |
+      One toolchain end to end, with complexity budgets the build enforces.
+    how: |
+      oxfmt (format) -> oxlint (complexity <= 7, <= 24 lines/function, nesting <= 3,
+      no-else-return) -> tsc (TypeScript 7 native) -> vitest -> tsdown (Rolldown + oxc).
+      npm run check chains exactly what CI runs. Fix violations by decomposing; a deviation is
+      a targeted disable comment with a written why.
+    doc: architecture/toolchain.md
+    example: ""
+    related: [e2e tests nock at the wire, runtime portability]
+  - name: e2e tests nock at the wire
+    kind: pattern
+    what: |
+      Tests drive the real stack — provider, service, protocol, transport — and fake only the
+      wire.
+    how: |
+      nock answers api.github.com (GraphQL); test repos are real git init temp dirs; the MCP
+      suite runs the official SDK client over real HTTP. No in-memory fake providers — the one
+      exception is MockProvider as a controllable deepest layer in the stack suite, and
+      graph.ts keeps pure unit tests.
+    doc: architecture/toolchain.md
+    example: ""
+    related: [oxc toolchain with working-set caps, runtime portability, provider stack]
+  - name: runtime portability
+    kind: limitation
+    what: |
+      The package runs on Node >= 18 and bun, but developing needs Node >= 22 and tests must
+      run on Node.
+    how: |
+      No Bun-only APIs in src//bin/ (yaml, node:crypto, node:child_process, node:http, process
+      streams). nock cannot intercept Bun's fetch — npm test, never bun test. tsdown's config
+      loading needs unrun on Nodes without native type stripping; CI runs Node 24. Probe: bun
+      test fails in the provider suites.
+    doc: architecture/toolchain.md
+    example: ""
+    related: [e2e tests nock at the wire, oxc toolchain with working-set caps]
+  - name: publish pipeline
+    kind: feature
+    what: |
+      Pushing code never publishes; publishing a GitHub Release does — tokenless, with
+      provenance.
+    how: |
+      ci.yml runs npm run check on push/PR. publish.yml fires on release:published, guards
+      tag==version and version-is-new, then npm publish via OIDC Trusted Publishing (no stored
+      token). Human rule in CLAUDE.md: always ask before releasing.
+    doc: architecture/toolchain.md
+    example: ""
+    related: [oxc toolchain with working-set caps]
+protocols:
+  - protocol: "TaskStack -> Provider"
+    from: TaskStack
+    to: every layer (FileProvider, GitHubProvider, ...)
+    in: "init(ctx) once per project; pull(ctx); upsert(ctx, task) / upsertMany(ctx, tasks)"
+    out: "pull returns Map<taskId, ProviderState> ({ task, reconcile?, conflict? }); upsert returns void — handles stay private"
+  - protocol: "MCP client -> server"
+    from: any MCP client (Claude Code, ...)
+    to: createMcpServer over stdio or Streamable HTTP
+    in: "tool name + zod-validated args, always { project } (abs repo path)"
+    out: "structuredContent matching the tool's zod output schema"
+  - protocol: "CLI -> core"
+    from: bin/cli.ts (commander)
+    to: TaskStack + graph functions
+    in: "subcommand + flags (add/close/sync write; the rest read)"
+    out: "JSON on stdout (compact table forms for prereqs/blockers)"
+  - protocol: "GitHubProvider -> GitHub"
+    from: GitHubProvider (its own Octokit)
+    to: api.github.com/graphql
+    in: "GraphQL queries/mutations only; node-id handles; label mutations wear the bane-preview accept header"
+    out: "issues + board cards; pull rebuilds the full task from body block + labels + state"
+  - protocol: "Release -> npm"
+    from: gh release create vX.Y.Z (human, after an explicit yes)
+    to: publish.yml -> npmjs
+    in: "a published GitHub Release whose tag equals package.json version"
+    out: "@outputty/tasks-mcp@X.Y.Z on npm, OIDC-signed provenance attached"

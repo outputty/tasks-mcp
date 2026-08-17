@@ -4,8 +4,27 @@ core_objective: |
   (product, roadmap, architecture, tasks via the tasks MCP server, lessons, examples) from what
   the repo already knows, verify every shipped claim by a run, then confirm the gaps with a
   targeted grilling. No planning, no building.
-decisions: []
-not_yet_specified: []
+decisions:
+  - question: What did the user check as scan depth?
+    answer: Deep commit + diff scan only (docs/docstrings/messages boxes left unchecked); the diff scan ran on outputty-reviewer, messages read inline.
+    link: .claude/trails/chore/bootstrap.trail.yaml
+  - question: How does one day of history become roadmap rows?
+    answer: One row per npm-version-scale target, five rows, all shipped, each with a writeup doc.
+    link: .claude/roadmap.yaml
+  - question: Where do bootstrap-found debt items live?
+    answer: Filed live through the tracker itself (dogfooding) — eight tasks, issues 13-20 on outputty/tasks-mcp, board "Tasks" number 2 provisioned by the first add.
+    link: https://github.com/outputty/tasks-mcp/issues
+  - question: How are shipped claims verified?
+    answer: By runs — npm run check green (53 tests); CLI reads on a seeded canonical graph via the public FileProvider API; the MCP server driven over real HTTP by the SDK client; a live add/sync round-trip on this repo; npm registry queried for the published versions.
+    link: .claude/examples.yaml
+  - question: oxfmt rejects the plugin-managed CLAUDE.md block and .claude/ files — format or exclude?
+    answer: Exclude via .prettierignore (oxfmt reads it): the block is replaced byte-for-byte by init re-runs, so formatting it would make every re-run fail CI.
+    link: .prettierignore
+not_yet_specified:
+  - item: Is a second remote layer (Linear) a planned roadmap row or just a types comment?
+    reason: types.ts says 'A future value is "linear"' and two commits cite it as a design goal, but no row exists — user ruling needed.
+  - item: North-star pitch and wedge wording — bootstrap's reconstruction, unconfirmed.
+    reason: The pitch was derived from README + history, not from the user's own framing.
 out_of_scope:
   - item: New features, refactors, or fixes to the codebase itself
     reason: Bootstrap only reconstructs memory of what exists; task-shaped findings are filed as tasks, not built.

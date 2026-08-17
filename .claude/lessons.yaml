@@ -1,0 +1,122 @@
+# lessons.yaml - the append-only archive: discoveries, bug fixes, user directions, experiments.
+# Never features. Written at the merge step, oldest first.
+- title: The id-label died for the body block; issues went all-GraphQL
+  kind: direction
+  files: [src/core/providers/github.ts]
+  version: 0.2.0
+  body: |
+    Beginning: every managed issue wore an id label, and issue CRUD mixed REST and GraphQL.
+    Problem: the label was a second key to keep consistent, and creating one needed label
+    node-ids before any issue could exist. End: the task id leads the hidden YAML body block
+    (the block IS the management marker), and issues use GraphQL createIssue/updateIssue/
+    closeIssue/reopenIssue with node-id handles end to end. Cost discovered later: without a
+    label, sync could no longer see hand-opened issues — fixed in 0.3.0 by adoption
+    (import as gh-<number>, stamp the block). Commits 60820a3, 3d8a5b3.
+- title: The committed cache-as-authority lasted two versions
+  kind: experiment
+  files: [src/core/providers/file.ts]
+  version: 0.4.0
+  body: |
+    Beginning (0.2.0, d000f7b): .claude/tasks.cache.yaml was committed to the user's repo as
+    THE authority and the only home of the dep graph - the reasoning was that a backend like
+    Issues cannot store deps, so the repo must. Problem: an authoritative file in the user's
+    repo is a merge-conflict magnet and couples every clone to tracker state. End (0.4.0,
+    1dac343): deps moved into the issue body block, the cache moved to the OS cache dir and
+    became disposable - sync reconstructs the full task from the issues. The stack rules
+    (0.7.0) then generalized this: the file is just the top layer, and absence is not a claim.
+- title: nock cannot intercept Bun's fetch - the runtime moved to Node
+  kind: discovery
+  files: [docs/development.md, package.json]
+  version: 0.5.0
+  body: |
+    Beginning: a bun-only server (Bun.YAML, Bun.serve, Bun.hash, Bun.spawnSync). Problem: the
+    chosen test discipline - e2e through the real Octokit with the wire faked - needs nock,
+    and nock can only intercept Node's fetch. End (351b2e8): Node-native portable APIs (yaml,
+    node:crypto, node:child_process, process streams); runs under Node >= 18 AND bun, but
+    `npm test` must run vitest on Node, never `bun test`. The standing rule "runtime-portable,
+    no Bun-only APIs in src/ or bin/" comes from this.
+- title: Publish trigger pivoted twice before settling on the Release event
+  kind: experiment
+  files: [.github/workflows/publish.yml]
+  version: 0.5.0
+  body: |
+    Beginning: publish on GitHub Release (351b2e8) with a stored NPM_TOKEN. Then: OIDC Trusted
+    Publishing replaced the token (b50b486); publish moved to pushed version tags (88d72c9);
+    and moved BACK to the Release event (7e72465) - a tag push proved too easy to fire by
+    accident, and a Release is a deliberate, documented act. End state: pushing code never
+    publishes; only publishing a Release does, guarded by tag==version and version-is-new.
+    CLAUDE.md adds the human rule: ask before releasing, never publish unprompted (73a4275).
+- title: ts-match is dead; ts-pattern is the maintained standard
+  kind: discovery
+  files: [CLAUDE.md]
+  version: 0.6.0
+  body: |
+    The user asked for "ts-match". That npm package is unmaintained - last publish 2022,
+    ~460 downloads/week - so ts-pattern (~5.4M/week) fills the role, recorded in CLAUDE.md so
+    the substitution is never re-litigated. Pattern: when a requested dependency is abandoned,
+    substitute the maintained standard and write the why beside the rule.
+- title: The intermittent MCP-test hang was two half-open connections
+  kind: bugfix
+  files: [src/mcp/http.ts]
+  version: 0.6.0
+  body: |
+    Beginning: the dependency test twice timed out at exactly 5s (once locally, once in CI) -
+    an indefinite hang, not slowness. Problem, two paths: the SDK transport held a GET /mcp
+    open as an SSE stream, and server.close waited on a pooled keep-alive socket the client
+    transport did not own. End (in 0956e3e): the stateless JSON server answers non-POST /mcp
+    with 405 + Allow itself, and test cleanup calls closeAllConnections. A test that times out
+    at exactly its limit is hanging, not slow - look for a held socket.
+- title: CI toolchain needs Node 24 while the package still runs on 18
+  kind: discovery
+  files: [.github/workflows/ci.yml, docs/development.md]
+  version: 0.6.0
+  body: |
+    tsdown loads its TS config via the optional unrun peer on Nodes without native type
+    stripping; unrun needs Promise.withResolvers, which Node 20 (EOL) lacks. CI runs Node 24.
+    The published package's engines stay >= 18 - the toolchain requirement is build-time only.
+    Local Node 26 strips types natively and never shows the problem, which is why CI caught it.
+- title: Remote handles left the shared model
+  kind: direction
+  files: [src/core/providers/provider.ts]
+  version: 0.7.0
+  body: |
+    Beginning: a refs map (task id -> issue/card ids) traveled through the shared cache model.
+    Problem: every layer's private bookkeeping leaked into every other layer's data, and a
+    same-id re-add could duplicate an issue. End (382939c): each layer owns its handles in a
+    private index built from one listing pass; the seam shrank to init/pull/upsert;
+    create-vs-update became the layer's own call. Legacy cache files with a refs key still
+    load; the key is dropped on read.
+- title: Duplicate task ids resolved last-wins silently; now first-wins, counted
+  kind: bugfix
+  files: [src/core/providers/github.ts]
+  version: 0.8.0
+  body: |
+    Beginning: when two issues claimed one task id (a race, or a hand-written block), the
+    NEWEST silently shadowed the record in both the pull map and the upsert index, and
+    SyncResult.conflicts was hardwired 0. End (in 4c11121): every read and write resolves
+    deterministically to the OLDEST issue (first-wins collate(), owned once), the collision is
+    logged and flagged per-task, and conflicts reports the real count. Nothing is auto-deleted;
+    merging the duplicate stays a human call.
+- title: Two documented caveats dissolved by architecture, not by fixes
+  kind: discovery
+  files: [README.md]
+  version: 0.2.0
+  body: |
+    0fc7566 documented two live caveats: GitHub list-indexing is eventually consistent (a just
+    created issue can be missing from the next list call), and the REST issues endpoint sits
+    on a deprecation clock. Neither was ever "fixed": reads going cache-local (d000f7b) made
+    the consistency lag unobservable, and the all-GraphQL rewrite (60820a3) made the REST
+    clock irrelevant - 1h45m after the caveat was written. A caveat can be a symptom of a
+    design about to change; check whether the next reshape deletes it before scheduling work
+    on it.
+- title: Configuration left the user's repo for the server
+  kind: direction
+  files: [src/core/providers/config.ts]
+  version: 0.8.0
+  body: |
+    Beginning: a per-project .claude/tasks-mcp.config.yaml inside the user's repo, plus (until
+    0.4.0) OUTPUTTY_* env vars. Problem: the tracker wrote configuration into repos it was
+    supposed to only track, and env vars hid deployment state. End (user ruling 2026-08-17, in
+    4c11121): ConfigProvider stores a global spec plus per-repo overrides BESIDE the caches,
+    set through get_config/set_config; env vars became CLI flags (1dac343); nothing is
+    configured by files inside the user's repo. GITHUB_TOKEN/GH_TOKEN stay for credentials.
