@@ -3,7 +3,7 @@
 // session id. This handles exactly the methods a tools server must: initialize, tools/list, tools/call
 // (plus ping and the initialized notification).
 
-import type { Backend } from "./backend.ts";
+import type { TaskService } from "./service.ts";
 import { TOOLS, TOOLS_BY_NAME } from "./tools.ts";
 
 const PROTOCOL_VERSION = "2025-06-18";
@@ -40,11 +40,11 @@ const err = (
 
 /**
  * Handle one JSON-RPC message. Returns a response object, or null for a notification (which gets no
- * reply). `backend` is injected so tests drive the whole protocol against a fake GitHub.
+ * reply). `service` is injected so tests drive the whole protocol against a fake environment.
  */
 export async function handleRpc(
   msg: RpcRequest,
-  backend: Backend,
+  service: TaskService,
 ): Promise<RpcResponse | null> {
   if (!msg || msg.jsonrpc !== "2.0" || typeof msg.method !== "string") {
     return err(msg?.id ?? null, -32600, "invalid JSON-RPC request");
@@ -82,7 +82,7 @@ export async function handleRpc(
       const tool = TOOLS_BY_NAME.get(name);
       if (!tool) return ok(msg.id, toolError(`unknown tool: ${name}`));
       try {
-        const result = await tool.handler(backend, args);
+        const result = await tool.handler(service, args);
         return ok(msg.id, {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
           structuredContent: result,

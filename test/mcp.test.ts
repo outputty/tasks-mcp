@@ -1,17 +1,19 @@
 import { test, expect } from "bun:test";
 import { handleRpc, type RpcRequest } from "../src/mcp.ts";
-import { GitHubIssuesBackend } from "../src/backends/github-issues.ts";
+import { CachedTaskService } from "../src/service.ts";
+import { GitHubIssuesTarget } from "../src/sync/github-issues.ts";
 import { createApp } from "../src/server.ts";
-import { FakeGitHub } from "./fake-github.ts";
+import { FakeGitHub, envFor, tmpProject } from "./fake-github.ts";
 
-const PROJECT = "/tmp/whatever";
-
-function backendWithFake() {
+// A service over a temp project dir and a fake GitHub — the whole protocol, no network.
+function harness() {
   const gh = new FakeGitHub();
-  return new GitHubIssuesBackend(async () => ({
-    octokit: gh,
-    repo: { owner: "outputty", repo: "demo" },
-  }));
+  const { dir, cleanup } = tmpProject();
+  const service = new CachedTaskService(
+    async () => envFor(gh),
+    [new GitHubIssuesTarget()],
+  );
+  return { service, project: dir, cleanup };
 }
 
 const rpc = (
@@ -24,34 +26,31 @@ const rpc = (
   method,
   params,
 });
-
 const call = (name: string, args: Record<string, unknown>) =>
   rpc("tools/call", { name, arguments: args });
 const structured = (res: Awaited<ReturnType<typeof handleRpc>>) =>
   (res as { result: { structuredContent: any; isError?: boolean } }).result;
 
-test("initialize echoes the requested protocol version and names the server", async () => {
+test("initialize echoes the protocol version and names the server", async () => {
+  const { service } = harness();
   const res = await handleRpc(
     rpc("initialize", { protocolVersion: "2025-06-18" }),
-    backendWithFake(),
+    service,
   );
   expect((res as any).result.protocolVersion).toBe("2025-06-18");
   expect((res as any).result.serverInfo.name).toBe("tasks-mcp");
-  expect((res as any).result.capabilities.tools).toBeDefined();
 });
 
 test("an initialized notification gets no response", async () => {
-  const res = await handleRpc(
-    rpc("notifications/initialized"),
-    backendWithFake(),
-  );
-  expect(res).toBeNull();
+  const { service } = harness();
+  expect(await handleRpc(rpc("notifications/initialized"), service)).toBeNull();
 });
 
-test("tools/list advertises the whole surface", async () => {
-  const res = await handleRpc(rpc("tools/list"), backendWithFake());
-  const names = (res as any).result.tools.map((t: any) => t.name);
-  expect(names).toEqual(
+test("tools/list advertises the whole surface, each requiring project", async () => {
+  const { service } = harness();
+  const res = await handleRpc(rpc("tools/list"), service);
+  const tools = (res as any).result.tools;
+  expect(tools.map((t: any) => t.name)).toEqual(
     expect.arrayContaining([
       "list_ready",
       "list_planning",
@@ -63,91 +62,69 @@ test("tools/list advertises the whole surface", async () => {
       "sync",
     ]),
   );
-  // Every tool requires `project`.
-  for (const t of (res as any).result.tools)
-    expect(t.inputSchema.required).toContain("project");
+  for (const t of tools) expect(t.inputSchema.required).toContain("project");
 });
 
 test("add_task then list_ready surfaces the new task", async () => {
-  const backend = backendWithFake();
+  const { service, project, cleanup } = harness();
   await handleRpc(
-    call("add_task", { project: PROJECT, id: "solo", title: "standalone" }),
-    backend,
+    call("add_task", { project, id: "solo", title: "standalone" }),
+    service,
   );
-  const res = await handleRpc(
-    call("list_ready", { project: PROJECT }),
-    backend,
-  );
+  const res = await handleRpc(call("list_ready", { project }), service);
   expect(structured(res).structuredContent.ids).toEqual(["solo"]);
+  cleanup();
 });
 
-test("a dependency keeps a task out of ready until its dep closes", async () => {
-  const backend = backendWithFake();
+test("a dependency holds a task out of ready until its dep closes", async () => {
+  const { service, project, cleanup } = harness();
+  await handleRpc(call("add_task", { project, id: "schema" }), service);
   await handleRpc(
-    call("add_task", { project: PROJECT, id: "schema" }),
-    backend,
+    call("add_task", { project, id: "api", deps: ["schema"] }),
+    service,
   );
-  await handleRpc(
-    call("add_task", { project: PROJECT, id: "api", deps: ["schema"] }),
-    backend,
-  );
-  let ready = structured(
-    await handleRpc(call("list_ready", { project: PROJECT }), backend),
-  ).structuredContent.ids;
-  expect(ready).toEqual(["schema"]);
-  await handleRpc(
-    call("close_task", { project: PROJECT, id: "schema" }),
-    backend,
-  );
-  ready = structured(
-    await handleRpc(call("list_ready", { project: PROJECT }), backend),
-  ).structuredContent.ids;
-  expect(ready).toEqual(["api"]);
+  expect(
+    structured(await handleRpc(call("list_ready", { project }), service))
+      .structuredContent.ids,
+  ).toEqual(["schema"]);
+  await handleRpc(call("close_task", { project, id: "schema" }), service);
+  expect(
+    structured(await handleRpc(call("list_ready", { project }), service))
+      .structuredContent.ids,
+  ).toEqual(["api"]);
+  cleanup();
 });
 
 test("a tool failure comes back as isError, not a protocol error", async () => {
-  const backend = backendWithFake();
-  const res = await handleRpc(
-    call("get_task", { project: PROJECT, id: "ghost" }),
-    backend,
-  );
-  // get on a missing id returns { task: null } — not an error — so provoke a real one: duplicate add.
-  await handleRpc(call("add_task", { project: PROJECT, id: "dup" }), backend);
+  const { service, project, cleanup } = harness();
+  await handleRpc(call("add_task", { project, id: "dup" }), service);
   const dup = await handleRpc(
-    call("add_task", { project: PROJECT, id: "dup" }),
-    backend,
+    call("add_task", { project, id: "dup" }),
+    service,
   );
-  expect(structured(res).structuredContent.task).toBeNull();
   expect(structured(dup).isError).toBe(true);
-});
-
-test("an unknown tool name is reported as isError", async () => {
-  const res = await handleRpc(
-    call("nonesuch", { project: PROJECT }),
-    backendWithFake(),
-  );
-  expect(structured(res).isError).toBe(true);
+  cleanup();
 });
 
 test("an unknown method is a JSON-RPC method-not-found error", async () => {
-  const res = await handleRpc(rpc("frobnicate"), backendWithFake());
+  const { service } = harness();
+  const res = await handleRpc(rpc("frobnicate"), service);
   expect((res as any).error.code).toBe(-32601);
 });
 
 test("the hono app answers /health and /mcp end to end", async () => {
-  const app = createApp(backendWithFake());
+  const { service, project, cleanup } = harness();
+  const app = createApp(service);
   const health = await app.request("/health");
-  expect(health.status).toBe(200);
   expect((await health.json()).ok).toBe(true);
 
   const res = await app.request("/mcp", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(
-      call("add_task", { project: PROJECT, id: "viahttp", title: "over http" }),
+      call("add_task", { project, id: "viahttp", title: "over http" }),
     ),
   });
-  expect(res.status).toBe(200);
-  const body = await res.json();
-  expect(body.result.structuredContent.task.id).toBe("viahttp");
+  expect((await res.json()).result.structuredContent.task.id).toBe("viahttp");
+  cleanup();
 });

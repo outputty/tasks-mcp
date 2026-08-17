@@ -1,11 +1,12 @@
-// The hono HTTP server. One MCP endpoint plus a health check. Run with `bun run src/server.ts`; point
-// Claude Code at http://localhost:<port>/mcp.
+// The hono HTTP server — the standalone transport. One MCP endpoint plus a health check. Claude Code
+// usually spawns the stdio entrypoint via bunx instead (see bin/cli.ts); this is for a long-running
+// shared instance or other HTTP clients.
 
 import { Hono } from "hono";
 import { handleRpc, SERVER_INFO, type RpcRequest } from "./mcp.ts";
-import { makeBackend, type Backend } from "./backend.ts";
+import { makeService, type TaskService } from "./service.ts";
 
-export function createApp(backend: Backend = makeBackend()): Hono {
+export function createApp(service: TaskService = makeService()): Hono {
   const app = new Hono();
 
   app.get("/health", (c) => c.json({ ok: true, server: SERVER_INFO }));
@@ -30,29 +31,17 @@ export function createApp(backend: Backend = makeBackend()): Hono {
     if (Array.isArray(payload)) {
       const responses = (
         await Promise.all(
-          payload.map((m) => handleRpc(m as RpcRequest, backend)),
+          payload.map((m) => handleRpc(m as RpcRequest, service)),
         )
       ).filter(Boolean);
-      // An all-notification batch gets a 202 with no body.
       return responses.length ? c.json(responses) : c.body(null, 202);
     }
 
-    const response = await handleRpc(payload as RpcRequest, backend);
+    const response = await handleRpc(payload as RpcRequest, service);
     return response ? c.json(response) : c.body(null, 202);
   });
 
   return app;
-}
-
-const port = Number(process.env.OUTPUTTY_MCP_PORT || 3917);
-
-// Only start listening when run directly, so tests can import createApp without binding a port.
-if (import.meta.main) {
-  const app = createApp();
-  console.error(
-    `tasks-mcp listening on http://localhost:${port}/mcp  (health: /health)`,
-  );
-  Bun.serve({ port, fetch: app.fetch });
 }
 
 export default createApp;
