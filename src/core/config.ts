@@ -2,9 +2,10 @@
 // `ServerOptions`; an optional per-project `.claude/tasks-mcp.config.{yaml,json}` overrides them for one
 // repo. No environment variables drive behaviour here (credentials aside) — the CLI is the surface.
 
-import fs from "fs";
-import os from "os";
-import path from "path";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { parse } from "yaml";
 import type { ProjectConfig } from "./types.ts";
 
 /** Server-wide options, set once from CLI args. A per-project config file overrides these. */
@@ -38,7 +39,7 @@ export function loadConfig(
     const file = path.join(project, ".claude", name);
     if (fs.existsSync(file)) {
       const fromFile =
-        (Bun.YAML.parse(fs.readFileSync(file, "utf8")) as ProjectConfig) || {};
+        (parse(fs.readFileSync(file, "utf8")) as ProjectConfig) || {};
       return { ...base, ...fromFile };
     }
   }

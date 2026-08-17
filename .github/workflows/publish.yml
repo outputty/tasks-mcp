@@ -1,0 +1,29 @@
+name: Publish
+
+# Publishing is a deliberate act: it runs only when you publish a GitHub Release (tag it `vX.Y.Z`,
+# matching package.json). Nothing publishes on a plain push.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write # lets npm attach a signed provenance attestation via GitHub OIDC (no secret needed)
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npm publish --provenance --access public
+        env:
+          # A granular, package-scoped npm token stored as a repo secret. Never echoed; GitHub masks it.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

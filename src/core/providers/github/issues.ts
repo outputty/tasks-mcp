@@ -2,6 +2,7 @@
 // body (alongside deps/scope/tier/…), so there is nothing to look up by label and nothing to keep in
 // sync but the body itself. An issue is "managed" iff its body carries that block with an id.
 
+import { parse, stringify } from "yaml";
 import type { Task } from "../../types.ts";
 import type { GitHubEnv } from "./client.ts";
 import { withDefaults } from "../../graph.ts";
@@ -46,7 +47,7 @@ export function renderBody(task: Task, human = ""): string {
       continue;
     meta[key] = value;
   }
-  const yaml = Bun.YAML.stringify(meta, null, 2).trim();
+  const yaml = stringify(meta).trim();
   const block = `${META_OPEN}\n${yaml}\n${META_CLOSE}`;
   return (human ? `${block}\n\n${human}` : block).trimEnd() + "\n";
 }
@@ -63,7 +64,7 @@ function parseBody(body: string | null | undefined): {
   const yaml = body.slice(start + META_OPEN.length, end).trim();
   let meta: Record<string, unknown> = {};
   try {
-    meta = (Bun.YAML.parse(yaml) as Record<string, unknown>) || {};
+    meta = (parse(yaml) as Record<string, unknown>) || {};
   } catch {
     meta = {};
   }

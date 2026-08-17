@@ -1,18 +1,17 @@
-import { test, expect } from "bun:test";
-import { handleRpc, type RpcRequest } from "../src/mcp.ts";
-import { CachedTaskService } from "../src/service.ts";
-import { GitHubProvider } from "../src/providers/github/github.ts";
-import { createApp } from "../src/server.ts";
-import { FakeGitHub, envFor, tmpProject } from "./fake-github.ts";
+import { test, expect } from "vitest";
+import { handleRpc, type RpcRequest } from "../src/mcp/protocol.ts";
+import { createApp } from "../src/mcp/http.ts";
+import { CachedTaskService } from "../src/core/service.ts";
+import { tmp } from "./helpers.ts";
+import { FakeProvider } from "./fake-provider.ts";
 
-// A service over a temp project dir, a temp cache dir, and a fake GitHub — the whole protocol, no network.
+// A service over a temp cache dir and a fake provider — the whole protocol, no HTTP to GitHub.
 function harness() {
-  const gh = new FakeGitHub();
-  const project = tmpProject();
-  const cache = tmpProject();
+  const project = tmp();
+  const cache = tmp();
   const service = new CachedTaskService(
     { cacheDir: cache.dir },
-    new GitHubProvider(async () => envFor(gh, { projects: false })),
+    new FakeProvider(),
   );
   return {
     service,
@@ -28,12 +27,7 @@ const rpc = (
   method: string,
   params?: Record<string, unknown>,
   id: number | string = 1,
-): RpcRequest => ({
-  jsonrpc: "2.0",
-  id,
-  method,
-  params,
-});
+): RpcRequest => ({ jsonrpc: "2.0", id, method, params });
 const call = (name: string, args: Record<string, unknown>) =>
   rpc("tools/call", { name, arguments: args });
 const structured = (res: Awaited<ReturnType<typeof handleRpc>>) =>

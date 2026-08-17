@@ -1,12 +1,10 @@
-// An in-memory GraphQL double for GitHub — issues (create/update/close/reopen/list, plus the body-fetch
-// and repo-id queries) and Projects v2 (board resolve, add item, set status). Matches on format-stable
-// identifiers, never punctuation, because prettier reflows embedded GraphQL and GraphQL ignores spacing.
+// A nock-backed GitHub GraphQL endpoint. Unlike a plain function stub, this makes the tests drive the
+// REAL Octokit client over HTTP — nock intercepts POST https://api.github.com/graphql and answers from
+// in-memory state, so the actual query strings, request bodies, and response parsing are exercised.
 
-import fs from "fs";
-import os from "os";
-import path from "path";
-import type { GitHubEnv, GraphQL } from "../src/providers/github/client.ts";
-import type { ProjectConfig } from "../src/types.ts";
+import nock from "nock";
+import { Octokit } from "octokit";
+import type { GitHubEnv } from "../src/core/providers/github/client.ts";
 
 interface GhIssue {
   id: string;
@@ -16,7 +14,7 @@ interface GhIssue {
   state: "OPEN" | "CLOSED";
 }
 
-export class FakeGitHub {
+export class NockGitHub {
   issues: GhIssue[] = [];
   boards: Array<{ id: string; number: number; title: string }> = [
     { id: "PROJ", number: 7, title: "Tasks" },
@@ -25,25 +23,24 @@ export class FakeGitHub {
   private issueSeq = 1;
   private itemSeq = 1;
 
-  graphql: GraphQL = (async (q: string, vars: Record<string, unknown> = {}) => {
-    // --- Issues ---
+  /** Answer one GraphQL request. Matches on format-stable identifiers (GraphQL ignores spacing). */
+  reply(q: string, vars: Record<string, any>): unknown {
     if (q.includes("createIssue")) {
       const n = this.issueSeq++;
-      const issue: GhIssue = {
+      this.issues.push({
         id: `I_${n}`,
         number: n,
         title: String(vars.t),
         body: String(vars.b),
         state: "OPEN",
-      };
-      this.issues.push(issue);
-      return { createIssue: { issue: { id: issue.id } } };
+      });
+      return { createIssue: { issue: { id: `I_${n}` } } };
     }
     if (q.includes("updateIssue")) {
       const i = this.issues.find((x) => x.id === vars.id);
       if (i) {
-        if (vars.t !== undefined) i.title = String(vars.t);
-        if (vars.b !== undefined) i.body = String(vars.b);
+        i.title = String(vars.t);
+        i.body = String(vars.b);
       }
       return { updateIssue: { issue: { id: vars.id } } };
     }
@@ -57,7 +54,6 @@ export class FakeGitHub {
       if (i) i.state = "OPEN";
       return { reopenIssue: { issue: { id: vars.id } } };
     }
-    // --- Projects v2 ---
     if (q.includes("addProjectV2ItemById")) {
       const id = `ITEM${this.itemSeq++}`;
       this.items.set(id, { contentId: String(vars.c), status: null });
@@ -104,7 +100,7 @@ export class FakeGitHub {
         },
       };
     }
-    if (q.includes("projectsV2(")) {
+    if (q.includes("projectsV2("))
       return {
         repository: {
           id: "REPO",
@@ -112,8 +108,6 @@ export class FakeGitHub {
           projectsV2: { nodes: this.boards },
         },
       };
-    }
-    // --- Shared repository queries (order after the specific ones above) ---
     if (q.includes("issues(first")) {
       return {
         repository: {
@@ -129,26 +123,35 @@ export class FakeGitHub {
       return { node: i ? { body: i.body } : null };
     }
     if (q.includes("repository(")) return { repository: { id: "REPO" } };
-    throw new Error(`unexpected graphql: ${q.slice(0, 60)}`);
-  }) as GraphQL;
+    throw new Error(
+      `unexpected graphql: ${q.replace(/\s+/g, " ").slice(0, 90)}`,
+    );
+  }
 }
 
-export function envFor(
-  gh: FakeGitHub = new FakeGitHub(),
-  config: ProjectConfig = {},
-): GitHubEnv {
+/** Install the nock interceptor over the GitHub GraphQL endpoint, backed by `gh`. */
+export function installNock(gh: NockGitHub = new NockGitHub()): NockGitHub {
+  nock("https://api.github.com")
+    .persist()
+    .post("/graphql")
+    .reply(200, (_uri, body: any) => ({
+      data: gh.reply(body.query, body.variables || {}),
+    }));
+  return gh;
+}
+
+/** A GitHubEnv whose graphql is a real Octokit client (its HTTP goes through the nock interceptor). */
+export function nockEnv(config: Record<string, unknown> = {}): GitHubEnv {
+  // Disable throttling/retry in tests — the throttle plugin spaces writes ~1s apart, which the mocked
+  // endpoint doesn't need and which would time the suite out. Production keeps both plugins.
+  const octokit = new Octokit({
+    auth: "test-token",
+    throttle: { enabled: false },
+    retry: { enabled: false },
+  });
   return {
-    graphql: gh.graphql,
+    graphql: octokit.graphql as unknown as GitHubEnv["graphql"],
     repo: { owner: "outputty", repo: "demo" },
     config,
-  };
-}
-
-/** A throwaway project directory; returns the path and a cleanup fn. */
-export function tmpProject(): { dir: string; cleanup: () => void } {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tasks-mcp-"));
-  return {
-    dir,
-    cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
   };
 }

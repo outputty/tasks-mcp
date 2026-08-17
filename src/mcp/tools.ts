@@ -2,9 +2,16 @@
 // graph engine. Every tool takes `project` (an absolute repo root) because the server has no cwd of its
 // own; `branch` is optional and passed straight through to the backend.
 
-import type { TaskService } from "./service.ts";
-import type { ProjectContext, Task } from "./types.ts";
-import { ready, planning, schedule, tierOf, qaOf, idList } from "./graph.ts";
+import type { TaskService } from "../core/service.ts";
+import type { ProjectContext, Task } from "../core/types.ts";
+import {
+  ready,
+  planning,
+  schedule,
+  tierOf,
+  qaOf,
+  idList,
+} from "../core/graph.ts";
 
 export interface Tool {
   name: string;

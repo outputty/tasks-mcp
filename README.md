@@ -15,26 +15,27 @@ agent calls `add_task` / `list_ready` / `schedule` instead of shelling out to a 
 
 | Needs                                     | For                                            |
 | ----------------------------------------- | ---------------------------------------------- |
-| **[bun](https://bun.sh)** ≥ 1.1           | runs the server (`bunx`, no build step)        |
+| **Node ≥ 18** (or bun)                    | runs the built package (`npx`/`bunx`)          |
 | a **GitHub repo** with an `origin` remote | the server reads owner/repo from it per call   |
 | **`gh`** logged in, or `GITHUB_TOKEN` set | the GitHub provider authenticates over GraphQL |
 
 ## Install
 
-No clone. Add the server to your project's `.mcp.json` and Claude Code launches it on demand with `bunx`:
+No clone. Add the server to your project's `.mcp.json` and Claude Code launches it on demand:
 
 ```json
 {
   "mcpServers": {
-    "tasks": { "command": "bunx", "args": ["-y", "@outputty/tasks-mcp"] }
+    "tasks": { "command": "npx", "args": ["-y", "@outputty/tasks-mcp"] }
   }
 }
 ```
 
-That runs the **stdio** transport. For a long-running shared instance, run the **HTTP** server instead:
+That runs the **stdio** transport (`bunx` works identically). For a long-running shared instance, run the
+**HTTP** server instead:
 
 ```bash
-bunx -y @outputty/tasks-mcp --http        # http://localhost:3917/mcp  (health: /health)
+npx -y @outputty/tasks-mcp --http        # http://localhost:3917/mcp  (health: /health)
 ```
 
 ```json
@@ -43,6 +44,30 @@ bunx -y @outputty/tasks-mcp --http        # http://localhost:3917/mcp  (health: 
     "tasks": { "type": "http", "url": "http://localhost:3917/mcp" }
   }
 }
+```
+
+## Three ways in: MCP server, CLI, library
+
+The package is split into a **core** (all the business logic) and a thin **MCP wrapper** over it, so the
+same logic is reachable three ways:
+
+```bash
+# 1. MCP server — what a coding agent uses (stdio by default, --http for hono)
+npx -y @outputty/tasks-mcp
+
+# 2. Direct CLI — the same core, no MCP involved
+npx -y @outputty/tasks-mcp add api --title "Build the API" --deps schema --project /abs/repo
+npx -y @outputty/tasks-mcp ready --project /abs/repo
+```
+
+```ts
+// 3. Library — embed the core (or the MCP layer) in your own program
+import { makeService, ready } from "@outputty/tasks-mcp";
+import { createApp, runStdio } from "@outputty/tasks-mcp/mcp";
+
+const service = makeService({ projects: false });
+const tasks = await service.list({ project: "/abs/repo" });
+console.log(ready(tasks).map((t) => t.id));
 ```
 
 ## What the tools do
@@ -91,7 +116,11 @@ body (no labels), and adds a card to the board.
 ## How it works
 
 ```
-   MCP tools    ── stdio (bunx, for Claude Code)  ·  http (hono, standalone)
+   bin/cli.ts   ── CLI subcommands  ·  MCP server (stdio / http)
+        │
+   src/mcp/     ── the MCP WRAPPER: tools · JSON-RPC protocol · stdio + hono transports
+        │  wraps ↓ ; never the other way round
+   src/core/    ── the CORE (business logic): service · cache · graph engine · providers
         │  each call carries { project, branch? }
         ▼
    CACHE  <os cache dir>/<repo>.yaml   ── the working task model; disposable, rebuilt from the provider
@@ -135,7 +164,8 @@ Turn it off with `--no-projects`, or aim it at an existing board with `--project
 A tools-only server sends no server-initiated messages. Over stdio it is newline-delimited JSON-RPC; over
 HTTP the Streamable HTTP transport collapses to one JSON-RPC message in, one JSON reply out — no SSE
 stream, no session id. Both handle `initialize`, `tools/list`, and `tools/call` (plus `ping` and the
-`initialized` notification). This is why the whole server is just `hono` + `octokit`.
+`initialized` notification). The whole server leans on just `hono` + `octokit` (plus `yaml` and
+`@hono/node-server`).
 
 ## Config
 
@@ -176,9 +206,23 @@ overrides the flags for one repo. Credentials come from `GITHUB_TOKEN` / `GH_TOK
 ## Development
 
 ```bash
-bun test            # graph engine · GitHub provider (mocked GraphQL) · cache service · MCP protocol
-bun run dev         # hot-reloading HTTP server
+npm install
+npm test             # vitest: graph engine · GitHub provider (nock) · cache service · MCP protocol
+npm run build        # tsup -> dist/ (cli, index, mcp)
 ```
 
-The GitHub provider is tested against an in-memory GraphQL fake, so the suite needs no network and no
-credentials.
+The GitHub provider is tested with **nock** — the tests drive the real Octokit client, and nock
+intercepts the HTTP so the actual queries and responses are exercised without a network or credentials.
+The service, cache, and protocol tests run against an in-memory fake provider.
+
+## Releasing
+
+Publishing is automated and deliberate — it runs only when you cut a GitHub **Release**, never on a push.
+
+1. Bump `version` in `package.json`, commit, and push to `main`.
+2. Create a GitHub Release with the tag `vX.Y.Z` (matching that version).
+3. The `Publish` workflow tests, builds, and runs `npm publish --provenance`.
+
+The workflow authenticates with a **granular, package-scoped npm token** stored as the repo secret
+`NPM_TOKEN`, and attaches a signed **provenance** attestation via GitHub OIDC (`id-token: write`) so the
+published package is verifiably built from this repo. See the token setup in the repo's Actions docs.

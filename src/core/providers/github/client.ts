@@ -2,6 +2,7 @@
 // authenticated GraphQL caller. Everything the GitHub provider needs to reach the API, resolved from a
 // project path. Injectable so tests supply a fake GraphQL and never touch git, gh, or the network.
 
+import { spawnSync } from "node:child_process";
 import type { ProjectConfig, RepoRef } from "../../types.ts";
 import { loadConfig, type ServerOptions } from "../../config.ts";
 
@@ -18,22 +19,20 @@ export interface GitHubEnv {
   config: ProjectConfig;
 }
 
+/** Run a command, returning its trimmed stdout, or null when it exits non-zero (or is missing). */
+function run(cmd: string, args: string[]): string | null {
+  const proc = spawnSync(cmd, args, { encoding: "utf8" });
+  return proc.status === 0 ? proc.stdout.trim() : null;
+}
+
 /** Read `<project>`'s `origin` remote and parse the owner/repo it points at on github.com. */
 export function resolveRepo(project: string): RepoRef {
-  const proc = Bun.spawnSync([
-    "git",
-    "-C",
-    project,
-    "remote",
-    "get-url",
-    "origin",
-  ]);
-  if (proc.exitCode !== 0) {
+  const url = run("git", ["-C", project, "remote", "get-url", "origin"]);
+  if (url === null) {
     throw new Error(
       `no git 'origin' remote in ${project} — the GitHub provider needs one`,
     );
   }
-  const url = proc.stdout.toString().trim();
   const m = url.match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/);
   if (!m) throw new Error(`origin is not a github.com remote: ${url}`);
   return { owner: m[1], repo: m[2] };
@@ -43,8 +42,7 @@ export function resolveRepo(project: string): RepoRef {
 export function githubToken(): string {
   const fromEnv = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   if (fromEnv) return fromEnv.trim();
-  const proc = Bun.spawnSync(["gh", "auth", "token"]);
-  const token = proc.exitCode === 0 ? proc.stdout.toString().trim() : "";
+  const token = run("gh", ["auth", "token"]) ?? "";
   if (!token)
     throw new Error(
       "no GitHub credentials: set GITHUB_TOKEN, or run `gh auth login`",

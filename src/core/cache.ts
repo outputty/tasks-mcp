@@ -3,8 +3,10 @@
 // deleted cache is rebuilt from the provider by `sync`, because every task's full record (deps included)
 // is mirrored into its issue body.
 
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { parse, stringify } from "yaml";
 import type { CacheEntry } from "./types.ts";
 import { withDefaults } from "./graph.ts";
 import { defaultCacheDir } from "./config.ts";
@@ -21,13 +23,13 @@ export class Cache {
     cacheDir: string = defaultCacheDir(),
   ): Cache {
     const base = path.basename(project) || "repo";
-    const hash = Bun.hash(project).toString(16).slice(0, 8);
+    const hash = createHash("sha256").update(project).digest("hex").slice(0, 8);
     return new Cache(path.join(cacheDir, `${base}-${hash}.yaml`));
   }
 
   load(): CacheEntry[] {
     if (!fs.existsSync(this.file)) return [];
-    const parsed = Bun.YAML.parse(fs.readFileSync(this.file, "utf8")) as {
+    const parsed = parse(fs.readFileSync(this.file, "utf8")) as {
       tasks?: CacheEntry[];
     } | null;
     const tasks = parsed?.tasks ?? [];
@@ -37,7 +39,7 @@ export class Cache {
   save(entries: CacheEntry[]): void {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     const sorted = [...entries].sort((a, b) => (a.id < b.id ? -1 : 1));
-    const body = Bun.YAML.stringify({ tasks: sorted }, null, 2);
+    const body = stringify({ tasks: sorted });
     fs.writeFileSync(
       this.file,
       HEADER + (body.endsWith("\n") ? body : body + "\n"),

@@ -3,8 +3,8 @@
 // shared instance or other HTTP clients.
 
 import { Hono } from "hono";
-import { handleRpc, SERVER_INFO, type RpcRequest } from "./mcp.ts";
-import { makeService, type TaskService } from "./service.ts";
+import { handleRpc, SERVER_INFO, type RpcRequest } from "./protocol.ts";
+import { makeService, type TaskService } from "../core/service.ts";
 
 export function createApp(service: TaskService = makeService()): Hono {
   const app = new Hono();

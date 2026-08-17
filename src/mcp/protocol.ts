@@ -3,11 +3,11 @@
 // session id. This handles exactly the methods a tools server must: initialize, tools/list, tools/call
 // (plus ping and the initialized notification).
 
-import type { TaskService } from "./service.ts";
+import type { TaskService } from "../core/service.ts";
 import { TOOLS, TOOLS_BY_NAME } from "./tools.ts";
 
 const PROTOCOL_VERSION = "2025-06-18";
-export const SERVER_INFO = { name: "tasks-mcp", version: "0.4.0" };
+export const SERVER_INFO = { name: "tasks-mcp", version: "0.5.0" };
 
 export interface RpcRequest {
   jsonrpc: "2.0";

@@ -1,36 +1,63 @@
 {
   "name": "@outputty/tasks-mcp",
-  "version": "0.4.0",
-  "description": "outputty's task tracker as a local MCP server: a committed dependency graph synced two-way to GitHub Issues and Projects.",
+  "version": "0.5.0",
+  "description": "outputty's task tracker as an MCP server and a library: a local task graph synced two-way to GitHub Issues and Projects.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/outputty/tasks-mcp.git"
+  },
+  "homepage": "https://github.com/outputty/tasks-mcp#readme",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "tasks",
+    "github-issues",
+    "github-projects",
+    "outputty"
+  ],
   "type": "module",
   "bin": {
-    "tasks-mcp": "bin/cli.ts"
+    "tasks-mcp": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./mcp": "./dist/mcp.js"
   },
   "files": [
-    "bin",
-    "src",
+    "dist",
     "README.md"
   ],
   "scripts": {
-    "start": "bun run bin/cli.ts --http",
-    "stdio": "bun run bin/cli.ts",
-    "dev": "bun --hot run bin/cli.ts --http",
-    "test": "bun test",
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "start": "node dist/cli.js --http",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@hono/node-server": "^2.1.1",
     "hono": "^4.6.14",
-    "octokit": "^4.0.2"
+    "octokit": "^4.0.2",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.14",
-    "prettier": "^3.9.4"
+    "@types/node": "^26.2.0",
+    "nock": "^14.0.17",
+    "prettier": "^3.9.4",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9",
+    "vitest": "^4.1.10"
   },
   "publishConfig": {
     "access": "public"
   },
   "engines": {
-    "bun": ">=1.1.0"
+    "node": ">=18"
   }
 }
