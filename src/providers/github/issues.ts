@@ -144,18 +144,17 @@ async function setState(
   await env.graphql(mutation, { id: issueId });
 }
 
-/** One repo issue as the provider sees it. `managed` is false for a hand-opened issue with no block. */
+/** One repo issue as a full task, plus its ref and whether it already carries our block. */
 export interface ListedIssue {
-  taskId: string;
+  task: Task;
   issueId: string;
-  title: string;
-  status: Task["status"];
   managed: boolean;
 }
 
 /**
- * Every issue in the repo (not PRs — the `issues` connection excludes them). A managed issue keeps its
- * body-block id; a hand-opened one is given `gh-<number>` so `sync` can adopt it as a task.
+ * Every issue in the repo (not PRs — the `issues` connection excludes them), reconstructed as a full
+ * task from its body block (deps/scope/tier/…). A managed issue keeps its block id; a hand-opened one is
+ * given `gh-<number>` so `sync` can adopt it. This is what lets a deleted cache be rebuilt from GitHub.
  */
 export async function listIssues(env: GitHubEnv): Promise<ListedIssue[]> {
   const out: ListedIssue[] = [];
@@ -174,13 +173,14 @@ export async function listIssues(env: GitHubEnv): Promise<ListedIssue[]> {
     );
     for (const issue of res.repository.issues.nodes) {
       const mid = managedId(issue);
-      out.push({
-        taskId: mid ?? `gh-${issue.number}`,
-        issueId: issue.id,
-        title: issue.title || "",
-        status: issue.state === "CLOSED" ? "done" : "open",
-        managed: mid !== null,
-      });
+      const task = mid
+        ? issueToTask(issue)
+        : withDefaults({
+            id: `gh-${issue.number}`,
+            title: issue.title || "",
+            status: issue.state === "CLOSED" ? "done" : "open",
+          });
+      out.push({ task, issueId: issue.id, managed: mid !== null });
     }
     if (!res.repository.issues.pageInfo.hasNextPage) break;
     after = res.repository.issues.pageInfo.endCursor;

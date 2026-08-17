@@ -3,7 +3,7 @@
 // project path. Injectable so tests supply a fake GraphQL and never touch git, gh, or the network.
 
 import type { ProjectConfig, RepoRef } from "../../types.ts";
-import { loadConfig } from "../../config.ts";
+import { loadConfig, type ServerOptions } from "../../config.ts";
 
 /** A GraphQL caller, the shape of `octokit.graphql`. GitHub Issues and Projects both go through this. */
 export type GraphQL = <T = unknown>(
@@ -66,11 +66,14 @@ async function graphqlFor(): Promise<GraphQL> {
   return client;
 }
 
-/** The production resolver: real git remote, real gh credentials, real config file. */
-export async function resolveGitHubEnv(project: string): Promise<GitHubEnv> {
+/** The production resolver: real git remote, real gh credentials, CLI options + optional config file. */
+export async function resolveGitHubEnv(
+  project: string,
+  options: ServerOptions = {},
+): Promise<GitHubEnv> {
   return {
     graphql: await graphqlFor(),
     repo: resolveRepo(project),
-    config: loadConfig(project),
+    config: loadConfig(project, options),
   };
 }

@@ -1,25 +1,28 @@
-// The committed cache — the authoritative task model, and the ONLY home of the dependency graph.
-//
-// Why authoritative, not a snapshot: a sync target like GitHub Issues has no native "depends-on", so the
-// edges of the graph cannot live in the backend. They live here, in a file committed to the repo, so they
-// survive a fresh clone and travel with the project. Reads (ready/schedule/planning) run over this file;
-// writes update it first, then push the representable fields out to the sync targets.
+// The task cache — the fast local store the graph engine reads. It is NOT in the repo: it lives under
+// the OS cache dir (overridable with --cache-dir), one file per project. It is a true cache — a fresh or
+// deleted cache is rebuilt from the provider by `sync`, because every task's full record (deps included)
+// is mirrored into its issue body.
 
 import fs from "fs";
 import path from "path";
 import type { CacheEntry } from "./types.ts";
 import { withDefaults } from "./graph.ts";
+import { defaultCacheDir } from "./config.ts";
 
 const HEADER =
-  "# outputty tasks-mcp — the authoritative task graph, including dependencies. Committed on purpose:\n" +
-  "# GitHub Issues and Projects cannot store deps, so this file is where they survive a clone.\n";
+  "# tasks-mcp cache — rebuilt from the provider by `sync`. Safe to delete; not committed.\n";
 
 export class Cache {
   constructor(private readonly file: string) {}
 
-  /** The cache file for a project: always `<project>/.claude/tasks.cache.yaml`. */
-  static forProject(project: string): Cache {
-    return new Cache(path.join(project, ".claude", "tasks.cache.yaml"));
+  /** The cache file for a project: `<cacheDir>/<basename>-<hash>.yaml`, keyed by the project's path. */
+  static forProject(
+    project: string,
+    cacheDir: string = defaultCacheDir(),
+  ): Cache {
+    const base = path.basename(project) || "repo";
+    const hash = Bun.hash(project).toString(16).slice(0, 8);
+    return new Cache(path.join(cacheDir, `${base}-${hash}.yaml`));
   }
 
   load(): CacheEntry[] {

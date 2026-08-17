@@ -1,25 +1,46 @@
-// Per-project configuration, provider-agnostic. Reads `.claude/tasks-mcp.config.{yaml,json}` layered
-// under a couple of env overrides. Provider-specific resolution (repo, credentials) lives with each
-// provider, not here.
+// Configuration, provider-agnostic. Server-wide knobs come from CLI args (see bin/cli.ts) as
+// `ServerOptions`; an optional per-project `.claude/tasks-mcp.config.{yaml,json}` overrides them for one
+// repo. No environment variables drive behaviour here (credentials aside) — the CLI is the surface.
 
 import fs from "fs";
+import os from "os";
 import path from "path";
 import type { ProjectConfig } from "./types.ts";
 
-export function loadConfig(project: string): ProjectConfig {
-  let config: ProjectConfig = {};
+/** Server-wide options, set once from CLI args. A per-project config file overrides these. */
+export interface ServerOptions {
+  provider?: string;
+  projects?: boolean;
+  projectNumber?: number;
+  board?: string;
+  /** Where task caches live. Defaults to the OS cache dir; the cache never sits in the repo. */
+  cacheDir?: string;
+}
+
+/** The default cache root: `$XDG_CACHE_HOME/tasks-mcp`, else `~/.cache/tasks-mcp`. */
+export function defaultCacheDir(): string {
+  const base = process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
+  return path.join(base, "tasks-mcp");
+}
+
+/** The per-project config: the CLI defaults, overlaid by an optional in-repo config file if present. */
+export function loadConfig(
+  project: string,
+  options: ServerOptions = {},
+): ProjectConfig {
+  const base: ProjectConfig = {
+    provider: options.provider,
+    projects: options.projects,
+    projectNumber: options.projectNumber,
+    board: options.board,
+  };
   for (const name of ["tasks-mcp.config.yaml", "tasks-mcp.config.json"]) {
     const file = path.join(project, ".claude", name);
     if (fs.existsSync(file)) {
-      config =
+      const fromFile =
         (Bun.YAML.parse(fs.readFileSync(file, "utf8")) as ProjectConfig) || {};
-      break;
+      return { ...base, ...fromFile };
     }
   }
-  if (process.env.OUTPUTTY_PROVIDER)
-    config.provider = process.env.OUTPUTTY_PROVIDER;
-  if (process.env.OUTPUTTY_PROJECT_NUMBER)
-    config.projectNumber = Number(process.env.OUTPUTTY_PROJECT_NUMBER);
-  if (process.env.OUTPUTTY_PROJECTS === "off") config.projects = false;
-  return config;
+  return base;
 }

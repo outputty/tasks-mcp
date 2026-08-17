@@ -1,10 +1,11 @@
-// The task service: the committed cache is the authority, the provider is the mirror. Reads come straight
-// from the cache (fast, and the only place with the dependency graph). Writes update the cache first,
-// then reflect the representable fields into the provider. `sync` reconciles both ways — provider status
-// wins for the fields it owns, deps stay the cache's alone.
+// The task service: the local cache is the working store, the provider is the mirror. Reads come straight
+// from the cache (fast). Writes update the cache first, then reflect the representable fields into the
+// provider. `sync` reconciles both ways and can rebuild a fresh cache entirely from the provider, since
+// each task's full record (deps included) is mirrored into its issue body.
 
 import type { CacheEntry, ProjectContext, Task } from "./types.ts";
 import type { Provider } from "./providers/provider.ts";
+import type { ServerOptions } from "./config.ts";
 import { Cache } from "./cache.ts";
 import { withDefaults } from "./graph.ts";
 import { providerFor } from "./providers/provider.ts";
@@ -25,27 +26,34 @@ export interface TaskService {
 }
 
 export class CachedTaskService implements TaskService {
-  // The provider is resolved per project (config picks it), unless one is injected for tests.
-  constructor(private readonly provider?: Provider) {}
+  // `options` carries the CLI-set knobs (cacheDir, provider, board…). A provider may be injected for tests.
+  constructor(
+    private readonly options: ServerOptions = {},
+    private readonly provider?: Provider,
+  ) {}
+
+  private cache(project: string): Cache {
+    return Cache.forProject(project, this.options.cacheDir);
+  }
 
   private providerFor(ctx: ProjectContext): Provider {
-    return this.provider ?? providerFor(ctx.project);
+    return this.provider ?? providerFor(ctx.project, this.options);
   }
 
   async list(ctx: ProjectContext): Promise<Task[]> {
-    return Cache.forProject(ctx.project).load();
+    return this.cache(ctx.project).load();
   }
 
   async get(ctx: ProjectContext, id: string): Promise<Task | null> {
     return (
-      Cache.forProject(ctx.project)
+      this.cache(ctx.project)
         .load()
         .find((t) => t.id === id) ?? null
     );
   }
 
   async create(ctx: ProjectContext, task: Task): Promise<Task> {
-    const cache = Cache.forProject(ctx.project);
+    const cache = this.cache(ctx.project);
     const entries = cache.load();
     if (entries.some((e) => e.id === task.id))
       throw new Error(`task ${task.id} already exists`);
@@ -60,7 +68,7 @@ export class CachedTaskService implements TaskService {
     id: string,
     patch: Partial<Task>,
   ): Promise<Task> {
-    const cache = Cache.forProject(ctx.project);
+    const cache = this.cache(ctx.project);
     const entries = cache.load();
     const entry = entries.find((e) => e.id === id);
     if (!entry) throw new Error(`no task ${id}`);
@@ -80,7 +88,7 @@ export class CachedTaskService implements TaskService {
   }
 
   async sync(ctx: ProjectContext): Promise<SyncResult> {
-    const cache = Cache.forProject(ctx.project);
+    const cache = this.cache(ctx.project);
     const entries = cache.load();
     const byId = new Map(entries.map((e) => [e.id, e]));
     const provider = this.providerFor(ctx);
@@ -132,7 +140,7 @@ const stripRefs = (entry: CacheEntry): Task => {
   return task;
 };
 
-/** The production service: committed cache plus the project's configured provider (GitHub by default). */
-export function makeService(): TaskService {
-  return new CachedTaskService();
+/** The production service: local cache plus the project's configured provider (GitHub by default). */
+export function makeService(options: ServerOptions = {}): TaskService {
+  return new CachedTaskService(options);
 }

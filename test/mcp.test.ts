@@ -5,14 +5,23 @@ import { GitHubProvider } from "../src/providers/github/github.ts";
 import { createApp } from "../src/server.ts";
 import { FakeGitHub, envFor, tmpProject } from "./fake-github.ts";
 
-// A service over a temp project dir and a fake GitHub — the whole protocol, no network.
+// A service over a temp project dir, a temp cache dir, and a fake GitHub — the whole protocol, no network.
 function harness() {
   const gh = new FakeGitHub();
-  const { dir, cleanup } = tmpProject();
+  const project = tmpProject();
+  const cache = tmpProject();
   const service = new CachedTaskService(
+    { cacheDir: cache.dir },
     new GitHubProvider(async () => envFor(gh, { projects: false })),
   );
-  return { service, project: dir, cleanup };
+  return {
+    service,
+    project: project.dir,
+    cleanup: () => {
+      project.cleanup();
+      cache.cleanup();
+    },
+  };
 }
 
 const rpc = (

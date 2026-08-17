@@ -1,12 +1,12 @@
 # @outputty/tasks-mcp
 
-A local **MCP server** that exposes outputty's task tracker as typed tools. The dependency graph lives in
-a **committed cache** in your repo; each task is synced two-way to a **provider** — GitHub Issues today,
-with Linear and others plug-and-play behind the same seam. A coding agent calls `add_task` / `list_ready`
-/ `schedule` instead of shelling out to a CLI.
+A local **MCP server** that exposes outputty's task tracker as typed tools. Each task is synced two-way to
+a **provider** — GitHub Issues today, with Linear and others plug-and-play behind the same seam. A coding
+agent calls `add_task` / `list_ready` / `schedule` instead of shelling out to a CLI.
 
-- **The cache owns the graph.** Deps can't live in a GitHub Issue, so the authoritative task graph is a
-  committed file (`.claude/tasks.cache.yaml`). It travels with the repo and survives a fresh clone.
+- **The cache is local and disposable.** The graph engine reads a per-project cache under your OS cache
+  dir (override with `--cache-dir`), never the repo. Each task's full record — deps included — is
+  mirrored into its issue body, so a fresh or deleted cache is rebuilt from the provider by `sync`.
 - **Providers are plug-and-play.** One `Provider` seam backs the cache. GitHub (Issues over GraphQL, plus
   a Projects kanban board) is the first; a new provider is one module, nothing above it moves.
 - **Your existing credentials.** `GITHUB_TOKEN`, or whatever `gh auth login` already stored. No new login.
@@ -65,8 +65,8 @@ automatically (when the board sync is enabled).
 }
 ```
 
-That records the task in the committed cache, opens a GitHub issue carrying the id in a hidden block in
-its body (no labels), and adds a card to the board.
+That records the task in the local cache, opens a GitHub issue carrying the id in a hidden block in its
+body (no labels), and adds a card to the board.
 
 ```jsonc
 // list_ready — the graph engine over the cache
@@ -94,7 +94,7 @@ its body (no labels), and adds a card to the board.
    MCP tools    ── stdio (bunx, for Claude Code)  ·  http (hono, standalone)
         │  each call carries { project, branch? }
         ▼
-   CACHE  .claude/tasks.cache.yaml   ── the authoritative task model + DEPENDENCY GRAPH (committed)
+   CACHE  <os cache dir>/<repo>.yaml   ── the working task model; disposable, rebuilt from the provider
         │  the pure graph engine (ready / schedule / planning) runs over this
         ▼
    Provider (one active, chosen by config)
@@ -102,8 +102,9 @@ its body (no labels), and adds a card to the board.
                                      └── Projects   each task-issue → a board card; status column [best-effort]
 ```
 
-**Authority split.** The cache owns the dependency graph — nothing else can hold it. The provider owns the
-fields it can represent: an issue closed in the UI wins on the next `sync`. The issue is primary (a write
+**Authority split.** The cache holds the working graph and is what reads hit; the provider owns the fields
+it can represent, so an issue closed in the UI wins on the next `sync`. Deps are mirrored into issue
+bodies too, which is what makes the cache disposable — `sync` rebuilds it. The issue is primary (a write
 must land there); the board is best-effort (a hiccup is a warning, never a lost task).
 
 The task ↔ issue mapping (all GraphQL, no labels):
@@ -127,13 +128,7 @@ the repo; point it at an existing board with `projectNumber`, or turn it off ent
 with `gh auth refresh -s project`. Without it, the board sync is skipped with a warning and the task
 still lands as an issue (Projects is best-effort).
 
-```yaml
-# .claude/tasks-mcp.config.yaml   (all optional)
-provider: github # the backing provider (default github; linear planned)
-projects: true # set false to disable the board
-projectNumber: 7 # target an existing board instead of find/create "Tasks"
-board: Tasks # the title to find/create when projectNumber is absent
-```
+Turn it off with `--no-projects`, or aim it at an existing board with `--project-number 7`.
 
 ## The MCP transport
 
@@ -144,13 +139,20 @@ stream, no session id. Both handle `initialize`, `tools/list`, and `tools/call` 
 
 ## Config
 
-| Variable                    | Description                       | Default                       | Required |
-| --------------------------- | --------------------------------- | ----------------------------- | -------- |
-| `OUTPUTTY_MCP_PORT`         | HTTP port (`--http` mode)         | `3917`                        | no       |
-| `GITHUB_TOKEN` / `GH_TOKEN` | GitHub token for the provider     | falls back to `gh auth token` | no       |
-| `OUTPUTTY_PROVIDER`         | which provider backs the project  | `github`                      | no       |
-| `OUTPUTTY_PROJECT_NUMBER`   | target an existing Projects board | find/create "Tasks"           | no       |
-| `OUTPUTTY_PROJECTS`         | `off` disables the board sync     | on                            | no       |
+Everything is a CLI flag — pass them in `.mcp.json`'s `args` (e.g. `["-y", "@outputty/tasks-mcp", "--no-projects"]`) or after `bunx … --http`:
+
+| Flag                   | Description                          | Default      |
+| ---------------------- | ------------------------------------ | ------------ |
+| `--http`               | run the HTTP server instead of stdio | stdio        |
+| `--port <n>`           | HTTP port (`--http` mode)            | `3917`       |
+| `--provider <name>`    | which provider backs the project     | `github`     |
+| `--project-number <n>` | target an existing Projects board    | find/create  |
+| `--no-projects`        | disable the board sync               | board on     |
+| `--board <title>`      | board title to find/create           | `Tasks`      |
+| `--cache-dir <dir>`    | where task caches live               | OS cache dir |
+
+A per-project `.claude/tasks-mcp.config.yaml` (keys: `provider`, `projects`, `projectNumber`, `board`)
+overrides the flags for one repo. Credentials come from `GITHUB_TOKEN` / `GH_TOKEN`, else `gh auth token`.
 
 ## Sync semantics
 

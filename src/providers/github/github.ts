@@ -44,19 +44,20 @@ export class GitHubProvider implements Provider {
       : new Map();
 
     const out = new Map<string, RemoteState>();
-    for (const issue of await listIssues(env)) {
-      const card = board.get(issue.issueId);
-      const issueDone = issue.status === "done";
+    for (const { task, issueId, managed } of await listIssues(env)) {
+      const card = board.get(issueId);
+      const issueDone = task.status === "done";
       const done = issueDone || card?.done === true; // done if the issue is closed OR the card is in Done
       // Reconcile (push back) when the sides disagree, the card is missing, or an issue needs adopting —
       // the push makes the issue, the body block, and the board card all consistent.
       const reconcile =
-        !issue.managed ||
+        !managed ||
         issueDone !== done ||
         (projectsOn && (!card || card.done !== done));
-      out.set(issue.taskId, {
-        patch: { title: issue.title, status: done ? "done" : "open" },
-        refs: { issueId: issue.issueId, projectItem: card?.itemId },
+      // The patch is the whole task rebuilt from the body (deps included), with status reconciled.
+      out.set(task.id, {
+        patch: { ...task, status: done ? "done" : "open" },
+        refs: { issueId, projectItem: card?.itemId },
         reconcile,
       });
     }
