@@ -114,7 +114,7 @@
     kind+link; a plain comment reads back as { note, author, at }; get_trail returns the whole
     thread oldest-first; npm run check green (60 tests).
   status: "✅ shipped"
-  status_detail: v0.10.0 (PR #22); trails need a GitHub-backed project — reads hit the network, no local cache. Supersedes the local .trails design (v0.9.0, merged in PR #21 but never released).
+  status_detail: v0.10.0 (PR #22); trails need a GitHub-backed project — reads hit the network, no local cache. Reworks the local .trails design shipped earlier the same day in v0.9.0 (PR #21) — both are on npm.
   depends_on: [3]
   doc: roadmap/task-trails.md
   absorbs: []

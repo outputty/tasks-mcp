@@ -19,10 +19,11 @@ service routes trail calls to the deepest layer that backs them (GitHub). Two CL
 
 ## The arc
 
-Two designs, one cycle. The **first cut (v0.9.0, merged in PR #21 but never released)** stored trails in
-a local `.trails/<id>.yaml` file, append-only, never synced — chosen so decision prose stayed local. On
-review the user reversed it: **back trails with GitHub issue comments, one provider for tasks and their
-trails** (rulings 2026-08-17). Two calls settled the shape:
+Two designs, one day. The **first cut, v0.9.0 (PR #21), shipped to npm**: trails in a local
+`.trails/<id>.yaml` file, append-only, never synced — chosen so decision prose stayed local. Minutes
+later the user reworked it: **back trails with GitHub issue comments, one provider for tasks and their
+trails** (rulings 2026-08-17), shipped as v0.10.0. So both versions are published; 0.10.0 is a breaking
+change to the trail surface. Two calls settled the new shape:
 
 1. **One provider, not a separate store.** The provider that owns the issue owns its comments — so the
    standalone `TrailStore` and the local file are gone, and trails are just an aspect of the GitHub

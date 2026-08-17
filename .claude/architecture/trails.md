@@ -45,6 +45,6 @@ comes back with neither.
   no issue to comment on yet.
 - `kind` must be one of `TRAIL_KINDS`; a junk `kind` on append is rejected. A junk `kind=` in a
   hand-written marker is ignored on read (the entry keeps its note).
-- History: the first cut (v0.9.0, unreleased) stored trails in a local `.trails/<id>.yaml` file, never
-  synced. Ruled 2026-08-17 to back them with issue comments instead — one provider for tasks and their
-  trails. See `lessons.yaml` / roadmap #6.
+- History: the first cut (v0.9.0, shipped to npm) stored trails in a local `.trails/<id>.yaml` file,
+  never synced. Reworked minutes later in v0.10.0 (ruled 2026-08-17) to back them with issue comments —
+  one provider for tasks and their trails. Both versions are published. See `lessons.yaml` / roadmap #6.

@@ -125,10 +125,11 @@
   files: [src/core/providers/github.ts, src/core/service.ts, src/core/providers/provider.ts]
   version: 0.10.0
   body: |
-    First cut (v0.9.0, merged in PR #21 but never released): a per-task local .trails/<id>.yaml,
-    append-only, never synced — chosen so decision prose stayed LOCAL, with a TEXT-APPEND write to
-    preserve hand-authored block scalars (the reason the original tasks.js refused to write trails).
-    User reversed it before release (2026-08-17): back trails with GitHub ISSUE COMMENTS, and MERGE
+    First cut (v0.9.0, PR #21, PUBLISHED to npm): a per-task local .trails/<id>.yaml, append-only,
+    never synced — chosen so decision prose stayed LOCAL, with a TEXT-APPEND write to preserve
+    hand-authored block scalars (the reason the original tasks.js refused to write trails). User
+    reworked it right after, shipped as v0.10.0 (2026-08-17): back trails with GitHub ISSUE COMMENTS,
+    and MERGE
     trails into the task provider — the layer that owns the issue owns its comments. So TrailStore and
     the local file are gone; the Provider seam gained optional getTrail/appendTrail; GitHubProvider
     does addComment + the comments connection. EVERY comment is an entry (people's included); kind/link
