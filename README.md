@@ -122,6 +122,10 @@ Each task-issue is added to a Projects v2 board and its **Status** column tracks
 (`open → Todo`, `done → Done`). By default the server finds or creates a board named **Tasks** linked to
 the repo; point it at an existing board with `projectNumber`, or turn it off entirely.
 
+**Projects v2 needs the token's `project` scope**, which `gh` does not grant by default — add it once
+with `gh auth refresh -s project`. Without it, the board sync is skipped with a warning and the task
+still lands as an issue (Projects is best-effort).
+
 ```yaml
 # .claude/tasks-mcp.config.yaml   (all optional)
 projects: true # set false to disable the board
