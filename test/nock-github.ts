@@ -4,7 +4,7 @@
 
 import nock from "nock";
 import { Octokit } from "octokit";
-import { GitHubProvider } from "../src/core/providers/github/github.ts";
+import { GitHubProvider } from "../src/core/providers/github.ts";
 import type { ServerOptions } from "../src/core/config.ts";
 
 export interface FakeIssue {

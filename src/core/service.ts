@@ -1,14 +1,15 @@
-// The task service: the local cache is the working store, the provider is the mirror. Reads come straight
-// from the cache (fast). Writes update the cache first, then reflect the representable fields into the
-// provider. `sync` reconciles both ways and can rebuild a fresh cache entirely from the provider, since
-// each task's full record (deps included) is mirrored into its issue body.
+// The task service — the stack orchestrator. It sequences the provider layers and knows nothing of
+// their implementations: reads hit only the top (file) layer, writes fan down through every layer in
+// order, and `sync` pulls every layer, merges with the DEEPEST LAYER WINNING, then pushes the merged
+// truth back into each layer that lacks it or disagrees. Absence is never a claim (a missing task is
+// pushed, not deleted) and deletions never propagate — a task closes everywhere but only vanishes by
+// hand. Layer errors bubble; there is no fallback to decide at this altitude.
 
-import type { CacheEntry, ProjectContext, Task } from "./types.ts";
-import type { Provider, RemoteState } from "./providers/provider.ts";
+import type { ProjectContext, Task } from "./types.ts";
+import type { Provider, ProviderState } from "./providers/provider.ts";
 import type { ServerOptions } from "./config.ts";
-import { Cache } from "./cache.ts";
+import { stackFor } from "./providers/provider.ts";
 import { withDefaults } from "./graph.ts";
-import { providerFor } from "./providers/provider.ts";
 
 export interface SyncResult {
   pulled: number;
@@ -16,7 +17,7 @@ export interface SyncResult {
   conflicts: number;
 }
 
-/** Creating a task whose id the cache already holds. Typed so tests assert the type, not a message. */
+/** Creating a task whose id the stack already holds. Typed so tests assert the type, not a message. */
 export class DuplicateTaskError extends Error {
   constructor(id: string) {
     super(`task ${id} already exists`);
@@ -33,58 +34,55 @@ export interface TaskService {
   sync(ctx: ProjectContext): Promise<SyncResult>;
 }
 
-export class CachedTaskService implements TaskService {
-  // `options` carries the CLI-set knobs (cacheDir, provider, board…). A provider may be injected for tests.
+export class TaskStack implements TaskService {
+  // `options` carries the CLI-set knobs (cacheDir, provider, board…). A whole stack may be injected
+  // for tests — ordered top-first, deepest layer last and most authoritative.
   constructor(
     private readonly options: ServerOptions = {},
-    private readonly provider?: Provider,
+    private readonly providers?: Provider[],
   ) {}
 
-  private cache(project: string): Cache {
-    return Cache.forProject(project, this.options.cacheDir);
+  private layers(ctx: ProjectContext): Provider[] {
+    return this.providers ?? stackFor(ctx.project, this.options);
   }
 
-  /** The project's provider, initialised — repo, credentials, and board are resolved before any op. */
-  private async providerFor(ctx: ProjectContext): Promise<Provider> {
-    const provider = this.provider ?? providerFor(ctx.project, this.options);
-    await provider.init(ctx);
-    return provider;
+  /** The top layer alone, initialised — reads stay local and never touch a remote. */
+  private async top(ctx: ProjectContext): Promise<Provider> {
+    const top = this.layers(ctx)[0];
+    await top.init(ctx);
+    return top;
+  }
+
+  /** Every layer, initialised, top-first. */
+  private async all(ctx: ProjectContext): Promise<Provider[]> {
+    const layers = this.layers(ctx);
+    for (const layer of layers) await layer.init(ctx);
+    return layers;
   }
 
   async list(ctx: ProjectContext): Promise<Task[]> {
-    return this.cache(ctx.project).load();
+    const states = await (await this.top(ctx)).pull(ctx);
+    return [...states.values()].map((s) => s.task);
   }
 
   async get(ctx: ProjectContext, id: string): Promise<Task | null> {
-    return (
-      this.cache(ctx.project)
-        .load()
-        .find((t) => t.id === id) ?? null
-    );
+    const states = await (await this.top(ctx)).pull(ctx);
+    return states.get(id)?.task ?? null;
   }
 
   async create(ctx: ProjectContext, task: Task): Promise<Task> {
-    const cache = this.cache(ctx.project);
-    const entries = cache.load();
-    if (entries.some((e) => e.id === task.id)) throw new DuplicateTaskError(task.id);
-    const refs = await (await this.providerFor(ctx)).create(ctx, task);
-    entries.push({ ...task, refs });
-    cache.save(entries);
+    const top = await this.top(ctx);
+    if ((await top.pull(ctx)).has(task.id)) throw new DuplicateTaskError(task.id);
+    await this.fanDown(ctx, task);
     return task;
   }
 
   async update(ctx: ProjectContext, id: string, patch: Partial<Task>): Promise<Task> {
-    const cache = this.cache(ctx.project);
-    const entries = cache.load();
-    const entry = entries.find((e) => e.id === id);
-    if (!entry) throw new Error(`no task ${id}`);
-    const merged: CacheEntry = { ...entry, ...patch, id };
-    merged.refs = await (
-      await this.providerFor(ctx)
-    ).update(ctx, stripRefs(merged), entry.refs ?? {});
-    entries[entries.indexOf(entry)] = merged;
-    cache.save(entries);
-    return stripRefs(merged);
+    const current = await this.get(ctx, id);
+    if (!current) throw new Error(`no task ${id}`);
+    const merged = withDefaults({ ...current, ...patch, id });
+    await this.fanDown(ctx, merged);
+    return merged;
   }
 
   async close(ctx: ProjectContext, id: string): Promise<void> {
@@ -92,77 +90,72 @@ export class CachedTaskService implements TaskService {
   }
 
   async sync(ctx: ProjectContext): Promise<SyncResult> {
-    const cache = this.cache(ctx.project);
-    const entries = cache.load();
-    const provider = await this.providerFor(ctx);
+    const layers = await this.all(ctx);
+    const pulls: Array<[Provider, Map<string, ProviderState>]> = [];
+    for (const layer of layers) pulls.push([layer, await layer.pull(ctx)]);
+    const merged = mergeStack(pulls);
+    const pushed = await this.reconcile(ctx, layers[0], pulls, merged);
+    return { pulled: merged.size, pushed, conflicts: 0 };
+  }
 
-    const remote = await provider.pull(ctx);
-    const { reconcile, pulled } = mergeRemote(entries, remote);
+  /** Write one task through every layer, top to bottom. */
+  private async fanDown(ctx: ProjectContext, task: Task): Promise<void> {
+    for (const layer of await this.all(ctx)) await layer.upsert(ctx, task);
+  }
 
-    // Push cache tasks the provider has never seen (created offline), so the mirror catches up.
+  /** Push the merged truth into each layer that lacks a task, flagged it, or disagrees with it. */
+  private async reconcile(
+    ctx: ProjectContext,
+    top: Provider,
+    pulls: Array<[Provider, Map<string, ProviderState>]>,
+    merged: Map<string, Task>,
+  ): Promise<number> {
     let pushed = 0;
-    for (const entry of entries) {
-      if (remote.has(entry.id)) continue;
-      entry.refs = await provider.create(ctx, stripRefs(entry));
-      pushed++;
+    for (const [layer, states] of pulls) {
+      for (const [id, task] of merged) {
+        if (!needsPush(states.get(id), task)) continue;
+        await layer.upsert(ctx, task);
+        if (layer !== top) pushed++;
+      }
     }
-    // Push back the disagreeing ones: close/reopen the issue to match, stamp an adopted issue's body
-    // block, and set its board card — so issue, cache, and board converge.
-    for (const entry of reconcile) {
-      entry.refs = await provider.update(ctx, stripRefs(entry), entry.refs ?? {});
-      pushed++;
-    }
-
-    cache.save(entries);
-    return { pulled, pushed, conflicts: 0 };
+    return pushed;
   }
 }
 
-/**
- * Pull the fields the provider owns (title, status) into the cache entries in place, adopting any
- * issue the cache did not know (a hand-opened one) and learning each task's refs. Returns the entries
- * the provider flagged for a push-back.
- */
-function mergeRemote(
-  entries: CacheEntry[],
-  remote: Map<string, RemoteState>,
-): { reconcile: CacheEntry[]; pulled: number } {
-  const byId = new Map(entries.map((e) => [e.id, e]));
-  const reconcile: CacheEntry[] = [];
-  let pulled = 0;
-  for (const [id, state] of remote) {
-    const entry = upsert(byId, entries, id, state);
-    entry.refs = { ...entry.refs, ...state.refs };
-    if (state.reconcile) reconcile.push(entry);
-    pulled++;
+/** Deepest wins: apply every layer's pull in stack order, so the last layer's version of a task lands
+ *  on top. Absence is not a claim — an id a layer lacks simply doesn't overwrite anything. */
+function mergeStack(pulls: Array<[Provider, Map<string, ProviderState>]>): Map<string, Task> {
+  const merged = new Map<string, Task>();
+  for (const [, states] of pulls) {
+    for (const [id, state] of states) merged.set(id, withDefaults({ ...state.task }));
   }
-  return { reconcile, pulled };
+  return merged;
 }
 
-/** The cache entry for one pulled task: patched in place when known, adopted as new when not. */
-function upsert(
-  byId: Map<string, CacheEntry>,
-  entries: CacheEntry[],
-  id: string,
-  state: RemoteState,
-): CacheEntry {
-  const existing = byId.get(id);
-  if (existing) {
-    Object.assign(existing, state.patch);
-    return existing;
-  }
-  const entry = withDefaults({ id, ...state.patch });
-  byId.set(id, entry);
-  entries.push(entry);
-  return entry;
+/** A layer needs the merged task pushed when it lacks it, flagged it reconcile, or disagrees. */
+function needsPush(state: ProviderState | undefined, merged: Task): boolean {
+  if (!state) return true;
+  if (state.reconcile) return true;
+  return !sameTask(state.task, merged);
 }
 
-const stripRefs = (entry: CacheEntry): Task => {
-  const { refs: _refs, ...task } = entry;
-  return task;
-};
+/** Structural equality over normalized tasks, key order ignored. */
+function sameTask(a: Task, b: Task): boolean {
+  return canonical(withDefaults(a)) === canonical(withDefaults(b));
+}
 
-/** The production service: local cache plus the project's configured provider (GitHub by default). */
+const canonical = (value: unknown): string => JSON.stringify(sortKeys(value));
+
+function sortKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value === null || typeof value !== "object") return value;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([k, v]) => [k, sortKeys(v)]);
+  return Object.fromEntries(entries);
+}
+
+/** The production service: the file layer on top, the project's configured remote beneath it. */
 export function makeService(options: ServerOptions = {}): TaskService {
-  return new CachedTaskService(options);
+  return new TaskStack(options);
 }

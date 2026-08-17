@@ -1,14 +1,17 @@
 # @outputty/tasks-mcp
 
-A local **MCP server** that exposes outputty's task tracker as typed tools. Each task is synced two-way to
-a **provider** — GitHub Issues today, with Linear and others plug-and-play behind the same seam. A coding
-agent calls `add_task` / `list_ready` / `schedule` instead of shelling out to a CLI.
+A local **MCP server** that exposes outputty's task tracker as typed tools. Tasks live in a **stack of
+provider layers** — a local file layer on top for fast reads, GitHub Issues beneath it, and any further
+layer (Linear, a mock, …) below that. A coding agent calls `add_task` / `list_ready` / `schedule`
+instead of shelling out to a CLI.
 
-- **The cache is local and disposable.** The graph engine reads a per-project cache under your OS cache
-  dir (override with `--cache-dir`), never the repo. Each task's full record — deps included — is
-  mirrored into its issue body, so a fresh or deleted cache is rebuilt from the provider by `sync`.
-- **Providers are plug-and-play.** One `Provider` seam backs the cache. GitHub (Issues over GraphQL, plus
-  a Projects kanban board) is the first; a new provider is one module, nothing above it moves.
+- **The top layer is a disposable local file.** Reads never touch the network: the graph engine reads a
+  per-project YAML file under your OS cache dir (override with `--cache-dir`), never the repo. Each
+  task's full record — deps included — is mirrored into every layer below, so a fresh or deleted file is
+  rebuilt by `sync`.
+- **Layers are plug-and-play, and order is authority.** Every layer implements one `Provider` seam;
+  the deepest layer is the source of truth. Adding a layer is a free migration: `sync` backfills it
+  from the layers above, and nothing is ever deleted by a layer that lacks a task.
 - **Your existing credentials.** `GITHUB_TOKEN`, or whatever `gh auth login` already stored. No new login.
 
 ## Requirements
@@ -122,21 +125,22 @@ body (no labels), and adds a card to the board.
         │
    src/mcp/     ── the MCP WRAPPER (@modelcontextprotocol/sdk): tools · stdio + streamable-http
         │  wraps ↓ ; never the other way round
-   src/core/    ── the CORE (business logic): service · cache · graph engine · providers
+   src/core/    ── the CORE (business logic): the TaskStack service · graph engine · provider layers
         │  each call carries { project, branch? }
         ▼
-   CACHE  <os cache dir>/<repo>-<hash>.yaml ── the working task model; disposable, rebuilt from the provider
-        │  the pure graph engine (ready / schedule / planning) runs over this
-        ▼
-   Provider (one active, chosen by config)
-        └── GitHub  ── all GraphQL ──┬── Issues     title · status(open/closed) · id-in-body   [primary]
-                                     └── Projects   each task-issue → a board card; status column [best-effort]
+   The provider STACK — top-first; writes fan DOWN through every layer; reads hit only the top
+        ├── FileProvider    <os cache dir>/<repo>-<hash>.yaml — fast, disposable, rebuilt by `sync`
+        └── GitHubProvider  ── all GraphQL ──┬── Issues    title · status · id-in-body    [primary]
+              ▲ deepest = source of truth    └── Projects  a board card per task-issue  [best-effort]
 ```
 
-**Authority split.** The cache holds the working graph and is what reads hit; the provider owns the fields
-it can represent, so an issue closed in the UI wins on the next `sync`. Deps are mirrored into issue
-bodies too, which is what makes the cache disposable — `sync` rebuilds it. The issue is primary (a write
-must land there); the board is best-effort (a hiccup is a warning, never a lost task).
+**Authority is stack order.** On `sync` every layer is pulled and merged with the DEEPEST LAYER WINNING
+a disagreement; the merged truth is then pushed back into each layer that lacks a task or disagrees. An
+issue closed in the GitHub UI wins over the file layer on the next `sync`. Absence is never a claim — a
+task missing from a layer (an empty new layer included) is pushed into it, not deleted from the others —
+and deletions never propagate: a task closes everywhere but only vanishes by hand. Within the GitHub
+layer the issue is primary (a write must land there); the board is best-effort (a hiccup is a warning,
+never a lost task).
 
 The task ↔ issue mapping (all GraphQL, no labels):
 
@@ -187,7 +191,7 @@ overrides the flags for one repo. Credentials come from `GITHUB_TOKEN` / `GH_TOK
 
 ## Sync semantics
 
-`sync` reconciles the cache with GitHub **both ways**:
+`sync` reconciles every layer of the stack **both ways**:
 
 - **Status flows in.** A task is **done** when its issue is closed **or** its board card is in a Done
   column. `sync` writes that into the cache and pushes it back — closing/reopening the issue and moving
@@ -195,8 +199,10 @@ overrides the flags for one repo. Credentials come from `GITHUB_TOKEN` / `GH_TOK
 - **Hand-opened issues are adopted.** Any repo issue `sync` finds without the outputty block is imported
   as a task (`gh-<number>`) and its body is stamped, so it is tracked from then on. Prose already in the
   issue is preserved below the block.
-- **Offline tasks are pushed.** A task added while the provider was unreachable is created on the next
+- **Offline tasks are pushed.** A task added while a layer was unreachable is created there on the next
   `sync`.
+- **A new layer backfills.** Add a layer to the stack and the next `sync` creates every task in it —
+  a provider migration is configuration, not tooling.
 
 ## Limitations
 
