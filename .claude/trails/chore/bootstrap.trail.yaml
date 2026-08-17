@@ -1,0 +1,11 @@
+# trails/chore/bootstrap.trail.yaml - the per-branch spec thought-trail. SPEC writes it; PLAN and BUILD read it.
+core_objective: |
+  Bootstrap outputty product memory for this brownfield repo: reconstruct all six record sets
+  (product, roadmap, architecture, tasks via the tasks MCP server, lessons, examples) from what
+  the repo already knows, verify every shipped claim by a run, then confirm the gaps with a
+  targeted grilling. No planning, no building.
+decisions: []
+not_yet_specified: []
+out_of_scope:
+  - item: New features, refactors, or fixes to the codebase itself
+    reason: Bootstrap only reconstructs memory of what exists; task-shaped findings are filed as tasks, not built.
