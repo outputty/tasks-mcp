@@ -139,3 +139,36 @@ test("a mistyped config file fails loudly, naming the file and the key", async (
   await expect(svc.create({ project }, task({ id: "a" }))).rejects.toThrow(/invalid config/);
   cleanup();
 });
+
+test("a corrupt task file is quarantined, not fatal, and sync rebuilds it", async () => {
+  const { svc, project, cacheDir, cleanup } = harness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "api", title: "survives", tier: 2 }));
+  const file = `${cacheDir}/${fs.readdirSync(cacheDir).find((f) => f.endsWith(".yaml"))}`;
+  fs.writeFileSync(file, "tasks: [unclosed");
+
+  expect(await svc.list(ctx)).toEqual([]); // quarantined, empty top layer, no crash
+  expect(fs.existsSync(`${file}.corrupt`)).toBe(true); // the bad file is set aside
+
+  await svc.sync(ctx);
+  const api = (await svc.get(ctx, "api"))!;
+  expect(api.title).toBe("survives"); // rebuilt from GitHub, link intact
+  expect(api.tier).toBe(2);
+  cleanup();
+});
+
+test("sync reports real conflicts when two issues claim one task id", async () => {
+  const { svc, gh, project, cleanup } = harness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "api" }));
+  gh.issues.push({
+    id: "I_50",
+    number: 50,
+    title: "duplicate",
+    body: "<!-- outputty:task\nid: api\n-->",
+    state: "OPEN",
+  });
+
+  expect((await svc.sync(ctx)).conflicts).toBe(1); // no longer hardwired 0
+  cleanup();
+});

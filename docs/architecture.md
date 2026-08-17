@@ -77,6 +77,13 @@ skipped with a warning and issues remain the status source.
 - **Offline tasks are pushed.** A task added while a layer was unreachable is created there on the
   next `sync`.
 - **A new layer backfills.** Adding a layer to the stack is configuration, not migration tooling.
+- **Duplicates are detected, never deleted.** If two issues ever claim the same task id (a race, or a
+  hand-written block), every read resolves deterministically to the OLDEST issue, the collision is
+  logged, and `sync` counts it in `conflicts` — merging or closing the newer duplicate is a human
+  call.
+- **A corrupt task file self-heals.** An unparseable YAML file is quarantined (renamed `.corrupt`)
+  instead of crashing reads; the layer continues empty and the next `sync` rebuilds it from the
+  layers below — safe because absence is not a claim and GitHub is deeper.
 
 ## Configuration — its own provider
 

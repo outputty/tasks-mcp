@@ -311,9 +311,12 @@ interface Scanned {
   card?: BoardCard;
 }
 
+// FIRST WINS everywhere a task id repeats: the listing is oldest-first, so upserts and pulls always
+// resolve to the OLDEST issue carrying an id — deterministic, and the one a human saw first.
 function indexOf(scan: Scanned[]): Map<string, IssueHandle> {
   const index = new Map<string, IssueHandle>();
   for (const { listed, card } of scan) {
+    if (index.has(listed.task.id)) continue;
     index.set(
       listed.task.id,
       card ? { issueId: listed.issueId, projectItem: card.itemId } : { issueId: listed.issueId },
@@ -344,6 +347,16 @@ function updateMutation(
     `mutation($id:ID!,$t:String!,$b:String!,$l:[ID!]){ updateIssue(input:{id:$id,title:$t,body:$b,labelIds:$l}){ issue{ id } } }`,
     { ...base, l: [...foreign, ...labelIds] },
   ];
+}
+
+/** Duplicate ids are worth a line in the log every time they are seen — they mean two issues claim
+ *  one task and a human should merge or close one; sync counts them but never deletes. */
+function warnConflicts(repo: RepoRef, states: Map<string, ProviderState>): void {
+  const ids = [...states.entries()].filter(([, s]) => s.conflict).map(([id]) => id);
+  if (ids.length === 0) return;
+  console.error(
+    `tasks-mcp: ${repo.owner}/${repo.repo} has duplicate issues for task id(s): ${ids.join(", ")} — using the oldest of each`,
+  );
 }
 
 /** Everything init resolves for one project; every later call runs against this. */
@@ -425,12 +438,17 @@ export class GitHubProvider implements Provider {
     const state = await this.state(ctx.project);
     const scan = await this.scan(state);
     this.indexes.set(ctx.project, Promise.resolve(indexOf(scan)));
-    return new Map(
-      scan.map(({ listed, card }) => [
-        listed.task.id,
-        providerState(listed, card, state.board !== null),
-      ]),
-    );
+    const out = new Map<string, ProviderState>();
+    for (const { listed, card } of scan) {
+      const existing = out.get(listed.task.id);
+      if (existing) {
+        existing.conflict = true; // a newer issue also claims this id; the oldest stays the record
+        continue;
+      }
+      out.set(listed.task.id, providerState(listed, card, state.board !== null));
+    }
+    warnConflicts(state.repo, out);
+    return out;
   }
 
   // -------------------------------------------------------------------------------------------------

@@ -146,3 +146,23 @@ test("a Projects failure never fails the task write (best-effort)", async () => 
   expect(gh.issues).toHaveLength(1); // the issue still lands
   expect(gh.items.size).toBe(0); // board skipped
 });
+
+test("two issues claiming one id: the oldest is the record, the pull flags a conflict", async () => {
+  const { gh, provider, ctx } = setup();
+  await provider.upsert(ctx, task({ id: "api", title: "the original" }));
+  gh.issues.push({
+    id: "I_99",
+    number: 99,
+    title: "an impostor",
+    body: "<!-- outputty:task\nid: api\n-->",
+    state: "OPEN",
+  });
+
+  const state = (await provider.pull(ctx)).get("api")!;
+  expect(state.task.title).toBe("the original"); // oldest wins
+  expect(state.conflict).toBe(true);
+
+  await provider.upsert(ctx, task({ id: "api", title: "renamed" }));
+  expect(gh.issues[0].title).toBe("renamed"); // updates resolve to the oldest…
+  expect(gh.issues[1].title).toBe("an impostor"); // …the newer duplicate is never touched
+});

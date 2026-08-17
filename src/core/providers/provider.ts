@@ -20,6 +20,9 @@ export interface ProviderState {
   task: Task;
   /** The layer's own sides disagree (or an item needs adopting): push the merged task back to it. */
   reconcile?: boolean;
+  /** More than one remote item claims this task id — the layer resolved to the OLDEST one and the
+   *  newer duplicates are shadowed. Counted into SyncResult.conflicts; repair is a human call. */
+  conflict?: boolean;
 }
 
 export interface Provider {

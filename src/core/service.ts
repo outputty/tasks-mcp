@@ -116,7 +116,7 @@ export class TaskStack implements TaskService {
     for (const layer of layers) pulls.push([layer, await layer.pull(ctx)]);
     const merged = mergeStack(pulls);
     const pushed = await this.reconcile(ctx, layers[0], pulls, merged);
-    return { pulled: merged.size, pushed, conflicts: 0 };
+    return { pulled: merged.size, pushed, conflicts: conflictCount(pulls) };
   }
 
   /** Write one task through every layer, top to bottom. */
@@ -151,6 +151,15 @@ function mergeStack(pulls: Array<[Provider, Map<string, ProviderState>]>): Map<s
     for (const [id, state] of states) merged.set(id, withDefaults({ ...state.task }));
   }
   return merged;
+}
+
+/** Task ids any layer flagged as conflicted (duplicate remote items claiming one id). */
+function conflictCount(pulls: Array<[Provider, Map<string, ProviderState>]>): number {
+  const ids = new Set<string>();
+  for (const [, states] of pulls) {
+    for (const [id, state] of states) if (state.conflict) ids.add(id);
+  }
+  return ids.size;
 }
 
 /** A layer needs the merged task pushed when it lacks it, flagged it reconcile, or disagrees. */
