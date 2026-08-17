@@ -63,7 +63,7 @@ npx -y @outputty/tasks-mcp ready --project /abs/repo
 ```ts
 // 3. Library — embed the core (or the MCP layer) in your own program
 import { makeService, ready } from "@outputty/tasks-mcp";
-import { createApp, runStdio } from "@outputty/tasks-mcp/mcp";
+import { createHttpServer, runStdio } from "@outputty/tasks-mcp/mcp";
 
 const service = makeService({ projects: false });
 const tasks = await service.list({ project: "/abs/repo" });
@@ -73,8 +73,9 @@ console.log(ready(tasks).map((t) => t.id));
 ## What the tools do
 
 Every tool takes `project` — the absolute path to the repo it acts on — because the server has no working
-directory of its own. The first write to a repo it hasn't seen provisions the Projects board
-automatically (when the board sync is enabled).
+directory of its own. The first call that touches GitHub for a project (any write, or `sync`) runs the
+provider's init once: repo and credentials are resolved and the Projects board is found or created (when
+the board sync is enabled). Reads are cache-only and never touch the network.
 
 ```jsonc
 // add_task — a typed call, so a multi-line brief needs no shell quoting
@@ -96,7 +97,8 @@ body (no labels), and adds a card to the board.
 ```jsonc
 // list_ready — the graph engine over the cache
 { "project": "/abs/path/to/repo" }
-// -> { "ids": ["schema"], "tasks": [ { "id": "schema", "status": "open", "tier": 3, "qa": "subagent" } ] }
+// -> { "ids": ["schema"],
+//      "tasks": [ { "id": "schema", "status": "open", "deps": [], "summary": "Design the schema", "tier": 3, "qa": "subagent" } ] }
 ```
 
 `schema` is ready and `api` is not, because `api` waits on `schema`. Close `schema` (`close_task`) and
@@ -123,7 +125,7 @@ body (no labels), and adds a card to the board.
    src/core/    ── the CORE (business logic): service · cache · graph engine · providers
         │  each call carries { project, branch? }
         ▼
-   CACHE  <os cache dir>/<repo>.yaml   ── the working task model; disposable, rebuilt from the provider
+   CACHE  <os cache dir>/<repo>-<hash>.yaml ── the working task model; disposable, rebuilt from the provider
         │  the pure graph engine (ready / schedule / planning) runs over this
         ▼
    Provider (one active, chosen by config)
@@ -138,11 +140,11 @@ must land there); the board is best-effort (a hiccup is a warning, never a lost 
 
 The task ↔ issue mapping (all GraphQL, no labels):
 
-| Task field                                                              | Issue home                                                     |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `id`                                                                    | leads the hidden YAML block in the issue body (the stable key) |
-| `title` / `status`                                                      | issue title / open ↔ closed                                    |
-| `deps` `scope` `brief` `contract` `tier` `qa` `spec` `stage` `attempts` | the rest of that hidden block                                  |
+| Task field                                                                                       | Issue home                                                     |
+| ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| `id`                                                                                             | leads the hidden YAML block in the issue body (the stable key) |
+| `title` / `status`                                                                               | issue title / open ↔ closed                                    |
+| `kind` `deps` `scope` `brief` `contract` `tier` `qa` `spec` `stage` `attempts` `discovered_from` | the rest of that hidden block                                  |
 
 An issue is "managed" iff its body carries that block. Prose a human writes below it is preserved across
 updates.
@@ -180,7 +182,7 @@ Everything is a CLI flag — pass them in `.mcp.json`'s `args` (e.g. `["-y", "@o
 | `--board <title>`      | board title to find/create           | `Tasks`      |
 | `--cache-dir <dir>`    | where task caches live               | OS cache dir |
 
-A per-project `.claude/tasks-mcp.config.yaml` (keys: `provider`, `projects`, `projectNumber`, `board`)
+A per-project `.claude/tasks-mcp.config.yaml` (or `.json`; keys: `provider`, `projects`, `projectNumber`, `board`)
 overrides the flags for one repo. Credentials come from `GITHUB_TOKEN` / `GH_TOKEN`, else `gh auth token`.
 
 ## Sync semantics
@@ -210,6 +212,8 @@ npm run check        # THE build, exactly what CI runs: oxfmt check -> oxlint ->
 npm test             # vitest alone: graph engine · GitHub provider (nock) · cache service · MCP server
 npm run build        # tsdown alone -> dist/ (cli, index, mcp)
 ```
+
+Developing needs **Node ≥ 22** (the tsdown toolchain); the published package itself still runs on 18.
 
 The GitHub provider is tested with **nock** — the tests drive the real Octokit client, and nock
 intercepts the HTTP so the actual queries and responses are exercised without a network or credentials.
