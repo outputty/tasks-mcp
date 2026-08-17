@@ -26,7 +26,11 @@ function harness() {
   const cache = tmp();
   const mock = new MockProvider();
   const file = new FileProvider({ cacheDir: cache.dir });
-  const svc = new TaskStack({}, [file, nockProvider({ projects: false }), mock]);
+  const svc = new TaskStack({ cacheDir: cache.dir }, [
+    file,
+    nockProvider({ projects: false, cacheDir: cache.dir }),
+    mock,
+  ]);
   return {
     svc,
     gh,
@@ -75,18 +79,18 @@ test("a task born at the bottom propagates to every layer above", async () => {
 test("an empty, newly added layer backfills instead of erasing (free migration)", async () => {
   const { gh, cacheDir, ctx, cleanup } = harness();
   // Day 0: a two-layer stack accumulates tasks.
-  const dayZero = new TaskStack({}, [
+  const dayZero = new TaskStack({ cacheDir }, [
     new FileProvider({ cacheDir }),
-    nockProvider({ projects: false }),
+    nockProvider({ projects: false, cacheDir }),
   ]);
   await dayZero.create(ctx, task({ id: "schema" }));
   await dayZero.create(ctx, task({ id: "api", deps: ["schema"] }));
 
   // Day 1: the same stack with a brand-new empty layer at the bottom.
   const late = new MockProvider();
-  const dayOne = new TaskStack({}, [
+  const dayOne = new TaskStack({ cacheDir }, [
     new FileProvider({ cacheDir }),
-    nockProvider({ projects: false }),
+    nockProvider({ projects: false, cacheDir }),
     late,
   ]);
   await dayOne.sync(ctx);

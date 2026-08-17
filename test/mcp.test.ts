@@ -45,17 +45,18 @@ async function startHttp(service: TaskStack) {
 
 // The whole stack on an ephemeral port: nock GitHub, real provider + service, real HTTP transport.
 async function harness() {
-  installNock(new NockGitHub());
+  const gh = installNock(new NockGitHub());
   const project = tmpRepo();
   const cache = tmp();
-  const service = new TaskStack({}, [
+  const service = new TaskStack({ cacheDir: cache.dir }, [
     new FileProvider({ cacheDir: cache.dir }),
-    nockProvider({ projects: false }),
+    nockProvider({ projects: false, cacheDir: cache.dir }),
   ]);
   const { base, client, close } = await startHttp(service);
   return {
     client,
     base,
+    gh,
     project: project.dir,
     cleanup: async () => {
       await close();
@@ -165,6 +166,37 @@ test("prereqs and blockers answer the two planning questions over MCP", async ()
   expect(blk.blockers[0].blocks).toBe(2);
   expect(blk.blockers[0].highPriorityBlocked).toEqual(["ui"]);
   expect(blk.blockers[0].unblockedBy).toEqual([]); // schema itself is startable now
+  await cleanup();
+});
+
+test("a global set_config propagates to the GitHub layer on the next write", async () => {
+  const { client, gh, project, cleanup } = await harness();
+  await client.callTool({
+    name: "set_config",
+    arguments: { project, scope: "global", config: { labels: false } },
+  });
+  await client.callTool({ name: "add_task", arguments: { project, id: "plain", tier: 2 } });
+
+  expect(gh.issues[0].labels ?? []).toEqual([]); // no labels anywhere, per the global spec
+  await cleanup();
+});
+
+test("a per-repo override beats the global spec, layer by layer in get_config", async () => {
+  const { client, gh, project, cleanup } = await harness();
+  const set = (scope: string, config: object) =>
+    client.callTool({ name: "set_config", arguments: { project, scope, config } });
+  await set("global", { labels: false });
+  await set("repo", { labels: true, labelFields: ["tier"] });
+  await client.callTool({
+    name: "add_task",
+    arguments: { project, id: "labelled", tier: 1, priority: "high" },
+  });
+
+  expect(gh.issues[0].labels).toEqual(["tier:1"]); // labels back on, tier only
+  const cfg = structured(await client.callTool({ name: "get_config", arguments: { project } }));
+  expect(cfg.global.labels).toBe(false);
+  expect(cfg.repo.labels).toBe(true);
+  expect(cfg.effective.labelFields).toEqual(["tier"]);
   await cleanup();
 });
 

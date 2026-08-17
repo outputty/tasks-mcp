@@ -134,7 +134,23 @@ mapping.
 
 ## Configuration
 
-Flags go in `.mcp.json`'s `args` (e.g. `["-y", "@outputty/tasks-mcp", "--no-projects"]`):
+Preferences are configured **centrally, through the server itself** — the `set_config` tool writes
+them, they are stored beside the task caches (never in your repo), and they propagate to every
+provider layer:
+
+```jsonc
+// set_config — a global spec that applies to every repo…
+{ "project": "/abs/repo", "scope": "global", "config": { "labels": true, "board": "Tasks" } }
+// …overridable per repo:
+{ "project": "/abs/repo", "scope": "repo", "config": { "labelFields": ["tier", "priority"] } }
+```
+
+Precedence, weakest first: defaults < CLI flags < global spec < per-repo override. `get_config` shows
+every layer plus the effective result. Configurable: `provider`, `projects`, `projectNumber`,
+`board`, `labels` (label sync on/off), `labelFields` (which properties become labels). Everything is
+zod-validated — a typo'd key or mistyped value fails loudly, naming the file.
+
+Deployment flags (in `.mcp.json`'s `args`, e.g. `["-y", "@outputty/tasks-mcp", "--no-projects"]`):
 
 | Flag                    | Description                             | Default       |
 | ----------------------- | --------------------------------------- | ------------- |
@@ -143,12 +159,9 @@ Flags go in `.mcp.json`'s `args` (e.g. `["-y", "@outputty/tasks-mcp", "--no-proj
 | `--project-number <n>`  | target an existing Projects board       | find/create   |
 | `--no-projects`         | disable the board sync                  | board on      |
 | `--board <title>`       | board title to find/create              | `Tasks`       |
-| `--cache-dir <dir>`     | where the file layer lives              | OS cache dir  |
+| `--cache-dir <dir>`     | where the file layer + config live      | OS cache dir  |
 
-A per-project `.claude/tasks-mcp.config.yaml` (or `.json`) overrides the flags for one repo, with the
-same keys (`provider`, `projects`, `projectNumber`, `board`). The file is zod-validated: a typo'd key
-or a mistyped value fails loudly with the file's path. Credentials come from `GITHUB_TOKEN` /
-`GH_TOKEN`, else `gh auth token`.
+Credentials come from `GITHUB_TOKEN` / `GH_TOKEN`, else `gh auth token`.
 
 ## More
 

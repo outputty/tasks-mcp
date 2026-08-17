@@ -23,9 +23,9 @@ function harness() {
   const gh = installNock(new NockGitHub());
   const project = tmpRepo();
   const cache = tmp();
-  const svc = new TaskStack({}, [
+  const svc = new TaskStack({ cacheDir: cache.dir }, [
     new FileProvider({ cacheDir: cache.dir }),
-    nockProvider({ projects: false }),
+    nockProvider({ projects: false, cacheDir: cache.dir }),
   ]);
   return {
     svc,
@@ -78,9 +78,9 @@ test("a deleted file layer is rebuilt from the issues, deps and all", async () =
 
   // Fresh file layer, same "remote" (the nock GitHub keeps its issues).
   const cache2 = tmp();
-  const svc2 = new TaskStack({}, [
+  const svc2 = new TaskStack({ cacheDir: cache2.dir }, [
     new FileProvider({ cacheDir: cache2.dir }),
-    nockProvider({ projects: false }),
+    nockProvider({ projects: false, cacheDir: cache2.dir }),
   ]);
   expect(await svc2.list(ctx)).toEqual([]);
   await svc2.sync(ctx);
@@ -134,9 +134,8 @@ test("a file written before the stack (with a refs key) still loads", async () =
 });
 
 test("a mistyped config file fails loudly, naming the file and the key", async () => {
-  const { svc, project, cleanup } = harness();
-  fs.mkdirSync(`${project}/.claude`, { recursive: true });
-  fs.writeFileSync(`${project}/.claude/tasks-mcp.config.yaml`, "projectNumber: seven\n");
+  const { svc, project, cacheDir, cleanup } = harness();
+  fs.writeFileSync(`${cacheDir}/config.yaml`, "projectNumber: seven\n");
   await expect(svc.create({ project }, task({ id: "a" }))).rejects.toThrow(/invalid config/);
   cleanup();
 });

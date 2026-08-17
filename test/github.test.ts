@@ -1,6 +1,6 @@
 import { test, expect, beforeEach, afterAll } from "vitest";
 import nock from "nock";
-import { task, tmpRepo } from "./helpers.ts";
+import { task, tmp, tmpRepo } from "./helpers.ts";
 import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
 
 beforeEach(() => {
@@ -15,7 +15,13 @@ afterAll(() => {
 function setup(options: Record<string, unknown> = { projects: false }) {
   const gh = installNock(new NockGitHub());
   const repo = tmpRepo();
-  return { gh, provider: nockProvider(options), ctx: { project: repo.dir } };
+  const cache = tmp();
+  return {
+    gh,
+    provider: nockProvider({ cacheDir: cache.dir, ...options }),
+    cacheDir: cache.dir,
+    ctx: { project: repo.dir },
+  };
 }
 
 test("upsert of a new id creates an issue: id and deps in the body, scalars as labels", async () => {
@@ -96,10 +102,11 @@ test("a hand-typed junk label value is ignored, not crashed on", async () => {
 });
 
 test("the index survives a fresh provider: an existing issue is found, not re-created", async () => {
-  const { gh, ctx } = setup();
-  await nockProvider({ projects: false }).upsert(ctx, task({ id: "api", title: "one" }));
+  const { gh, ctx, cacheDir } = setup();
+  const options = { projects: false, cacheDir };
+  await nockProvider(options).upsert(ctx, task({ id: "api", title: "one" }));
   // A different provider instance (fresh in-memory index) — it must rediscover the issue by listing.
-  await nockProvider({ projects: false }).upsert(ctx, task({ id: "api", title: "two" }));
+  await nockProvider(options).upsert(ctx, task({ id: "api", title: "two" }));
   expect(gh.issues).toHaveLength(1);
   expect(gh.issues[0].title).toBe("two");
 });

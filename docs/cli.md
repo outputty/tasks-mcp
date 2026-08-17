@@ -26,6 +26,10 @@ npx -y @outputty/tasks-mcp schedule --project /abs/repo   # the whole plan as de
 npx -y @outputty/tasks-mcp list     --project /abs/repo   # every task, full records
 npx -y @outputty/tasks-mcp get api  --project /abs/repo   # one task
 
+# configuration (read; set it through the MCP server's set_config tool)
+npx -y @outputty/tasks-mcp config --project /abs/repo
+# -> { "flags": {...}, "global": {...}, "repo": {...}, "effective": {...} }
+
 # writes
 npx -y @outputty/tasks-mcp add api --title "Build the API" --deps schema --tier 2 \
   --priority high --project /abs/repo

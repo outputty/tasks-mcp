@@ -3,6 +3,9 @@
 The package is split into a **core** (all the business logic, importable as a library) and a thin
 **MCP wrapper** over it. The core's centre is the **provider stack**.
 
+The swimlane below reads like the system runs: rows are the layers, columns are the stages of one
+call — down a stage column, then right to the next stage.
+
 ![tasks-mcp architecture: the provider stack](architecture.svg)
 
 ## The provider stack
@@ -74,6 +77,16 @@ skipped with a warning and issues remain the status source.
 - **Offline tasks are pushed.** A task added while a layer was unreachable is created there on the
   next `sync`.
 - **A new layer backfills.** Adding a layer to the stack is configuration, not migration tooling.
+
+## Configuration — its own provider
+
+The server carries no user preferences of its own: `ConfigProvider` is a class of its own, and the MCP
+tools `get_config` / `set_config` are its surface. Preferences are stored beside the task caches —
+one **global spec** (`<cacheDir>/config.yaml`) applying to every repo, overridable per repo
+(`<cacheDir>/<repo>-<hash>.config.yaml`). Precedence, weakest first: defaults < CLI flags < global
+spec < per-repo override. Every provider layer reads the same ConfigProvider, so a preference set
+centrally propagates to all of them — label preferences are read live, taking effect on the very next
+write. Files are zod-parsed; unknown keys and mistyped values fail loudly with the file's path.
 
 ## Init
 

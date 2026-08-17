@@ -5,9 +5,9 @@
 // pushed, not deleted) and deletions never propagate — a task closes everywhere but only vanishes by
 // hand. Layer errors bubble; there is no fallback to decide at this altitude.
 
-import type { ProjectContext, Task } from "./types.ts";
+import type { ProjectConfig, ProjectContext, Task } from "./types.ts";
 import type { Provider, ProviderState } from "./providers/provider.ts";
-import type { ServerOptions } from "./config.ts";
+import { ConfigProvider, type ConfigSources, type ServerOptions } from "./config.ts";
 import { stackFor } from "./providers/provider.ts";
 import { withDefaults } from "./graph.ts";
 
@@ -32,6 +32,14 @@ export interface TaskService {
   update(ctx: ProjectContext, id: string, patch: Partial<Task>): Promise<Task>;
   close(ctx: ProjectContext, id: string): Promise<void>;
   sync(ctx: ProjectContext): Promise<SyncResult>;
+  /** Every layer of the configuration for this project, plus the effective result. */
+  getConfig(ctx: ProjectContext): Promise<ConfigSources>;
+  /** Write preferences centrally: into the global spec, or one repo's override. */
+  setConfig(
+    ctx: ProjectContext,
+    scope: "global" | "repo",
+    patch: ProjectConfig,
+  ): Promise<ProjectConfig>;
 }
 
 export class TaskStack implements TaskService {
@@ -40,10 +48,23 @@ export class TaskStack implements TaskService {
   constructor(
     private readonly options: ServerOptions = {},
     private readonly providers?: Provider[],
+    private readonly config: ConfigProvider = new ConfigProvider(options),
   ) {}
 
   private layers(ctx: ProjectContext): Provider[] {
-    return this.providers ?? stackFor(ctx.project, this.options);
+    return this.providers ?? stackFor(ctx.project, this.options, this.config);
+  }
+
+  async getConfig(ctx: ProjectContext): Promise<ConfigSources> {
+    return this.config.sources(ctx.project);
+  }
+
+  async setConfig(
+    ctx: ProjectContext,
+    scope: "global" | "repo",
+    patch: ProjectConfig,
+  ): Promise<ProjectConfig> {
+    return this.config.set(ctx.project, scope, patch);
   }
 
   /** The top layer alone, initialised — reads stay local and never touch a remote. */

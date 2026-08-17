@@ -91,6 +91,22 @@ const indexRow = (task: Task) => ({
   priority: priorityOf(task),
 });
 
+// The config object's zod shape — reused by get_config (output) and set_config (input + output).
+const CONFIG = {
+  provider: z.string().optional(),
+  projects: z.boolean().optional(),
+  projectNumber: z.number().optional(),
+  board: z.string().optional(),
+  labels: z
+    .boolean()
+    .optional()
+    .describe("Wear execution properties as GitHub labels (default on)."),
+  labelFields: z
+    .array(z.enum(["kind", "tier", "qa", "spec", "stage", "priority"]))
+    .optional()
+    .describe("Which fields become labels (default: all)."),
+};
+
 // Tool results carry the JSON twice by MCP convention: `structuredContent` for typed consumers,
 // serialized `content` text for the rest.
 const result = <T extends Record<string, unknown>>(structured: T) => ({
@@ -366,6 +382,46 @@ export function createMcpServer(service: TaskService): McpServer {
           highPriorityBlocked: b.blocks.filter((t) => priorityOf(t) === "high").map((t) => t.id),
           unblockedBy: prereqs(tasks, b.task.id).map((layer) => layer.map((t) => t.id)),
         })),
+      });
+    },
+  );
+
+  server.registerTool(
+    "get_config",
+    {
+      description:
+        "The configuration for a project, layer by layer: CLI flags, the global spec (applies to " +
+        "every repo), this repo's override, and the effective result.",
+      inputSchema: { project: PROJECT, branch: BRANCH },
+      outputSchema: {
+        flags: z.object(CONFIG),
+        global: z.object(CONFIG),
+        repo: z.object(CONFIG),
+        effective: z.object(CONFIG),
+      },
+    },
+    async (args) => {
+      return result({ ...(await service.getConfig(ctxOf(args))) });
+    },
+  );
+
+  server.registerTool(
+    "set_config",
+    {
+      description:
+        "Configure preferences centrally — they propagate to every provider layer. scope=global " +
+        "writes the spec that applies to all repos; scope=repo overrides it for this repo only.",
+      inputSchema: {
+        project: PROJECT,
+        branch: BRANCH,
+        scope: z.enum(["global", "repo"]).describe("Where the settings apply."),
+        config: z.object(CONFIG).describe("The settings to merge in."),
+      },
+      outputSchema: { effective: z.object(CONFIG) },
+    },
+    async (args) => {
+      return result({
+        effective: await service.setConfig(ctxOf(args), args.scope, args.config),
       });
     },
   );

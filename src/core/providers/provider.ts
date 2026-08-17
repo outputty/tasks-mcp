@@ -10,7 +10,7 @@
 //   - DELETIONS NEVER PROPAGATE: a task can close everywhere, but only vanishes by hand.
 
 import type { ProjectContext, Task } from "../types.ts";
-import { loadConfig, type ServerOptions } from "../config.ts";
+import { ConfigProvider, type ServerOptions } from "../config.ts";
 import { FileProvider } from "./file.ts";
 import { GitHubProvider } from "./github.ts";
 
@@ -38,8 +38,8 @@ export interface Provider {
 }
 
 // Registered remote layers. Adding Linear is one entry here plus its class — nothing else moves.
-const REMOTES: Record<string, (options: ServerOptions) => Provider> = {
-  github: (options) => new GitHubProvider(options),
+const REMOTES: Record<string, (config: ConfigProvider) => Provider> = {
+  github: (config) => new GitHubProvider(config),
 };
 
 // One stack per remote name — layers cache their per-project init (repo, board, index), so handing out
@@ -48,16 +48,21 @@ const stacks = new Map<string, Provider[]>();
 
 /**
  * The project's provider stack, top-first: the file layer, then the configured remote (default
- * "github"). Order is authority order — the LAST layer is the source of truth.
+ * "github"). Order is authority order — the LAST layer is the source of truth. Every remote layer
+ * shares the one ConfigProvider, so a preference set centrally propagates to all of them.
  */
-export function stackFor(project: string, options: ServerOptions = {}): Provider[] {
-  const name = loadConfig(project, options).provider ?? "github";
+export function stackFor(
+  project: string,
+  options: ServerOptions = {},
+  config: ConfigProvider = new ConfigProvider(options),
+): Provider[] {
+  const name = config.get(project).provider ?? "github";
   const make = REMOTES[name];
   if (!make)
     throw new Error(`unknown provider '${name}' (known: ${Object.keys(REMOTES).join(", ")})`);
   let stack = stacks.get(name);
   if (!stack) {
-    stack = [new FileProvider(options), make(options)];
+    stack = [new FileProvider(options), make(config)];
     stacks.set(name, stack);
   }
   return stack;

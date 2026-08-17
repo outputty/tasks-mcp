@@ -5,11 +5,10 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { parse, stringify } from "yaml";
 import type { ProjectContext, Task } from "../types.ts";
 import type { ServerOptions } from "../config.ts";
-import { defaultCacheDir } from "../config.ts";
+import { defaultCacheDir, projectSlug } from "../config.ts";
 import { withDefaults } from "../graph.ts";
 import type { Provider, ProviderState } from "./provider.ts";
 
@@ -39,9 +38,7 @@ export class FileProvider implements Provider {
 
   /** The file for a project: `<cacheDir>/<basename>-<hash>.yaml`, keyed by the project's path. */
   private fileFor(project: string): string {
-    const base = path.basename(project) || "repo";
-    const hash = createHash("sha256").update(project).digest("hex").slice(0, 8);
-    return path.join(this.options.cacheDir ?? defaultCacheDir(), `${base}-${hash}.yaml`);
+    return path.join(this.options.cacheDir ?? defaultCacheDir(), `${projectSlug(project)}.yaml`);
   }
 
   private load(project: string): Task[] {

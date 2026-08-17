@@ -53,7 +53,10 @@ export interface RepoRef {
   repo: string;
 }
 
-/** Per-project settings, read from `.claude/tasks-mcp.config.*` (all optional). */
+/** A field a task can wear as a `field:value` GitHub label. */
+export type LabelFieldName = "kind" | "tier" | "qa" | "spec" | "stage" | "priority";
+
+/** User preferences, resolved by ConfigProvider (defaults < flags < global spec < per-repo). */
 export interface ProjectConfig {
   /** Which provider backs this project. Default "github". A future value is "linear". */
   provider?: string;
@@ -63,4 +66,8 @@ export interface ProjectConfig {
   projectNumber?: number;
   /** The board title to find or create when `projectNumber` is absent. Default "Tasks". */
   board?: string;
+  /** Wear execution properties as GitHub labels. Default on. */
+  labels?: boolean;
+  /** Which fields become labels when `labels` is on. Default: all of them. */
+  labelFields?: LabelFieldName[];
 }

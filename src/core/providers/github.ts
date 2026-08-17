@@ -21,8 +21,8 @@ import { spawnSync } from "node:child_process";
 import { Octokit } from "octokit";
 import { match } from "ts-pattern";
 import { parse, stringify } from "yaml";
-import type { ProjectConfig, ProjectContext, RepoRef, Task } from "../types.ts";
-import { loadConfig, type ServerOptions } from "../config.ts";
+import type { LabelFieldName, ProjectConfig, ProjectContext, RepoRef, Task } from "../types.ts";
+import { ConfigProvider } from "../config.ts";
 import type { Provider, ProviderState } from "./provider.ts";
 import { withDefaults } from "../graph.ts";
 
@@ -106,10 +106,13 @@ const labelField = (name: string): LabelField | null => {
   return field in LABEL_FIELDS ? (field as LabelField) : null;
 };
 
-/** The labels a task wears: one `field:value` per label-worn field that is set. */
-function labelsFor(task: Task): string[] {
+/** The labels a task wears — one `field:value` per configured label-worn field that is set — or
+ *  null when the label sync is configured off (meaning: do not touch labels at all). */
+function labelsFor(task: Task, config: ProjectConfig): string[] | null {
+  if (config.labels === false) return null;
+  const fields = config.labelFields ?? (Object.keys(LABEL_FIELDS) as LabelFieldName[]);
   const out: string[] = [];
-  for (const field of Object.keys(LABEL_FIELDS) as LabelField[]) {
+  for (const field of fields) {
     const value = (task as unknown as Record<string, unknown>)[field];
     if (value !== undefined) out.push(`${field}:${value}`);
   }
@@ -319,6 +322,30 @@ function indexOf(scan: Scanned[]): Map<string, IssueHandle> {
   return index;
 }
 
+/** The updateIssue call for a task: label sync off leaves labels untouched; on, it keeps every
+ *  foreign label and replaces only ours (updateIssue's labelIds REPLACES the whole set). */
+function updateMutation(
+  issueId: string,
+  task: Task,
+  human: string,
+  node: { labels: { nodes: Array<{ id: string; name: string }> } } | null,
+  labelIds: string[] | undefined,
+): [string, Record<string, unknown>] {
+  const base = { id: issueId, t: task.title || task.id, b: renderBody(task, human) };
+  if (labelIds === undefined)
+    return [
+      `mutation($id:ID!,$t:String!,$b:String!){ updateIssue(input:{id:$id,title:$t,body:$b}){ issue{ id } } }`,
+      base,
+    ];
+  const foreign = (node?.labels.nodes ?? [])
+    .filter((l) => labelField(l.name) === null)
+    .map((l) => l.id);
+  return [
+    `mutation($id:ID!,$t:String!,$b:String!,$l:[ID!]){ updateIssue(input:{id:$id,title:$t,body:$b,labelIds:$l}){ issue{ id } } }`,
+    { ...base, l: [...foreign, ...labelIds] },
+  ];
+}
+
 /** Everything init resolves for one project; every later call runs against this. */
 interface ProjectState {
   repo: RepoRef;
@@ -340,7 +367,7 @@ export class GitHubProvider implements Provider {
   private readonly indexes = new Map<string, Promise<Map<string, IssueHandle>>>();
 
   constructor(
-    private readonly options: ServerOptions = {},
+    private readonly config: ConfigProvider = new ConfigProvider(),
     octokit?: Octokit,
   ) {
     this.octokit = octokit ?? defaultOctokit();
@@ -359,7 +386,10 @@ export class GitHubProvider implements Provider {
     const state = await this.state(ctx.project);
     const index = await this.index(ctx.project, state);
     const known = index.get(task.id);
-    const labelIds = await this.ensureLabels(state, labelsFor(task));
+    // Label preferences are read LIVE (not from init-frozen state), so a set_config propagates to
+    // the very next write; board configuration stays init-resolved (changing it needs a new board).
+    const wanted = labelsFor(task, this.config.get(ctx.project));
+    const labelIds = wanted === null ? undefined : await this.ensureLabels(state, wanted);
     const issueId = await this.writeIssue(state, known?.issueId, task, labelIds);
     const projectItem = await this.withBoard(state, task, issueId, known?.projectItem);
     index.set(task.id, projectItem ? { issueId, projectItem } : { issueId });
@@ -434,7 +464,7 @@ export class GitHubProvider implements Provider {
     state: ProjectState,
     issueId: string | undefined,
     task: Task,
-    labelIds: string[],
+    labelIds: string[] | undefined, // undefined = label sync configured off: never touch labels
   ): Promise<string> {
     if (!issueId) return this.createIssue(state, task, labelIds);
     await this.updateIssue(issueId, task, labelIds);
@@ -464,7 +494,7 @@ export class GitHubProvider implements Provider {
 
   private async buildState(project: string): Promise<ProjectState> {
     const repo = resolveRepo(project);
-    const config = loadConfig(project, this.options);
+    const config = this.config.get(project);
     const snapshot = await this.repoSnapshot(repo);
     return {
       repo,
@@ -561,41 +591,36 @@ export class GitHubProvider implements Provider {
   // -------------------------------------------------------------------------------------------------
   // Issues — the primary record. A write here must succeed.
 
-  private async createIssue(state: ProjectState, task: Task, labelIds: string[]): Promise<string> {
+  private async createIssue(
+    state: ProjectState,
+    task: Task,
+    labelIds: string[] | undefined,
+  ): Promise<string> {
+    const mutation =
+      labelIds === undefined
+        ? `mutation($r:ID!,$t:String!,$b:String!){ createIssue(input:{repositoryId:$r,title:$t,body:$b}){ issue{ id } } }`
+        : `mutation($r:ID!,$t:String!,$b:String!,$l:[ID!]){ createIssue(input:{repositoryId:$r,title:$t,body:$b,labelIds:$l}){ issue{ id } } }`;
     const res = await this.octokit.graphql<{
       createIssue: { issue: { id: string } };
-    }>(
-      `mutation($r:ID!,$t:String!,$b:String!,$l:[ID!]){ createIssue(input:{repositoryId:$r,title:$t,body:$b,labelIds:$l}){ issue{ id } } }`,
-      { r: state.repoId, t: task.title || task.id, b: renderBody(task), l: labelIds },
-    );
+    }>(mutation, { r: state.repoId, t: task.title || task.id, b: renderBody(task), l: labelIds });
     const issueId = res.createIssue.issue.id;
     await this.setIssueState(issueId, task.status);
     return issueId;
   }
 
-  private async updateIssue(issueId: string, task: Task, labelIds: string[]): Promise<void> {
+  private async updateIssue(
+    issueId: string,
+    task: Task,
+    labelIds: string[] | undefined,
+  ): Promise<void> {
     const current = await this.octokit.graphql<{
       node: { body: string | null; labels: { nodes: Array<{ id: string; name: string }> } } | null;
     }>(
       `query($id:ID!){ node(id:$id){ ... on Issue { body labels(first:50){ nodes{ id name } } } } }`,
-      {
-        id: issueId,
-      },
+      { id: issueId },
     );
     const human = parseBody(current.node?.body).human;
-    // updateIssue's labelIds REPLACES the whole set: keep every foreign label, replace only ours.
-    const foreign = (current.node?.labels.nodes ?? [])
-      .filter((l) => labelField(l.name) === null)
-      .map((l) => l.id);
-    await this.octokit.graphql(
-      `mutation($id:ID!,$t:String!,$b:String!,$l:[ID!]){ updateIssue(input:{id:$id,title:$t,body:$b,labelIds:$l}){ issue{ id } } }`,
-      {
-        id: issueId,
-        t: task.title || task.id,
-        b: renderBody(task, human),
-        l: [...foreign, ...labelIds],
-      },
-    );
+    await this.octokit.graphql(...updateMutation(issueId, task, human, current.node, labelIds));
     await this.setIssueState(issueId, task.status);
   }
 

@@ -138,6 +138,11 @@ program
   });
 
 program
+  .command("config")
+  .description("the configuration, layer by layer: flags, global spec, repo override, effective")
+  .action(async () => out(await service().getConfig(ctx())));
+
+program
   .command("sync")
   .description("reconcile every layer of the stack, both ways")
   .action(async () => out(await service().sync(ctx())));

@@ -49,6 +49,12 @@ to npm. It is split so the MCP layer wraps the core, never the reverse:
   seam while issue errors always propagate.
 - **No imports inside functions.** All imports sit at the top of the module — no lazy
   `await import(...)` to shave startup or dodge a dependency in tests.
+- **Configuration is a provider of its own, configured through the server** (user ruling
+  2026-08-17). `ConfigProvider` is one class; preferences are set via the `get_config`/`set_config`
+  MCP tools and stored beside the caches — a global spec for all repos, overridden per repo
+  (precedence: defaults < flags < global < per-repo). The server hardcodes no user preferences;
+  label prefs are read live so a change propagates to the next write. Nothing is configured by files
+  inside the user's repo.
 - **GitHub labels carry the execution properties** (user ruling 2026-08-17: "leverage labels as much
   as possible"). kind/tier/qa/spec/stage/priority are `field:value` labels — created on demand,
   color-coded per field, editable in the GitHub UI and pulled back by sync; foreign labels are never

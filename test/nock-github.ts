@@ -5,7 +5,7 @@
 import nock from "nock";
 import { Octokit } from "octokit";
 import { GitHubProvider } from "../src/core/providers/github.ts";
-import type { ServerOptions } from "../src/core/config.ts";
+import { ConfigProvider, type ServerOptions } from "../src/core/config.ts";
 
 export interface FakeIssue {
   id: string;
@@ -202,5 +202,5 @@ export function nockProvider(options: ServerOptions = {}): GitHubProvider {
     throttle: { enabled: false },
     retry: { enabled: false },
   });
-  return new GitHubProvider(options, octokit);
+  return new GitHubProvider(new ConfigProvider(options), octokit);
 }
