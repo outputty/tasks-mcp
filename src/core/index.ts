@@ -29,7 +29,6 @@ export {
   idList,
   type Blocker,
 } from "./graph.ts";
-export { TrailStore } from "./trails.ts";
 export type {
   Task,
   ProjectContext,

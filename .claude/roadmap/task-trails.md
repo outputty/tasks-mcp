@@ -1,44 +1,47 @@
-# Per-task trails — a local, append-only decision journal (roadmap #6)
+# Per-task trails — the GitHub issue comment thread (roadmap #6)
 
-Every task gains a trail: an append-only journal of the decisions and actions behind it, so a
-later session can backtrack *why*. Trails are durable local memory — one YAML file per task in
-`.trails/<id>.yaml` at the repo root — deliberately outside the provider stack and never synced.
+A task's trail is its **GitHub issue comment thread**: the decisions and actions behind a task live as
+comments on the issue, so a later session can backtrack *why*. `append_trail` posts a comment;
+`get_trail` reads the whole thread; every comment is an entry.
 
 ## Before / After
 
-Before: the MCP server tracked tasks but not the reasoning behind them. outputty's original
-plugin paired task tracking with per-branch trails (`trails/<branch>.trail.yaml`); that
-backtracking was lost when tasks moved to the MCP server. A task's history was only `attempts`.
+Before: the MCP server tracked tasks but not the reasoning behind them. outputty's original plugin
+paired task tracking with per-branch trails; that backtracking was lost when tasks moved to the MCP
+server. A task's history was only `attempts`.
 
-After: `TrailStore` owns a per-task journal — `append_trail` adds one `{ kind, note, link? }`
-entry (kind `decision` · `action` · `note`), `get_trail` reads it oldest-first. Two CLI commands
-mirror them (`trail-add`, `trail`), and `TrailStore` is exported for the library. Real observed
-(v0.9.0): two appends then a read return the journal in order; the on-disk file is header-stamped,
-append-only YAML.
+After: trails ride the **same GitHub layer as tasks**. The `Provider` seam gained optional
+`getTrail` / `appendTrail`; `GitHubProvider` implements them over GraphQL — `appendTrail` → `addComment`
+on the issue, `getTrail` → the issue's `comments` connection. The `FileProvider` has none, so the
+service routes trail calls to the deepest layer that backs them (GitHub). Two CLI commands mirror them
+(`trail-add`, `trail`). Real observed (v0.10.0, e2e/nock suite): a `decision` comment round-trips its
+`kind` and `link`; a plain comment comes back as `{ note, author, at }`.
 
 ## The arc
 
-Two user rulings (2026-08-17) shaped it:
+Two designs, one cycle. The **first cut (v0.9.0, merged in PR #21 but never released)** stored trails in
+a local `.trails/<id>.yaml` file, append-only, never synced — chosen so decision prose stayed local. On
+review the user reversed it: **back trails with GitHub issue comments, one provider for tasks and their
+trails** (rulings 2026-08-17). Two calls settled the shape:
 
-1. **Granularity — per-task, not per-branch.** The old trail grouped a whole branch; the MCP
-   server is task-centric (the branch param was just removed), so the trail attaches to the task.
-2. **Storage — repo-root `.trails`, path configurable.** Chosen over a GitHub-synced or
-   cache-only home, so decision prose stays local and committable. `trailsDir` resolves with full
-   config precedence; a `--trails-dir` flag sets it too.
+1. **One provider, not a separate store.** The provider that owns the issue owns its comments — so the
+   standalone `TrailStore` and the local file are gone, and trails are just an aspect of the GitHub
+   layer.
+2. **Every comment is an entry.** `get_trail` returns the whole thread, people's comments included.
+   `kind`/`link` are optional and ride a hidden `<!-- outputty:trail … -->` marker on the comments
+   outputty writes — invisible on GitHub, parsed back on read — so a plain human comment reads as a bare
+   `note` plus its GitHub `author` and timestamp.
 
-The load-bearing decision is **text-append, never rewrite**: `TrailStore.append` concatenates one
-YAML list item and never touches an earlier byte. This honors — rather than reverses — the reason
-the original `tasks.js` refused to write trails at all: a full re-serialize flattens `|` block
-scalars and destroys hand-authored prose. Because the tool only ever *adds*, hand-editing a trail
-between appends is safe. Trails sit outside the stack, so `sync` never touches them and a corrupt
-trail fails loud (nothing rebuilds it) rather than being quarantined like the cache.
+Consequences accepted: trails need a GitHub-backed project, `append_trail` requires the issue to exist
+(sync first), and reads hit the network — there is no local trail cache.
 
 ## Where the record lives
 
-- Code: `src/core/trails.ts` (`TrailStore`), `src/core/service.ts` (`getTrail`/`appendTrail`),
-  `src/mcp/server.ts` (the two tools), `bin/cli.ts` (`trail`/`trail-add`), `src/core/types.ts`
-  (`TrailEntry`, `TRAIL_KINDS`, `trailsDir`).
-- Tests: `test/trails.test.ts` (store + service, network-free) and the trail cases in
-  `test/mcp.test.ts` (over real HTTP). 63 tests total, +10 over v0.8.0.
-- Docs: `README.md` (Trails section), `docs/architecture.md` (the design contrast),
-  `.claude/architecture/trails.md` (the deep record).
+- Code: `src/core/providers/github.ts` (`getTrail`/`appendTrail`, `addComment`, the comments query, the
+  marker codec), `src/core/providers/provider.ts` (the seam), `src/core/service.ts` (`trailLayer`
+  routing), `src/mcp/server.ts` (the two tools), `bin/cli.ts` (`trail`/`trail-add`), `src/core/types.ts`
+  (`TrailEntry`, `TRAIL_KINDS`).
+- Tests: `test/trails.test.ts` (the real stack, nock at the wire) and the trail cases in
+  `test/mcp.test.ts` (over real HTTP); `test/nock-github.ts` fakes `addComment` + the comments query.
+- Docs: `README.md` (Trails section), `docs/architecture.md` + `docs/trails.svg`,
+  `.claude/architecture/trails.md`.

@@ -9,7 +9,7 @@
 //     an empty, newly added layer backfills instead of erasing the world.
 //   - DELETIONS NEVER PROPAGATE: a task can close everywhere, but only vanishes by hand.
 
-import type { ProjectContext, Task } from "../types.ts";
+import type { ProjectContext, Task, TrailEntry } from "../types.ts";
 import type { ServerOptions } from "../types.ts";
 import { ConfigProvider } from "./config.ts";
 import { FileProvider } from "./file.ts";
@@ -41,6 +41,14 @@ export interface Provider {
   upsert(ctx: ProjectContext, task: Task): Promise<void>;
   /** Optional batch form of `upsert` — a layer with cheap batching (one file write) implements it. */
   upsertMany?(ctx: ProjectContext, tasks: Task[]): Promise<void>;
+  /**
+   * A task's trail: its issue comment thread, every comment an entry. Optional — a layer that has no
+   * comment surface (the file cache) omits both, and the service routes trails to the deepest layer
+   * that backs them (GitHub). `getTrail` returns [] for a task with no issue yet.
+   */
+  getTrail?(ctx: ProjectContext, id: string): Promise<TrailEntry[]>;
+  /** Append one entry (post a comment) and return the whole trail. Errors if the task has no issue. */
+  appendTrail?(ctx: ProjectContext, id: string, entry: TrailEntry): Promise<TrailEntry[]>;
 }
 
 // Registered remote layers. Adding Linear is one entry here plus its class — nothing else moves.

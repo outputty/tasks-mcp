@@ -120,3 +120,18 @@
     4c11121): ConfigProvider stores a global spec plus per-repo overrides BESIDE the caches,
     set through get_config/set_config; env vars became CLI flags (1dac343); nothing is
     configured by files inside the user's repo. GITHUB_TOKEN/GH_TOKEN stay for credentials.
+- title: Trails moved from a local file to GitHub issue comments
+  kind: direction
+  files: [src/core/providers/github.ts, src/core/service.ts, src/core/providers/provider.ts]
+  version: 0.10.0
+  body: |
+    First cut (v0.9.0, merged in PR #21 but never released): a per-task local .trails/<id>.yaml,
+    append-only, never synced — chosen so decision prose stayed LOCAL, with a TEXT-APPEND write to
+    preserve hand-authored block scalars (the reason the original tasks.js refused to write trails).
+    User reversed it before release (2026-08-17): back trails with GitHub ISSUE COMMENTS, and MERGE
+    trails into the task provider — the layer that owns the issue owns its comments. So TrailStore and
+    the local file are gone; the Provider seam gained optional getTrail/appendTrail; GitHubProvider
+    does addComment + the comments connection. EVERY comment is an entry (people's included); kind/link
+    ride a hidden <!-- outputty:trail --> marker on outputty's own writes. Consequence: trails now need
+    a GitHub-backed project and reads hit the network. Do NOT re-propose a local .trails store or a
+    trailsDir knob — that design was considered and dropped.

@@ -21,8 +21,23 @@ import { spawnSync } from "node:child_process";
 import { Octokit } from "octokit";
 import { match } from "ts-pattern";
 import { parse, stringify } from "yaml";
-import type { LabelFieldName, ProjectConfig, ProjectContext, RepoRef, Task } from "../types.ts";
-import { LABEL_FIELD_NAMES, TIERS, QA_LEVELS, SPEC_STATES, PRIORITIES } from "../types.ts";
+import type {
+  LabelFieldName,
+  ProjectConfig,
+  ProjectContext,
+  RepoRef,
+  Task,
+  TrailEntry,
+  TrailKind,
+} from "../types.ts";
+import {
+  LABEL_FIELD_NAMES,
+  TIERS,
+  QA_LEVELS,
+  SPEC_STATES,
+  PRIORITIES,
+  TRAIL_KINDS,
+} from "../types.ts";
 import { ConfigProvider } from "./config.ts";
 import type { Provider, ProviderState } from "./provider.ts";
 import { withDefaults } from "../graph.ts";
@@ -207,6 +222,52 @@ function issueToTask(issue: GhIssue): Task {
     title: issue.title || "",
     status: taskStatus(issue.state),
   } as Partial<Task> & { id: string });
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Trails — a task's issue COMMENT THREAD. Every comment is a trail entry (people's comments included).
+// `kind`/`link` ride a hidden marker on comments outputty writes; a plain human comment carries neither
+// and reads back as a bare note plus GitHub's author and timestamp.
+
+const TRAIL_MARK = "<!-- outputty:trail";
+
+/** One issue comment as GitHub returns it. */
+interface GhComment {
+  body: string | null;
+  author: { login: string } | null;
+  createdAt: string;
+}
+
+/** Serialise an entry into a comment body: a hidden marker for kind/link when set, then the note. */
+function renderComment(entry: TrailEntry): string {
+  const attrs: string[] = [];
+  if (entry.kind) attrs.push(`kind=${entry.kind}`);
+  if (entry.link) attrs.push(`link=${entry.link}`);
+  if (attrs.length === 0) return entry.note;
+  return `${TRAIL_MARK} ${attrs.join(" ")} -->\n${entry.note}`;
+}
+
+/** The kind/link a leading marker carries and the note below it — or the whole body as the note. */
+function splitMarker(body: string): { kind?: TrailKind; link?: string; note: string } {
+  if (!body.startsWith(TRAIL_MARK)) return { note: body };
+  const end = body.indexOf("-->");
+  if (end === -1) return { note: body };
+  const attrs = body.slice(TRAIL_MARK.length, end);
+  const raw = /kind=(\S+)/.exec(attrs)?.[1];
+  const kind =
+    raw && (TRAIL_KINDS as readonly string[]).includes(raw) ? (raw as TrailKind) : undefined;
+  return { kind, link: /link=(\S+)/.exec(attrs)?.[1], note: body.slice(end + 3).trim() };
+}
+
+/** One GitHub comment → a trail entry: the marker fields, the note, and GitHub's author + timestamp. */
+function commentToEntry(c: GhComment): TrailEntry {
+  const { kind, link, note } = splitMarker(c.body ?? "");
+  const entry: TrailEntry = { note };
+  if (kind) entry.kind = kind;
+  if (link) entry.link = link;
+  if (c.author?.login) entry.author = c.author.login;
+  if (c.createdAt) entry.at = c.createdAt;
+  return entry;
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -436,6 +497,53 @@ export class GitHubProvider implements Provider {
     this.indexes.set(ctx.project, Promise.resolve(index));
     warnConflicts(state.repo, states);
     return states;
+  }
+
+  // -------------------------------------------------------------------------------------------------
+  // Trails — the issue's comment thread. get_trail is the whole thread; append posts one comment.
+
+  async getTrail(ctx: ProjectContext, id: string): Promise<TrailEntry[]> {
+    const state = await this.state(ctx.project);
+    const handle = (await this.index(ctx.project, state)).get(id);
+    if (!handle) return []; // no issue for this id yet → no trail
+    return this.listComments(handle.issueId);
+  }
+
+  async appendTrail(ctx: ProjectContext, id: string, entry: TrailEntry): Promise<TrailEntry[]> {
+    const note = (entry.note ?? "").trim();
+    if (!note) throw new Error("a trail entry needs a note");
+    if (entry.kind && !(TRAIL_KINDS as readonly string[]).includes(entry.kind)) {
+      throw new Error(`unknown trail kind '${entry.kind}' (kinds: ${TRAIL_KINDS.join(", ")})`);
+    }
+    const state = await this.state(ctx.project);
+    const handle = (await this.index(ctx.project, state)).get(id);
+    if (!handle) throw new Error(`no task ${id} on GitHub — sync it before adding a trail entry`);
+    await this.octokit.graphql(
+      `mutation($s:ID!,$b:String!){ addComment(input:{subjectId:$s,body:$b}){ commentEdge{ node{ id } } } }`,
+      { s: handle.issueId, b: renderComment({ ...entry, note }) },
+    );
+    return this.listComments(handle.issueId);
+  }
+
+  /** Every comment on an issue, oldest first, each mapped to a trail entry. */
+  private async listComments(issueId: string): Promise<TrailEntry[]> {
+    const out: TrailEntry[] = [];
+    let after: string | null = null;
+    for (;;) {
+      const page = await this.commentPage(issueId, after);
+      out.push(...page.nodes.map(commentToEntry));
+      if (!page.pageInfo.hasNextPage) break;
+      after = page.pageInfo.endCursor;
+    }
+    return out;
+  }
+
+  private async commentPage(issueId: string, after: string | null): Promise<Page<GhComment>> {
+    const res: { node: { comments: Page<GhComment> } | null } = await this.octokit.graphql(
+      `query($id:ID!,$c:String){ node(id:$id){ ... on Issue { comments(first:100,after:$c){ pageInfo{ hasNextPage endCursor } nodes{ body author{ login } createdAt } } } } }`,
+      { id: issueId, c: after },
+    );
+    return res.node?.comments ?? { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
   }
 
   // -------------------------------------------------------------------------------------------------

@@ -36,16 +36,17 @@ npx -y @outputty/tasks-mcp add api --title "Build the API" --deps schema --tier 
 npx -y @outputty/tasks-mcp close api --project /abs/repo
 npx -y @outputty/tasks-mcp sync --project /abs/repo       # reconcile every layer, both ways
 
-# trails — the append-only journal behind a task (local file, never synced)
+# trails — the task's GitHub issue comment thread (every comment an entry)
 npx -y @outputty/tasks-mcp trail-add api --kind decision --note "GraphQL only" \
-  --link types.ts:79 --project /abs/repo
+  --link types.ts:79 --project /abs/repo   # posts a comment on the issue
 npx -y @outputty/tasks-mcp trail api --project /abs/repo
-# -> [{ "kind": "decision", "note": "GraphQL only", "link": "types.ts:79" }]
+# -> [{ "kind": "decision", "note": "GraphQL only", "link": "types.ts:79",
+#      "author": "octocat", "at": "2026-08-17T19:30:00Z" }]
 ```
 
 `--project` defaults to the current directory. The global flags (`--provider`, `--no-projects`,
-`--board`, `--project-number`, `--cache-dir`, `--trails-dir`) work on every command and mean the same
-as in `.mcp.json` args.
+`--board`, `--project-number`, `--cache-dir`) work on every command and mean the same as in `.mcp.json`
+args.
 
 `add` options: `--title`, `--deps a,b`, `--scope src/api`, `--tier 1..4`, `--qa skip|inline|subagent`,
 `--priority high|normal|low`, `--brief`, `--contract`. `trail-add` options: `--note` (required),
@@ -65,6 +66,5 @@ console.log(blockers(tasks)[0]?.task.id); // the biggest blocker
 ```
 
 Exports: `makeService` / `TaskStack` (the orchestrator), `FileProvider` / `GitHubProvider` /
-`buildStack` (the layers), `TrailStore` (per-task trails), the pure graph engine (`ready`, `planning`,
-`schedule`, `prereqs`, `blockers`, …), and `createMcpServer` / `createHttpServer` / `runStdio` under
-`./mcp`.
+`buildStack` (the layers), the pure graph engine (`ready`, `planning`, `schedule`, `prereqs`,
+`blockers`, …), and `createMcpServer` / `createHttpServer` / `runStdio` under `./mcp`.

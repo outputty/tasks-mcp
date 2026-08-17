@@ -25,9 +25,12 @@ export class NockGitHub {
   items = new Map<string, { contentId: string; status: string | null }>();
   /** Repo labels, name → node id. */
   labels = new Map<string, string>();
+  /** Issue node id → its comments, oldest first (the trail). */
+  comments = new Map<string, Array<{ body: string; author: string; createdAt: string }>>();
   private issueSeq = 1;
   private itemSeq = 1;
   private labelSeq = 1;
+  private commentSeq = 0;
 
   private labelName(id: string): string {
     for (const [name, lid] of this.labels) if (lid === id) return name;
@@ -38,6 +41,7 @@ export class NockGitHub {
   // match wins, and some needles ("on Issue", "repository(") are substrings of other queries' text.
   private readonly routes: Array<[string, (vars: Record<string, any>) => unknown]> = [
     ["createLabel", (v) => this.createLabel(v)],
+    ["addComment", (v) => this.addComment(v)],
     ["createIssue", (v) => this.createIssue(v)],
     ["updateIssue", (v) => this.updateIssue(v)],
     ["closeIssue", (v) => this.setIssueState(v, "CLOSED", "closeIssue")],
@@ -53,6 +57,7 @@ export class NockGitHub {
     ["ProjectV2ItemFieldSingleSelectValue", () => this.boardItems()],
     ["projectsV2(", () => this.repoBoards()],
     ["issues(first", () => this.repoIssues()],
+    ["comments(first", (v) => this.issueComments(v)],
     ["on Issue", (v) => this.issueBody(v)],
     ["repository(", () => ({ repository: { id: "REPO" } })],
   ];
@@ -68,6 +73,32 @@ export class NockGitHub {
     const id = `L_${this.labelSeq++}`;
     this.labels.set(String(vars.n), id);
     return { createLabel: { label: { id } } };
+  }
+
+  private addComment(vars: Record<string, any>): unknown {
+    const id = String(vars.s);
+    const list = this.comments.get(id) ?? [];
+    const at = `2026-01-01T00:00:${String(this.commentSeq).padStart(2, "0")}Z`;
+    list.push({ body: String(vars.b), author: "test-user", createdAt: at });
+    this.comments.set(id, list);
+    this.commentSeq++;
+    return { addComment: { commentEdge: { node: { id: `C_${this.commentSeq}` } } } };
+  }
+
+  private issueComments(vars: Record<string, any>): unknown {
+    const list = this.comments.get(String(vars.id)) ?? [];
+    return {
+      node: {
+        comments: {
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: list.map((c) => ({
+            body: c.body,
+            author: { login: c.author },
+            createdAt: c.createdAt,
+          })),
+        },
+      },
+    };
   }
 
   private createIssue(vars: Record<string, any>): unknown {
