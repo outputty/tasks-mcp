@@ -1,15 +1,18 @@
 name: Publish
 
-# Publishing is a deliberate act: it runs only when you publish a GitHub Release (tag it `vX.Y.Z`,
-# matching package.json). Nothing publishes on a plain push.
+# Publishing is manual and deliberate: it runs ONLY when you push a version tag (`vX.Y.Z`). Nothing
+# publishes on a branch push or a PR.
 #
-# Auth is npm Trusted Publishing (OIDC) — no token is stored. GitHub Actions proves its identity to npm
-# via a short-lived OIDC token, so you configure a Trusted Publisher on the package (Settings ->
-# Publishing) pointing at this repo + this workflow. Provenance is attached automatically.
-# Note: OIDC cannot do a package's FIRST publish — publish v0.5.0 once by hand, then this takes over.
+#   npm version patch          # bumps package.json + creates the vX.Y.Z tag
+#   git push --follow-tags     # pushes the commit and the tag -> this workflow runs
+#
+# Auth is npm Trusted Publishing (OIDC) — no token is stored. Configure a Trusted Publisher on the
+# package (npmjs -> Settings -> Publishing) pointing at this repo + this workflow. Provenance is
+# attached automatically. Note: OIDC cannot do a package's FIRST publish — do that one by hand.
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*.*.*"
 
 permissions:
   contents: read
@@ -25,6 +28,12 @@ jobs:
           node-version: 20
           registry-url: "https://registry.npmjs.org"
           cache: npm
+      - name: Tag must match package.json version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          echo "tag=$TAG package.json=$PKG"
+          test "$TAG" = "$PKG" || { echo "::error::tag $TAG does not match package.json $PKG"; exit 1; }
       - run: npm install -g npm@latest # trusted publishing needs npm >= 11.5.1
       - run: npm ci
       - run: npm test

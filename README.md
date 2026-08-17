@@ -226,10 +226,13 @@ One-time setup:
 2. On npmjs, open the package → **Settings → Publishing → Add a trusted publisher** → GitHub Actions →
    org `outputty`, repo `tasks-mcp`, workflow `publish.yml`.
 
-Every release after that:
+Every release after that is driven by **pushing a version tag** — nothing else publishes:
 
-1. Bump `version` in `package.json`, commit, push.
-2. Create a GitHub Release tagged `vX.Y.Z` (matching the version).
-3. The `Publish` workflow tests, builds, and `npm publish`es via OIDC — the runner proves its identity to
-   npm with a short-lived token, and **provenance** is attached automatically (verifiable build from this
-   repo+commit). Nothing to store, rotate, or leak.
+```bash
+npm version patch        # bumps package.json and creates the vX.Y.Z tag
+git push --follow-tags   # pushes the commit + tag -> the Publish workflow runs
+```
+
+The `Publish` workflow checks the tag matches `package.json`, tests, builds, and `npm publish`es via
+OIDC — the runner proves its identity to npm with a short-lived token, and **provenance** is attached
+automatically (a verifiable build from this repo+commit). Nothing to store, rotate, or leak.
