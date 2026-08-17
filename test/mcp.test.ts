@@ -34,7 +34,12 @@ async function startHttp(service: CachedTaskService) {
   );
   const close = async () => {
     await client.close();
-    await new Promise<void>((r) => server.close(() => r()));
+    // Destroy lingering keep-alive sockets rather than wait on them — server.close alone can hang
+    // the test on a pooled connection the client transport does not own.
+    await new Promise<void>((r) => {
+      server.close(() => r());
+      server.closeAllConnections();
+    });
   };
   return { base, client, close };
 }
