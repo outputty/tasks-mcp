@@ -6,11 +6,12 @@
 // hand. Layer errors bubble; there is no fallback to decide at this altitude.
 
 import { isDeepStrictEqual } from "node:util";
-import type { ProjectConfig, ProjectContext, Task } from "./types.ts";
+import type { ProjectConfig, ProjectContext, Task, TrailEntry } from "./types.ts";
 import type { Provider, ProviderState } from "./providers/provider.ts";
 import type { ServerOptions } from "./types.ts";
 import { ConfigProvider, type ConfigSources } from "./providers/config.ts";
 import { buildStack } from "./providers/provider.ts";
+import { TrailStore } from "./trails.ts";
 import { withDefaults } from "./graph.ts";
 
 export interface SyncResult {
@@ -34,6 +35,10 @@ export interface TaskService {
   update(ctx: ProjectContext, id: string, patch: Partial<Task>): Promise<Task>;
   close(ctx: ProjectContext, id: string): Promise<void>;
   sync(ctx: ProjectContext): Promise<SyncResult>;
+  /** A task's trail: the append-only journal of decisions and actions behind it. */
+  getTrail(ctx: ProjectContext, id: string): Promise<TrailEntry[]>;
+  /** Append one entry to a task's trail; returns the whole trail. Refuses an unknown task. */
+  appendTrail(ctx: ProjectContext, id: string, entry: TrailEntry): Promise<TrailEntry[]>;
   /** Every layer of the configuration for this project, plus the effective result. */
   getConfig(ctx: ProjectContext): Promise<ConfigSources>;
   /** Write preferences centrally: into the global spec, or one repo's override. */
@@ -50,12 +55,15 @@ export class TaskStack implements TaskService {
   // One stack per remote name — layers cache their per-project init (repo, board, index), so handing
   // out fresh instances would redo that remote work on every call.
   private readonly stacks = new Map<string, Provider[]>();
+  private readonly trails: TrailStore;
 
   constructor(
     private readonly options: ServerOptions = {},
     private readonly providers?: Provider[],
     private readonly config: ConfigProvider = new ConfigProvider(options),
-  ) {}
+  ) {
+    this.trails = new TrailStore(this.config);
+  }
 
   private layers(ctx: ProjectContext): Provider[] {
     if (this.providers) return this.providers;
@@ -121,6 +129,16 @@ export class TaskStack implements TaskService {
 
   async close(ctx: ProjectContext, id: string): Promise<void> {
     await this.update(ctx, id, { status: "done" });
+  }
+
+  async getTrail(ctx: ProjectContext, id: string): Promise<TrailEntry[]> {
+    return this.trails.read(ctx.project, id);
+  }
+
+  async appendTrail(ctx: ProjectContext, id: string, entry: TrailEntry): Promise<TrailEntry[]> {
+    // Guard against a typo'd id — the read hits only the top file layer, so no network is touched.
+    if (!(await this.get(ctx, id))) throw new Error(`no task ${id}`);
+    return this.trails.append(ctx.project, id, entry);
   }
 
   async sync(ctx: ProjectContext): Promise<SyncResult> {

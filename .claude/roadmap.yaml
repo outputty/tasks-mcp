@@ -96,3 +96,26 @@
   doc: roadmap/labels-and-planning-tools.md
   absorbs: []
   links: ["https://github.com/outputty/tasks-mcp/pull/11"]
+- row: 6
+  feature: Per-task trails — a local, append-only decision journal
+  summary: |
+    Problem: the tracker recorded tasks but not the reasoning behind them, so a later session
+    could not backtrack why a task was shaped as it was — the trail-tracking outputty's original
+    plugin had was lost when tasks moved to the MCP server. Solution: every task gains an
+    append-only trail (kind decision|action|note, a note, an optional link), owned by TrailStore
+    and stored one YAML file per task at .trails/<id>.yaml in the repo root (path via trailsDir),
+    local and NEVER synced to a remote. Writes are a TEXT APPEND, never a rewrite, so
+    hand-authored prose survives — honoring the reason the original tracker refused to write
+    trails at all. Two tools (append_trail, get_trail) and two CLI commands (trail-add, trail).
+
+      tasks-mcp trail-add readme-prereqs-order --kind decision --note "GraphQL only" --link types.ts:79
+
+    Output (REAL OBSERVED 2026-08-17, v0.9.0): 14 MCP tools registered; get_trail returns the
+    journal oldest-first; the on-disk .trails/<id>.yaml is header-stamped, append-only YAML;
+    npm run check green (63 tests, +10 over v0.8.0).
+  status: "✅ shipped"
+  status_detail: v0.9.0 (PR #21); trails are local-only (outside the provider stack), path configurable via trailsDir.
+  depends_on: [1]
+  doc: roadmap/task-trails.md
+  absorbs: []
+  links: ["https://github.com/outputty/tasks-mcp/pull/21"]
