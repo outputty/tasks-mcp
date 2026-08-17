@@ -2,29 +2,26 @@
 # Roadmap -> roadmap.yaml, surface + machinery -> architecture.yaml, the past -> lessons.yaml.
 # Every ✅ claim is verified by a run.
 north_star: |
-  A coding agent plans in a dependency graph. Humans track work in GitHub. tasks-mcp is the
-  bridge: a local MCP server that exposes outputty's task tracker as typed tools, with every
-  task mirrored two-way into GitHub — one issue per task, execution properties worn as labels,
-  a kanban card on a Projects board. The agent asks the graph its questions; the human sees
-  and edits the same plan in the UI they already use.
+  The agent runs the task list; the task systems keep the record. tasks-mcp is a proxy for
+  agentic task management: an agent plans, files, sequences, and closes work across sessions
+  through typed MCP tools, every change is backed up into one or more connected providers
+  (GitHub today) where humans see and edit the same plan, and a local copy of the graph gives
+  dependency resolution no external tracker offers.
 
   Strong sides, one example each:
 
-  - The two planning questions are first-class tools. "What must be done before X?" is
-    `prereqs` (dependency-ordered layers); "what holds up the most work?" is `blockers`
-    (ranked by transitive downstream impact). Both answer instantly and offline, from the
-    local file layer.
+  - Cross-session: a task filed in one session is `list_ready` in the next. The plan survives
+    in the providers, not in the conversation.
+  - The two planning questions, answered instantly and offline from the local copy: `prereqs`
+    (what must be done before X, as dependency-ordered layers) and `blockers` (open tasks
+    ranked by transitive downstream impact).
   - The sync survives the real world. A hand-opened issue is adopted as a task; a label edit
     in the GitHub UI flows back on the next sync; a junk label value is ignored, not crashed
-    on; a corrupt or deleted local cache rebuilds itself from GitHub.
-  - Zero install. `npx -y @outputty/tasks-mcp` in `.mcp.json` and the server runs on demand.
-    The same core is a CLI for humans and an importable library.
+    on; a corrupt or deleted local copy rebuilds itself from the providers.
 
-  Wedge: the provider stack. Tasks live in ordered layers behind one seam — a local file on
-  top answering every read instantly, remotes beneath it as the source of truth (deepest
-  wins). Absence is not a claim, so adding a layer is a free migration and deleting the cache
-  loses nothing. Alternatives give an agent either a scratchpad humans never see, or a GitHub
-  wrapper that is slow, online-only, and breaks when humans touch the issues.
+  Wedge: the agent owns task management end to end while the providers stay layered mirrors
+  behind one seam — deepest wins, absence is not a claim — so connecting another provider is
+  a free migration and losing the local copy loses nothing.
 language:
   - term: task
     definition: One tracked unit — id, title, status, deps, scope, execution properties, brief/contract prose; one issue on GitHub.

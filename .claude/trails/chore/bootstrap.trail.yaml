@@ -20,11 +20,18 @@ decisions:
   - question: oxfmt rejects the plugin-managed CLAUDE.md block and .claude/ files — format or exclude?
     answer: Exclude via .prettierignore (oxfmt reads it): the block is replaced byte-for-byte by init re-runs, so formatting it would make every re-run fail CI.
     link: .prettierignore
+  - question: Does Linear get a planned roadmap row?
+    answer: No. The types.ts 'linear' mention was an illustration of how layers work, not a plan. No row; the REMOTES table stays the extension point.
+    link: src/core/types.ts:79
+  - question: What is the North Star, in the user's own framing?
+    answer: A proxy for agentic task management that enhances cross-session task management — the agent takes over task management entirely, one or more connected external providers hold the backup, and a local copy of the tasks gives enhanced dependency resolution. product.yaml reworded around this.
+    link: .claude/product.yaml
+  - question: ProjectContext.branch — implement or remove?
+    answer: Remove. Never read in 16 commits, no design for branch scoping, optional field so no well-behaved caller breaks. Task unused-branch-param amended with the ruling and flipped to spec settled via a live label edit + sync (the round-trip exercised for real on issue 17).
+    link: https://github.com/outputty/tasks-mcp/issues/17
 not_yet_specified:
-  - item: Is a second remote layer (Linear) a planned roadmap row or just a types comment?
-    reason: types.ts says 'A future value is "linear"' and two commits cite it as a design goal, but no row exists — user ruling needed.
-  - item: North-star pitch and wedge wording — bootstrap's reconstruction, unconfirmed.
-    reason: The pitch was derived from README + history, not from the user's own framing.
+  - item: Should kind be settable at add, or leave the model?
+    reason: Q4 of the grill round — user asked for the justification; worked example presented, answer pending.
 out_of_scope:
   - item: New features, refactors, or fixes to the codebase itself
     reason: Bootstrap only reconstructs memory of what exists; task-shaped findings are filed as tasks, not built.

@@ -78,6 +78,6 @@ The `library-blockers` example in `examples.yaml` — real observed output: `sch
 
 `ProjectContext.branch` (`src/core/types.ts:55`) is declared, documented ("the backend decides
 how it uses this"), accepted by every tool schema — and read by nothing, in any of the 16
-commits since the initial import. Implement it or remove it: tracked as task
-`unused-branch-param` (spec: drafting). Probe: `rg '\.branch' src/` finds only the
-pass-through.
+commits since the initial import. Ruled (grill 2026-08-17): REMOVE it — task
+`unused-branch-param`, spec settled, ready to build. Probe: `rg '\.branch' src/` finds only
+the pass-through.

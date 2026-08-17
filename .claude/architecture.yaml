@@ -289,8 +289,8 @@ features:
       implemented.
     how: |
       ProjectContext.branch (src/core/types.ts:55) is threaded through every schema and read
-      by no provider in any of the 16 commits. Tracked as task unused-branch-param (spec:
-      drafting — implement or remove). Probe: rg '\.branch' src/.
+      by no provider in any of the 16 commits. Ruled (grill 2026-08-17): REMOVE — task
+      unused-branch-param, spec settled. Probe: rg '\.branch' src/.
     doc: architecture/surfaces.md
     example: ""
     related: [MCP server]
