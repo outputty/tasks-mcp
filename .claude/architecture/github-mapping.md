@@ -51,8 +51,8 @@ narrows which properties become labels; `labels: false` turns label sync off ent
 
 ### Gotchas
 
-- `kind` has a label but no `add` parameter on any surface — tracked as task
-  `kind-not-settable`.
+- `kind` has a label but no `add` parameter on any surface yet — ruled (grill 2026-08-17):
+  add it to both add surfaces; task `kind-not-settable`, spec settled, ready to build.
 - The value domains the parser accepts are the const arrays in `src/core/types.ts` — one
   source for types, validators, zod enums, and the parser.
 
