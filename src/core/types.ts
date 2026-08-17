@@ -24,17 +24,22 @@ export interface Attempt {
 }
 
 /**
- * One entry in a task's trail: the append-only, per-task journal that lets a later session backtrack
- * the decisions and actions behind a task. Local-only — trails never sync to a remote. Order is append
- * order; entries are never rewritten, so hand-authored prose in `note` survives every later append.
+ * One entry in a task's trail. A trail is the task's GitHub issue COMMENT THREAD: every comment is an
+ * entry, so `get_trail` returns the whole discussion (people's comments included). `note` is the comment
+ * body; `author`/`at` come from GitHub on read. `kind`/`link` are optional and carried in a hidden
+ * marker only on comments outputty wrote — a plain human comment has neither.
  */
 export interface TrailEntry {
-  /** decision made · action taken · bare note. Absent means "note". */
-  kind: TrailKind;
-  /** The prose: what was decided, done, or noticed. */
+  /** decision · action · note. Set by an outputty write; absent on a plain human comment. */
+  kind?: TrailKind;
+  /** The comment body: what was decided, done, or noticed. */
   note: string;
-  /** Optional pointer to where it landed — a file:line, a URL, a commit. */
+  /** Optional pointer — a file:line, a URL, a commit. */
   link?: string;
+  /** Who wrote the comment (GitHub login). Read-only, from GitHub. */
+  author?: string;
+  /** When the comment was written (ISO 8601). Read-only, from GitHub. */
+  at?: string;
 }
 
 export interface Task {
@@ -82,7 +87,7 @@ export interface RepoRef {
 /** Server-wide options, set once from CLI args — deployment knobs, not user preferences. */
 export type ServerOptions = Pick<
   ProjectConfig,
-  "provider" | "projects" | "projectNumber" | "board" | "trailsDir"
+  "provider" | "projects" | "projectNumber" | "board"
 > & {
   /** Where the file layer and the config files live. Defaults to the OS cache dir; never the repo. */
   cacheDir?: string;
@@ -105,9 +110,4 @@ export interface ProjectConfig {
   labels?: boolean;
   /** Which fields become labels when `labels` is on. Default: all of them. */
   labelFields?: LabelFieldName[];
-  /**
-   * Where per-task trails live. A relative path hangs off the repo root; absolute is used as-is.
-   * Default `.trails` in the repo root — trails are durable local memory, unlike the throwaway cache.
-   */
-  trailsDir?: string;
 }

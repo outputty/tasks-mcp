@@ -65,11 +65,13 @@ const indexRow = (task: Task) => ({
   priority: priorityOf(task),
 });
 
-// One trail entry, as the trail tools return it.
+// One trail entry (an issue comment), as the trail tools return it. author/at come from GitHub.
 const TRAIL_ENTRY = z.object({
-  kind: z.string(),
   note: z.string(),
+  kind: z.string().optional(),
   link: z.string().optional(),
+  author: z.string().optional(),
+  at: z.string().optional(),
 });
 
 // The config object's zod shape — THE schema from core/config.ts, so the surfaces cannot drift.
@@ -252,8 +254,8 @@ export function createMcpServer(service: TaskService): McpServer {
     "get_trail",
     {
       description:
-        "A task's trail: the append-only, local journal of the decisions and actions behind it, " +
-        "oldest entry first. Empty when the task has no trail yet.",
+        "A task's trail: its GitHub issue comment thread, every comment an entry (people's comments " +
+        "included), oldest first. Empty when the task has no issue yet.",
       inputSchema: {
         project: PROJECT,
         branch: BRANCH,
@@ -270,21 +272,24 @@ export function createMcpServer(service: TaskService): McpServer {
     "append_trail",
     {
       description:
-        "Append one entry to a task's trail so a later session can backtrack it. The append never " +
-        "rewrites earlier entries, and trails are local — never synced to a remote. Refuses an " +
-        "unknown id.",
+        "Append one entry to a task's trail by posting a comment on its GitHub issue, so a later " +
+        "session can backtrack it. Requires the task to have an issue (sync it first).",
       inputSchema: {
         project: PROJECT,
         branch: BRANCH,
         id: z.string().describe("The task id."),
-        kind: z.enum(TRAIL_KINDS).optional().describe("decision | action | note (default note)."),
-        note: z.string().describe("What was decided, done, or noticed."),
+        note: z.string().describe("What was decided, done, or noticed (the comment body)."),
+        kind: z.enum(TRAIL_KINDS).optional().describe("decision | action | note (optional tag)."),
         link: z.string().optional().describe("Where it landed — a file:line, URL, or commit."),
       },
       outputSchema: { trail: z.array(TRAIL_ENTRY) },
     },
     async (args) => {
-      const entry = { kind: args.kind ?? ("note" as const), note: args.note, link: args.link };
+      const entry = {
+        note: args.note,
+        ...(args.kind ? { kind: args.kind } : {}),
+        ...(args.link ? { link: args.link } : {}),
+      };
       return result({ trail: await service.appendTrail(ctxOf(args), args.id, entry) });
     },
   );

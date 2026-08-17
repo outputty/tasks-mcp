@@ -35,7 +35,6 @@ const program = new Command()
   .option("--no-projects", "disable the Projects board sync")
   .option("--board <title>", "board title to find or create (default Tasks)")
   .option("--cache-dir <dir>", "where the file layer keeps its task files")
-  .option("--trails-dir <dir>", "where per-task trails live (default .trails in the repo root)")
   .option("--project <path>", "target repo for subcommands (default: cwd)");
 
 /** The CLI-set knobs, in ServerOptions shape. `projects` is only carried when actually turned off. */
@@ -47,7 +46,6 @@ function serverOptions(): ServerOptions {
     ...(opts.projects === false ? { projects: false } : {}),
     ...(opts.board ? { board: opts.board } : {}),
     ...(opts.cacheDir ? { cacheDir: opts.cacheDir } : {}),
-    ...(opts.trailsDir ? { trailsDir: opts.trailsDir } : {}),
   };
 }
 
@@ -135,24 +133,24 @@ program
 
 program
   .command("trail")
-  .description("a task's trail: the append-only journal of decisions and actions behind it")
+  .description("a task's trail: its GitHub issue comment thread, every comment an entry")
   .argument("<id>", "the task id")
   .action(async (id: string) => out(await service().getTrail(ctx(), id)));
 
 program
   .command("trail-add")
-  .description("append one entry to a task's trail (never rewrites earlier entries)")
+  .description("append one entry to a task's trail (posts a comment on its GitHub issue)")
   .argument("<id>", "the task id")
   .requiredOption("--note <text>", "what was decided, done, or noticed")
-  .option("--kind <kind>", "decision | action | note (default note)")
+  .option("--kind <kind>", "decision | action | note (optional tag)")
   .option("--link <ref>", "where it landed — a file:line, URL, or commit")
   .action(async (id: string, opts: Record<string, unknown>) => {
     const entry: TrailEntry = {
-      kind: (opts.kind as TrailKind | undefined) ?? "note",
       note: opts.note as string,
+      ...(opts.kind ? { kind: opts.kind as TrailKind } : {}),
       ...(opts.link ? { link: opts.link as string } : {}),
     };
-    out(await service().appendTrail(ctx(), id, entry)); // the store validates kind and note
+    out(await service().appendTrail(ctx(), id, entry)); // the provider validates note and kind
   });
 
 program

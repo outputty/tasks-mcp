@@ -102,8 +102,10 @@
     console.log(blockers(tasks)[0]?.task.id); // the biggest blocker
   output: |
     schema
-# REAL OBSERVED 2026-08-17, v0.9.0, driven through the real CLI (bin/cli.ts) against a seeded
-# file layer — two appends then a read, and the on-disk .trails/<id>.yaml.
+# REAL OBSERVED 2026-08-17 via the e2e suite (test/trails.test.ts, mcp.test.ts): the real stack driven
+# with nock at the GitHub wire. Each trail-add posts a comment on the task's issue; trail (get_trail)
+# reads the issue's whole comment thread. author/at come from GitHub; a live run's author is the real
+# commenter (the suite's is "test-user").
 - name: trail-journal
   input: |
     tasks-mcp trail-add readme-prereqs-order --kind decision \
@@ -111,13 +113,9 @@
     tasks-mcp trail-add readme-prereqs-order --note "fixed the ordering in the example block" --project /abs/repo
     tasks-mcp trail readme-prereqs-order --project /abs/repo
   output: |
-    # get_trail / `trail` returns the whole journal, oldest first:
-    [ { "kind": "decision", "note": "prereqs example outputs [[schema],[api,infra]]", "link": "README.md:42" },
-      { "kind": "note", "note": "fixed the ordering in the example block" } ]
-    # on disk at <repo>/.trails/readme-prereqs-order.yaml:
-    # tasks-mcp trails — per-task journal, append-only. Safe to commit; never synced to a remote.
-    - kind: decision
-      note: prereqs example outputs [[schema],[api,infra]]
-      link: README.md:42
-    - kind: note
-      note: fixed the ordering in the example block
+    # `trail` (get_trail) returns the whole thread, oldest first. kind/link ride a hidden marker on
+    # outputty's writes; a plain comment has neither. author + at come from GitHub:
+    [ { "kind": "decision", "note": "prereqs example outputs [[schema],[api,infra]]",
+        "link": "README.md:42", "author": "test-user", "at": "2026-01-01T00:00:00Z" },
+      { "note": "fixed the ordering in the example block",
+        "author": "test-user", "at": "2026-01-01T00:00:01Z" } ]

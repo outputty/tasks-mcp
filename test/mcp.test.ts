@@ -171,7 +171,7 @@ test("prereqs and blockers answer the two planning questions over MCP", async ()
   await cleanup();
 });
 
-test("append_trail journals a task and get_trail reads it back over MCP", async () => {
+test("append_trail comments on the issue and get_trail reads the whole thread over MCP", async () => {
   const { client, project, cleanup } = await harness();
   await client.callTool({ name: "add_task", arguments: { project, id: "api", title: "API" } });
   await client.callTool({
@@ -180,18 +180,24 @@ test("append_trail journals a task and get_trail reads it back over MCP", async 
   });
   const res = await client.callTool({
     name: "append_trail",
-    arguments: { project, id: "api", note: "cut the branch param" }, // kind defaults to note
+    arguments: { project, id: "api", note: "cut the branch param" }, // no kind — a plain comment
   });
-  expect(structured(res).trail).toEqual([
-    { kind: "decision", note: "GraphQL only", link: "types.ts:79" },
-    { kind: "note", note: "cut the branch param" },
-  ]);
-  const got = await client.callTool({ name: "get_trail", arguments: { project, id: "api" } });
-  expect(structured(got).trail).toHaveLength(2);
+  const trail = structured(res).trail;
+  expect(trail).toHaveLength(2);
+  // The kind/link round-trip through a hidden marker; author + timestamp come from GitHub.
+  expect(trail[0]).toMatchObject({
+    kind: "decision",
+    note: "GraphQL only",
+    link: "types.ts:79",
+    author: "test-user",
+  });
+  expect(trail[0].at).toBeTypeOf("string");
+  expect(trail[1]).toMatchObject({ note: "cut the branch param", author: "test-user" });
+  expect(trail[1].kind).toBeUndefined(); // a plain human-style comment carries no kind
   await cleanup();
 });
 
-test("append_trail refuses an unknown task id", async () => {
+test("append_trail refuses a task that has no issue yet", async () => {
   const { client, project, cleanup } = await harness();
   const res = await client.callTool({
     name: "append_trail",

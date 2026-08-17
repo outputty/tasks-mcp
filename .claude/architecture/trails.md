@@ -1,57 +1,50 @@
 # Per-task trails
 
-A **trail** is a per-task, append-only journal — the decisions and actions behind a task, kept so a
-later session can backtrack *why*. Trails are the opposite of the [file layer](provider-stack.md):
-that cache is disposable and rebuilt from the stack; a trail is **durable local memory** with no
-deeper layer to rebuild it, so it is never quarantined — a corrupt one fails loud with its path.
+A task's **trail is its GitHub issue comment thread**. There is no separate trail store — the provider
+that owns the issue owns its comments, so trails ride the same [GitHub layer](provider-stack.md) as
+tasks. `append_trail` posts a comment; `get_trail` reads the whole thread. **Every comment is an entry**,
+people's comments included.
 
 ```mermaid
 flowchart LR
-    tool["append_trail\n{ id, kind, note, link? }"] --> store["TrailStore\n(text append)"]
-    store --> file[".trails/&lt;id&gt;.yaml\nYAML list, oldest first"]
-    file --> read["get_trail\nreturns the whole journal"]
-    task["task exists?\n(top file layer)"] -.->|"guard: no task &lt;id&gt;"| tool
+    tool["append_trail\n{ id, note, kind?, link? }"] --> guard{issue exists?}
+    guard -->|"no"| stop["error: sync first"]
+    guard -->|"yes"| add["addComment (GraphQL)"]
+    add --> issue["GitHub issue\ncomment thread"]
+    issue --> read["get_trail\ncomments connection → every entry"]
 ```
 
-## What a trail holds
+## The seam
 
-One file per task at `<trailsDir>/<id>.yaml` (default `.trails` in the repo root). The file is a YAML
-list of entries, each `{ kind, note, link? }` where `kind` is `decision` · `action` · `note` (default
-`note`). Real observed (`trail-journal` example):
+The `Provider` interface gained two **optional** methods, `getTrail` / `appendTrail`. `GitHubProvider`
+implements them; `FileProvider` does not. So the service's `getTrail`/`appendTrail` walk the stack from
+the bottom and use the **deepest layer that backs trails** — GitHub. A file-only project (no remote)
+has no trail surface and the call throws `trails need a GitHub-backed project`.
 
-```yaml
-# tasks-mcp trails — per-task journal, append-only. Safe to commit; never synced to a remote.
-- kind: decision
-  note: prereqs example outputs [[schema],[api,infra]]
-  link: README.md:42
-- kind: note
-  note: fixed the ordering in the example block
-```
+- `appendTrail(id, entry)` → look up the issue node id in the layer's task→issue index → `addComment`
+  → re-read the thread. No issue for the id (never synced) → `no task <id> on GitHub — sync it first`.
+- `getTrail(id)` → the issue's `comments` connection, paginated, oldest first. No issue → `[]`.
 
-## Why text-append, never rewrite
+## Every comment is an entry, kind/link on a hidden marker
 
-The single load-bearing decision. outputty's original tracker (`tasks.js`) refused to write trails at
-all, because a full re-serialize (`YAML.stringify`) flattens `|` block scalars and destroys
-hand-authored prose. `TrailStore.append` sidesteps that: it concatenates the new entry as one YAML
-list item and never touches an earlier byte, so hand-editing a trail between appends is safe. The old
-lesson's *reason* (never destroy prose) is honored, not reversed — the tool can now write because it
-only ever adds.
+An entry is `{ note, kind?, link?, author?, at? }`. `note` is the comment body; `author` (GitHub login)
+and `at` (ISO 8601) come from GitHub on read. Because **every** comment counts, a comment a person wrote
+by hand comes back as a bare `note` plus its `author`/`at`.
 
-An `appendPrefix` guards the join: a new file gets the header comment; an existing file a hand-edit
-left without a trailing newline gets a `\n` first, so an appended item can never fuse onto the last
-line.
-
-## Local, never synced
-
-Trails are outside the provider stack entirely — `TrailStore` is its own component, not a `Provider`,
-and `sync` never touches it. Nothing pushes a trail to GitHub. This is deliberate: the storage fork
-(ruled 2026-08-17) chose a repo-root `.trails` folder (path configurable via `trailsDir`) over a
-GitHub-synced or cache-only home, so the decision prose stays local and committable.
+`kind` (`decision` · `action` · `note`) and `link` are optional and only outputty writes them — encoded
+in a leading `<!-- outputty:trail kind=… link=… -->` marker, then the note. The marker is an HTML
+comment, so GitHub renders the comment as plain text; `splitMarker` parses it back on read. Real observed
+(the `trail-journal` example): a `decision` comment round-trips its kind and link; a plain `note` comment
+comes back with neither.
 
 ### Gotchas
 
-- `append_trail` refuses an unknown id (`no task <id>`) — the existence check reads only the top file
-  layer, so no network is touched. A task on GitHub but not yet pulled locally must be `sync`ed first.
-- A task id containing a path separator (`/`, `\`, `..`) is refused — it must be a safe file name.
-- Whether to commit `.trails/` is the user's call; the server only writes there. `git`-ignore it to
-  keep trails machine-local, or commit it to share the reasoning with teammates.
+- Reads hit the network (there is no local trail cache) — unlike task reads, which the file layer
+  answers offline.
+- `append_trail` needs the issue to exist first. A task created offline, or before its first `sync`, has
+  no issue to comment on yet.
+- `kind` must be one of `TRAIL_KINDS`; a junk `kind` on append is rejected. A junk `kind=` in a
+  hand-written marker is ignored on read (the entry keeps its note).
+- History: the first cut (v0.9.0, unreleased) stored trails in a local `.trails/<id>.yaml` file, never
+  synced. Ruled 2026-08-17 to back them with issue comments instead — one provider for tasks and their
+  trails. See `lessons.yaml` / roadmap #6.

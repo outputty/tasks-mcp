@@ -11,7 +11,6 @@ import type { Provider, ProviderState } from "./providers/provider.ts";
 import type { ServerOptions } from "./types.ts";
 import { ConfigProvider, type ConfigSources } from "./providers/config.ts";
 import { buildStack } from "./providers/provider.ts";
-import { TrailStore } from "./trails.ts";
 import { withDefaults } from "./graph.ts";
 
 export interface SyncResult {
@@ -55,15 +54,12 @@ export class TaskStack implements TaskService {
   // One stack per remote name — layers cache their per-project init (repo, board, index), so handing
   // out fresh instances would redo that remote work on every call.
   private readonly stacks = new Map<string, Provider[]>();
-  private readonly trails: TrailStore;
 
   constructor(
     private readonly options: ServerOptions = {},
     private readonly providers?: Provider[],
     private readonly config: ConfigProvider = new ConfigProvider(options),
-  ) {
-    this.trails = new TrailStore(this.config);
-  }
+  ) {}
 
   private layers(ctx: ProjectContext): Provider[] {
     if (this.providers) return this.providers;
@@ -132,13 +128,24 @@ export class TaskStack implements TaskService {
   }
 
   async getTrail(ctx: ProjectContext, id: string): Promise<TrailEntry[]> {
-    return this.trails.read(ctx.project, id);
+    return (await this.trailLayer(ctx)).getTrail!(ctx, id);
   }
 
   async appendTrail(ctx: ProjectContext, id: string, entry: TrailEntry): Promise<TrailEntry[]> {
-    // Guard against a typo'd id — the read hits only the top file layer, so no network is touched.
-    if (!(await this.get(ctx, id))) throw new Error(`no task ${id}`);
-    return this.trails.append(ctx.project, id, entry);
+    return (await this.trailLayer(ctx)).appendTrail!(ctx, id, entry);
+  }
+
+  /** The deepest layer that backs trails (GitHub owns the issue comments; the file cache has none). */
+  private async trailLayer(ctx: ProjectContext): Promise<Provider> {
+    const layers = this.layers(ctx);
+    for (let i = layers.length - 1; i >= 0; i--) {
+      const layer = layers[i];
+      if (layer.getTrail && layer.appendTrail) {
+        await layer.init(ctx);
+        return layer;
+      }
+    }
+    throw new Error("trails need a GitHub-backed project — no provider here backs them");
   }
 
   async sync(ctx: ProjectContext): Promise<SyncResult> {
