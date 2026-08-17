@@ -1,18 +1,15 @@
 name: Publish
 
-# Publishing is manual and deliberate: it runs ONLY when you push a version tag (`vX.Y.Z`). Nothing
-# publishes on a branch push or a PR.
-#
-#   npm version patch          # bumps package.json + creates the vX.Y.Z tag
-#   git push --follow-tags     # pushes the commit and the tag -> this workflow runs
+# Release management is manual and separate from pushing code. Pushing to a branch runs CI (see ci.yml)
+# but never publishes. Publishing happens only when you manually create a GitHub Release: tag it
+# `vX.Y.Z` to match package.json, and publishing this release fires the `release: published` event below.
 #
 # Auth is npm Trusted Publishing (OIDC) — no token is stored. Configure a Trusted Publisher on the
-# package (npmjs -> Settings -> Publishing) pointing at this repo + this workflow. Provenance is
-# attached automatically. Note: OIDC cannot do a package's FIRST publish — do that one by hand.
+# package (npmjs → Settings → Publishing) pointing at this repo + this workflow. Provenance is attached
+# automatically. Note: OIDC cannot do a package's FIRST publish — do that one by hand.
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -23,17 +20,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           registry-url: "https://registry.npmjs.org"
           cache: npm
-      - name: Tag must match package.json version
+      - name: Release tag must match package.json, and version must be new
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           PKG="$(node -p "require('./package.json').version")"
-          echo "tag=$TAG package.json=$PKG"
-          test "$TAG" = "$PKG" || { echo "::error::tag $TAG does not match package.json $PKG"; exit 1; }
+          echo "release tag=$TAG package.json=$PKG"
+          test "$TAG" = "$PKG" || { echo "::error::release tag $TAG != package.json $PKG"; exit 1; }
+          if npm view "@outputty/tasks-mcp@$PKG" version >/dev/null 2>&1; then
+            echo "::error::@outputty/tasks-mcp@$PKG is already published"; exit 1
+          fi
       - run: npm install -g npm@latest # trusted publishing needs npm >= 11.5.1
       - run: npm ci
       - run: npm test

@@ -226,13 +226,13 @@ One-time setup:
 2. On npmjs, open the package → **Settings → Publishing → Add a trusted publisher** → GitHub Actions →
    org `outputty`, repo `tasks-mcp`, workflow `publish.yml`.
 
-Every release after that is driven by **pushing a version tag** — nothing else publishes:
+After that, **pushing code never publishes** — a push just runs CI (tests + build). Releasing is a
+separate, manual step:
 
-```bash
-npm version patch        # bumps package.json and creates the vX.Y.Z tag
-git push --follow-tags   # pushes the commit + tag -> the Publish workflow runs
-```
+1. Bump `version` in `package.json`, commit, and push. CI runs; nothing publishes.
+2. Create a GitHub **Release** with the tag `vX.Y.Z` (matching the version) — e.g.
+   `gh release create v0.5.1 --generate-notes`, or the Releases UI.
 
-The `Publish` workflow checks the tag matches `package.json`, tests, builds, and `npm publish`es via
-OIDC — the runner proves its identity to npm with a short-lived token, and **provenance** is attached
-automatically (a verifiable build from this repo+commit). Nothing to store, rotate, or leak.
+Publishing the release fires the `Publish` workflow, which checks the tag matches `package.json` and the
+version is new, tests, builds, and `npm publish`es via **OIDC** — the runner proves its identity to npm
+with a short-lived token, and **provenance** is attached automatically. Nothing to store, rotate, or leak.
