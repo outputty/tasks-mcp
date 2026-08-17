@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 // The package entry. With no command (or `mcp`) it runs the MCP server — stdio by default (for
-// `.mcp.json` -> `bunx @outputty/tasks-mcp`), or `--http` for the standalone hono server. It also drives
+// `.mcp.json` -> `bunx @outputty/tasks-mcp`), or `--http` for the standalone HTTP server. It also drives
 // the core business logic directly as a CLI: `add`, `list`, `ready`, `schedule`, `get`, `close`, `sync`.
 //
 // Flags (all optional): --http --port <n> --provider <name> --project-number <n> --no-projects
 //   --board <title> --cache-dir <dir> --project <path> --title <t> --deps <a,b> --scope <a,b> --tier <n>
 
-import { serve } from "@hono/node-server";
 import { runStdio } from "../src/mcp/stdio.ts";
-import { createApp } from "../src/mcp/http.ts";
+import { createHttpServer } from "../src/mcp/http.ts";
 import { makeService } from "../src/core/service.ts";
 import { ready, planning, schedule } from "../src/core/graph.ts";
 import type { ServerOptions } from "../src/core/config.ts";
@@ -93,11 +92,10 @@ if (await runBusiness()) {
   process.exit(0);
 } else if (has("http")) {
   const port = Number(val("port") || 3917);
-  const app = createApp(service);
   console.error(
     `tasks-mcp (http) listening on http://localhost:${port}/mcp  (health: /health)`,
   );
-  serve({ fetch: app.fetch, port });
+  createHttpServer(service).listen(port);
 } else {
   await runStdio(service); // `mcp` (default): stdio transport
 }

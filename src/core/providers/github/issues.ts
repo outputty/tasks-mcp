@@ -1,6 +1,9 @@
-// GitHub Issues over GraphQL — no REST, no labels. The task id lives in a hidden YAML block in the issue
-// body (alongside deps/scope/tier/…), so there is nothing to look up by label and nothing to keep in
-// sync but the body itself. An issue is "managed" iff its body carries that block with an id.
+// GitHub Issues over GraphQL — no REST, no labels. The provider speaks one protocol: the Projects v2
+// board is GraphQL-only (REST still cannot create or repo-link a board), so issues use the same API and
+// the same node-id handles rather than mixing in REST's owner/repo/number addressing. The task id lives
+// in a hidden YAML block in the issue body (alongside deps/scope/tier/…), so there is nothing to look up
+// by label and nothing to keep in sync but the body itself. An issue is "managed" iff its body carries
+// that block with an id.
 
 import { parse, stringify } from "yaml";
 import type { Task } from "../../types.ts";
@@ -36,7 +39,7 @@ const META_KEYS = [
 export function renderBody(task: Task, human = ""): string {
   const meta: Record<string, unknown> = { id: task.id };
   for (const key of META_KEYS) {
-    const value = (task as Record<string, unknown>)[key];
+    const value = (task as unknown as Record<string, unknown>)[key];
     if (value === undefined) continue;
     if (
       Array.isArray(value) &&
@@ -88,13 +91,13 @@ export function issueToTask(issue: GhIssue): Task {
   } as Partial<Task> & { id: string });
 }
 
-// The repository node id createIssue needs, resolved once per repo per process.
+// The repository node id createIssue needs, resolved once per repo per client.
 const repoIds = new Map<string, string>();
 async function repositoryId(env: GitHubEnv): Promise<string> {
   const key = `${env.repo.owner}/${env.repo.repo}`;
   const cached = repoIds.get(key);
   if (cached) return cached;
-  const res = await env.graphql<{ repository: { id: string } }>(
+  const res = await env.octokit.graphql<{ repository: { id: string } }>(
     `query($o:String!,$n:String!){ repository(owner:$o,name:$n){ id } }`,
     { o: env.repo.owner, n: env.repo.repo },
   );
@@ -103,7 +106,9 @@ async function repositoryId(env: GitHubEnv): Promise<string> {
 }
 
 export async function createIssue(env: GitHubEnv, task: Task): Promise<string> {
-  const res = await env.graphql<{ createIssue: { issue: { id: string } } }>(
+  const res = await env.octokit.graphql<{
+    createIssue: { issue: { id: string } };
+  }>(
     `mutation($r:ID!,$t:String!,$b:String!){ createIssue(input:{repositoryId:$r,title:$t,body:$b}){ issue{ id } } }`,
     {
       r: await repositoryId(env),
@@ -121,12 +126,13 @@ export async function updateIssue(
   issueId: string,
   task: Task,
 ): Promise<void> {
-  const current = await env.graphql<{ node: { body: string | null } | null }>(
-    `query($id:ID!){ node(id:$id){ ... on Issue { body } } }`,
-    { id: issueId },
-  );
+  const current = await env.octokit.graphql<{
+    node: { body: string | null } | null;
+  }>(`query($id:ID!){ node(id:$id){ ... on Issue { body } } }`, {
+    id: issueId,
+  });
   const human = parseBody(current.node?.body).human;
-  await env.graphql(
+  await env.octokit.graphql(
     `mutation($id:ID!,$t:String!,$b:String!){ updateIssue(input:{id:$id,title:$t,body:$b}){ issue{ id } } }`,
     { id: issueId, t: task.title || task.id, b: renderBody(task, human) },
   );
@@ -142,7 +148,7 @@ async function setState(
     status === "done"
       ? `mutation($id:ID!){ closeIssue(input:{issueId:$id}){ issue{ id } } }`
       : `mutation($id:ID!){ reopenIssue(input:{issueId:$id}){ issue{ id } } }`;
-  await env.graphql(mutation, { id: issueId });
+  await env.octokit.graphql(mutation, { id: issueId });
 }
 
 /** One repo issue as a full task, plus its ref and whether it already carries our block. */
@@ -168,7 +174,7 @@ export async function listIssues(env: GitHubEnv): Promise<ListedIssue[]> {
           nodes: GhIssue[];
         };
       };
-    } = await env.graphql(
+    } = await env.octokit.graphql(
       `query($o:String!,$n:String!,$c:String){ repository(owner:$o,name:$n){ issues(first:100,after:$c,states:[OPEN,CLOSED],orderBy:{field:CREATED_AT,direction:ASC}){ pageInfo{ hasNextPage endCursor } nodes{ id number title body state } } } }`,
       { o: env.repo.owner, n: env.repo.repo, c: after },
     );

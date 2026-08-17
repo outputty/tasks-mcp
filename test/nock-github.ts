@@ -4,9 +4,10 @@
 
 import nock from "nock";
 import { Octokit } from "octokit";
-import type { GitHubEnv } from "../src/core/providers/github/client.ts";
+import { GitHubProvider } from "../src/core/providers/github/github.ts";
+import type { ServerOptions } from "../src/core/config.ts";
 
-interface GhIssue {
+export interface FakeIssue {
   id: string;
   number: number;
   title: string;
@@ -15,7 +16,7 @@ interface GhIssue {
 }
 
 export class NockGitHub {
-  issues: GhIssue[] = [];
+  issues: FakeIssue[] = [];
   boards: Array<{ id: string; number: number; title: string }> = [
     { id: "PROJ", number: 7, title: "Tasks" },
   ];
@@ -140,18 +141,16 @@ export function installNock(gh: NockGitHub = new NockGitHub()): NockGitHub {
   return gh;
 }
 
-/** A GitHubEnv whose graphql is a real Octokit client (its HTTP goes through the nock interceptor). */
-export function nockEnv(config: Record<string, unknown> = {}): GitHubEnv {
-  // Disable throttling/retry in tests — the throttle plugin spaces writes ~1s apart, which the mocked
-  // endpoint doesn't need and which would time the suite out. Production keeps both plugins.
+/**
+ * A GitHubProvider whose Octokit is real — its HTTP goes through the nock interceptor. Throttling and
+ * retry are disabled: the throttle plugin spaces writes ~1s apart, which the mocked endpoint doesn't
+ * need and which would time the suite out. Production keeps both plugins.
+ */
+export function nockProvider(options: ServerOptions = {}): GitHubProvider {
   const octokit = new Octokit({
     auth: "test-token",
     throttle: { enabled: false },
     retry: { enabled: false },
   });
-  return {
-    graphql: octokit.graphql as unknown as GitHubEnv["graphql"],
-    repo: { owner: "outputty", repo: "demo" },
-    config,
-  };
+  return new GitHubProvider(options, octokit);
 }

@@ -1,17 +1,32 @@
-import { test, expect } from "vitest";
-import { handleRpc, type RpcRequest } from "../src/mcp/protocol.ts";
-import { createApp } from "../src/mcp/http.ts";
-import { CachedTaskService } from "../src/core/service.ts";
-import { tmp } from "./helpers.ts";
-import { FakeProvider } from "./fake-provider.ts";
+// MCP protocol tests, end to end: JSON-RPC in, a real service over a real GitHubProvider, nock at the
+// network boundary. The HTTP test runs the actual node:http server on an ephemeral port.
 
-// A service over a temp cache dir and a fake provider — the whole protocol, no HTTP to GitHub.
+import { test, expect, beforeEach, afterAll } from "vitest";
+import nock from "nock";
+import { handleRpc, type RpcRequest } from "../src/mcp/protocol.ts";
+import { createHttpServer } from "../src/mcp/http.ts";
+import { CachedTaskService } from "../src/core/service.ts";
+import { tmp, tmpRepo } from "./helpers.ts";
+import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
+
+beforeEach(() => {
+  nock.cleanAll();
+  nock.disableNetConnect();
+  nock.enableNetConnect(/^(localhost|127\.0\.0\.1)/); // the http-transport test talks to itself
+});
+afterAll(() => {
+  nock.cleanAll();
+  nock.enableNetConnect();
+});
+
+// A service over a temp cache dir and a nock-backed GitHub — the whole stack, no real network.
 function harness() {
-  const project = tmp();
+  installNock(new NockGitHub());
+  const project = tmpRepo();
   const cache = tmp();
   const service = new CachedTaskService(
     { cacheDir: cache.dir },
-    new FakeProvider(),
+    nockProvider({ projects: false }),
   );
   return {
     service,
@@ -109,19 +124,26 @@ test("an unknown method is a JSON-RPC method-not-found error", async () => {
   expect((res as any).error.code).toBe(-32601);
 });
 
-test("the hono app answers /health and /mcp end to end", async () => {
+test("the node:http server answers /health and /mcp end to end", async () => {
   const { service, project, cleanup } = harness();
-  const app = createApp(service);
-  const health = await app.request("/health");
-  expect((await health.json()).ok).toBe(true);
+  const server = createHttpServer(service);
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const addr = server.address();
+  const base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
 
-  const res = await app.request("/mcp", {
+  const health = await fetch(`${base}/health`);
+  expect(((await health.json()) as any).ok).toBe(true);
+
+  const res = await fetch(`${base}/mcp`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(
       call("add_task", { project, id: "viahttp", title: "over http" }),
     ),
   });
-  expect((await res.json()).result.structuredContent.task.id).toBe("viahttp");
+  expect(((await res.json()) as any).result.structuredContent.task.id).toBe(
+    "viahttp",
+  );
+  await new Promise<void>((r) => server.close(() => r()));
   cleanup();
 });

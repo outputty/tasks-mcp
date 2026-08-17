@@ -1,10 +1,7 @@
 import { test, expect, beforeEach, afterAll } from "vitest";
 import nock from "nock";
-import { GitHubProvider } from "../src/core/providers/github/github.ts";
-import { task } from "./helpers.ts";
-import { NockGitHub, installNock, nockEnv } from "./nock-github.ts";
-
-const ctx = { project: "/tmp/whatever" };
+import { task, tmpRepo } from "./helpers.ts";
+import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
 
 beforeEach(() => {
   nock.cleanAll();
@@ -15,14 +12,14 @@ afterAll(() => {
   nock.enableNetConnect();
 });
 
-function setup(config: Record<string, unknown> = { projects: false }) {
+function setup(options: Record<string, unknown> = { projects: false }) {
   const gh = installNock(new NockGitHub());
-  const provider = new GitHubProvider(async () => nockEnv(config));
-  return { gh, provider };
+  const repo = tmpRepo();
+  return { gh, provider: nockProvider(options), ctx: { project: repo.dir } };
 }
 
 test("create sends a createIssue with the id in the body and no labels", async () => {
-  const { gh, provider } = setup();
+  const { gh, provider, ctx } = setup();
   const refs = await provider.create(
     ctx,
     task({ id: "api", title: "API", tier: 2, deps: ["schema"] }),
@@ -34,13 +31,13 @@ test("create sends a createIssue with the id in the body and no labels", async (
 });
 
 test("a done task is created then closed via closeIssue", async () => {
-  const { gh, provider } = setup();
+  const { gh, provider, ctx } = setup();
   await provider.create(ctx, task({ id: "t-1", status: "done" }));
   expect(gh.issues[0].state).toBe("CLOSED");
 });
 
 test("update rewrites the body and preserves human prose below the block", async () => {
-  const { gh, provider } = setup();
+  const { gh, provider, ctx } = setup();
   const refs = await provider.create(ctx, task({ id: "t-1", title: "old" }));
   gh.issues[0].body += "\nHuman note: see the design.";
   await provider.update(ctx, task({ id: "t-1", title: "new", tier: 4 }), refs);
@@ -50,7 +47,7 @@ test("update rewrites the body and preserves human prose below the block", async
 });
 
 test("pull reconstructs full tasks (deps) from bodies and adopts hand-opened issues", async () => {
-  const { gh, provider } = setup();
+  const { gh, provider, ctx } = setup();
   await provider.create(ctx, task({ id: "api", deps: ["schema"], tier: 2 }));
   gh.issues.push({
     id: "I_99",
@@ -68,7 +65,7 @@ test("pull reconstructs full tasks (deps) from bodies and adopts hand-opened iss
 });
 
 test("with Projects on, a card moved to Done pulls back as done + reconcile", async () => {
-  const { gh, provider } = setup({});
+  const { gh, provider, ctx } = setup({});
   const refs = await provider.create(ctx, task({ id: "api" })); // issue open, card Todo
   gh.items.get(refs.projectItem!)!.status = "OPT_DONE"; // dragged to Done
   const state = (await provider.pull(ctx)).get("api")!;
@@ -77,7 +74,7 @@ test("with Projects on, a card moved to Done pulls back as done + reconcile", as
 });
 
 test("a Projects failure never fails the task write (best-effort)", async () => {
-  const { gh, provider } = setup({ projectNumber: 404 });
+  const { gh, provider, ctx } = setup({ projectNumber: 404 });
   gh.boards = []; // no board, and #404 can't be created
   const refs = await provider.create(ctx, task({ id: "api" }));
   expect(refs.issueId).toBe("I_1"); // the issue still lands

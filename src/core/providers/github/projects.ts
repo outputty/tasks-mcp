@@ -4,7 +4,7 @@
 // title (config.board, default "Tasks"), and created + linked to the repo when neither exists.
 
 import type { Task } from "../../types.ts";
-import type { GitHubEnv, GraphQL } from "./client.ts";
+import type { GitHubEnv } from "./client.ts";
 
 interface BoardMeta {
   projectId: string;
@@ -25,7 +25,7 @@ export async function syncToBoard(
 
   let itemId = existingItem;
   if (!itemId) {
-    const added = await env.graphql<{
+    const added = await env.octokit.graphql<{
       addProjectV2ItemById: { item: { id: string } };
     }>(
       `mutation($p:ID!,$c:ID!){ addProjectV2ItemById(input:{projectId:$p,contentId:$c}){ item{ id } } }`,
@@ -63,7 +63,7 @@ export async function readBoard(
           }>;
         };
       };
-    } = await env.graphql(
+    } = await env.octokit.graphql(
       `query($p:ID!,$c:String){ node(id:$p){ ... on ProjectV2 { items(first:100,after:$c){ pageInfo{ hasNextPage endCursor } nodes{ id content{ ... on Issue { id } } fieldValueByName(name:"Status"){ ... on ProjectV2ItemFieldSingleSelectValue { name } } } } } } }`,
       { p: board.projectId, c: after },
     );
@@ -93,7 +93,7 @@ async function setStatus(
     status === "done" ? ["done", "closed"] : ["todo", "to do", "backlog"];
   const optionId = wanted.map((w) => board.options.get(w)).find(Boolean);
   if (!optionId) return;
-  await env.graphql(
+  await env.octokit.graphql(
     `mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){ updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){ projectV2Item{ id } } }`,
     { p: board.projectId, i: itemId, f: board.statusFieldId, o: optionId },
   );
@@ -104,7 +104,7 @@ async function resolveBoardCached(env: GitHubEnv): Promise<BoardMeta> {
   const cached = boards.get(key);
   if (cached) return cached;
   const meta = await resolveBoard(
-    env.graphql,
+    env,
     env.repo,
     env.config.projectNumber,
     env.config.board ?? "Tasks",
@@ -114,11 +114,12 @@ async function resolveBoardCached(env: GitHubEnv): Promise<BoardMeta> {
 }
 
 async function resolveBoard(
-  graphql: GraphQL,
+  env: GitHubEnv,
   repo: { owner: string; repo: string },
   number: number | undefined,
   title: string,
 ): Promise<BoardMeta> {
+  const graphql = env.octokit.graphql;
   const found = await graphql<{
     repository: {
       id: string;

@@ -1,40 +1,64 @@
-// The GitHub provider: one plug-and-play unit implementing the Provider seam. It bundles Issues (the
-// primary record, via GraphQL) and the Projects v2 board (a best-effort kanban mirror). Issues must
-// succeed; a Projects failure is logged and swallowed, so a board hiccup never loses a task.
+// The GitHub provider: one plug-and-play unit implementing the Provider seam, wrapping one Octokit
+// client. It bundles Issues (the primary record) and the Projects v2 board (a best-effort kanban
+// mirror), both over GraphQL — the board has no complete REST API, and one protocol keeps one kind of
+// handle (node ids) end to end. Issues must succeed; a Projects failure is logged and swallowed, so a
+// board hiccup never loses a task.
 //
-// The resolver is injectable, so tests hand it a fake GraphQL and never touch git, gh, or the network.
+// The client is the one test seam: tests construct the provider with their own Octokit (throttling
+// off) and nock intercepts its HTTP — git, gh, and the request path all stay real.
 
+import type { Octokit } from "octokit";
 import type { ProjectContext, Refs, Task } from "../../types.ts";
+import type { ServerOptions } from "../../config.ts";
+import { loadConfig } from "../../config.ts";
 import type { Provider, RemoteState } from "../provider.ts";
 import type { GitHubEnv } from "./client.ts";
-import { resolveGitHubEnv } from "./client.ts";
+import { defaultOctokit, resolveRepo } from "./client.ts";
 import { createIssue, updateIssue, listIssues } from "./issues.ts";
 import { syncToBoard, readBoard } from "./projects.ts";
 
 export class GitHubProvider implements Provider {
   readonly name = "github";
+  private readonly octokit: Octokit;
+  // Repo resolution spawns git; remember it per project path for the provider's lifetime.
+  private readonly repos = new Map<string, GitHubEnv["repo"]>();
 
   constructor(
-    private readonly resolve: (
-      project: string,
-    ) => Promise<GitHubEnv> = resolveGitHubEnv,
-  ) {}
+    private readonly options: ServerOptions = {},
+    octokit?: Octokit,
+  ) {
+    this.octokit = octokit ?? defaultOctokit();
+  }
+
+  /** The resolved world one call runs against: this client, the project's repo, its config. */
+  private env(project: string): GitHubEnv {
+    let repo = this.repos.get(project);
+    if (!repo) {
+      repo = resolveRepo(project);
+      this.repos.set(project, repo);
+    }
+    return {
+      octokit: this.octokit,
+      repo,
+      config: loadConfig(project, this.options),
+    };
+  }
 
   async create(ctx: ProjectContext, task: Task): Promise<Refs> {
-    const env = await this.resolve(ctx.project);
+    const env = this.env(ctx.project);
     const issueId = await createIssue(env, task);
     return this.withBoard(env, task, { issueId });
   }
 
   async update(ctx: ProjectContext, task: Task, refs: Refs): Promise<Refs> {
-    const env = await this.resolve(ctx.project);
+    const env = this.env(ctx.project);
     if (!refs.issueId) return this.create(ctx, task); // lost the ref somehow — re-create rather than orphan
     await updateIssue(env, refs.issueId, task);
     return this.withBoard(env, task, refs);
   }
 
   async pull(ctx: ProjectContext): Promise<Map<string, RemoteState>> {
-    const env = await this.resolve(ctx.project);
+    const env = this.env(ctx.project);
     const projectsOn = env.config.projects !== false;
     // Read the board too (best-effort), so a card moved to Done flows back into the cache.
     const board = projectsOn

@@ -4,10 +4,29 @@
 to npm. It is split so the MCP layer wraps the core, never the reverse:
 
 - `src/core/` — the business logic: `service`, `cache`, `graph`, `config`, `providers/` (GitHub via
-  GraphQL/Octokit). Exported as the library (`.`).
+  Octokit, GraphQL only). Exported as the library (`.`).
 - `src/mcp/` — the wrapper: `tools`, the JSON-RPC `protocol`, and the `stdio` + `http` transports.
   Exported as `./mcp`.
 - `bin/cli.ts` — the entry: MCP server (stdio default, `--http`) or direct subcommands.
+
+## Code rules (the user's standing preferences — follow them in every change)
+
+- **Providers are classes.** Every provider is a class implementing the `Provider` seam, and it wraps
+  its own API client (`GitHubProvider` holds its `Octokit`). The client is the one injection point —
+  constructor parameter, defaulted for production, passed explicitly by tests. No free-function
+  resolver seams around a provider.
+- **No imports inside functions.** All imports sit at the top of the module — no lazy
+  `await import(...)` to shave startup or dodge a dependency in tests.
+- **The GitHub provider speaks GraphQL only** (user ruling, 2026-08-17). The Projects v2 board is
+  GraphQL-only regardless (as of 2026-08, REST cannot create a board, link one to a repo, or list a
+  repo's linked boards), and the user chose one protocol over a REST/GraphQL mix — one API, one kind
+  of handle (node ids) end to end. Do not port issues to `octokit.rest.*`.
+- **Tests are e2e, mocked at the network with nock.** Drive the real stack — provider, service,
+  protocol, transport — and fake only the wire: nock answers api.github.com (REST + GraphQL), test
+  repos are real `git init` temp dirs. No in-memory fake providers. The one exception is a pure
+  algorithm module with no I/O boundary (`graph.ts`), which may keep direct unit tests.
+- **No HTTP framework.** The HTTP transport is plain `node:http` — two routes never justified a
+  framework dependency. Prefer platform builtins and widely adopted tools over niche frameworks.
 
 ## Commands
 
@@ -17,7 +36,7 @@ to npm. It is split so the MCP layer wraps the core, never the reverse:
 - `npm run format` — prettier.
 
 Keep the code **runtime-portable** — no Bun-only APIs in `src/`/`bin/` (use `yaml`, `node:crypto`,
-`node:child_process`, `@hono/node-server`, `process` streams). It must run under both Node and Bun.
+`node:child_process`, `node:http`, `process` streams). It must run under both Node and Bun.
 
 ## Releasing — always ask first, never publish unprompted
 

@@ -33,3 +33,4 @@ export {
   type Provider,
   type RemoteState,
 } from "./providers/provider.ts";
+export { GitHubProvider } from "./providers/github/github.ts";

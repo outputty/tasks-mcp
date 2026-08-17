@@ -1,20 +1,15 @@
 // GitHub-specific resolution: the repo a project points at, the user's existing credentials, and an
-// authenticated GraphQL caller. Everything the GitHub provider needs to reach the API, resolved from a
-// project path. Injectable so tests supply a fake GraphQL and never touch git, gh, or the network.
+// authenticated Octokit client. Everything the GitHub provider needs to reach the API, resolved from a
+// project path. The client is the provider's one test seam — tests pass their own Octokit and nock
+// intercepts its HTTP, so the real request/response path is always exercised.
 
 import { spawnSync } from "node:child_process";
+import { Octokit } from "octokit";
 import type { ProjectConfig, RepoRef } from "../../types.ts";
-import { loadConfig, type ServerOptions } from "../../config.ts";
-
-/** A GraphQL caller, the shape of `octokit.graphql`. GitHub Issues and Projects both go through this. */
-export type GraphQL = <T = unknown>(
-  query: string,
-  vars?: Record<string, unknown>,
-) => Promise<T>;
 
 /** The resolved world a GitHub operation runs against. */
 export interface GitHubEnv {
-  graphql: GraphQL;
+  octokit: Octokit;
   repo: RepoRef;
   config: ProjectConfig;
 }
@@ -50,28 +45,17 @@ export function githubToken(): string {
   return token;
 }
 
-// One GraphQL caller per token, reused across calls. Imported lazily so the pure graph tests never load
-// Octokit.
-const clients = new Map<string, GraphQL>();
-async function graphqlFor(): Promise<GraphQL> {
+// One Octokit per token, reused across calls — the token is re-read each time so a rotated `gh`
+// credential picks up a fresh client instead of failing on a stale one.
+const clients = new Map<string, Octokit>();
+
+/** The shared authenticated client for the user's current credentials. */
+export function defaultOctokit(): Octokit {
   const token = githubToken();
   let client = clients.get(token);
   if (!client) {
-    const { Octokit } = await import("octokit");
-    client = new Octokit({ auth: token }).graphql as unknown as GraphQL;
+    client = new Octokit({ auth: token });
     clients.set(token, client);
   }
   return client;
-}
-
-/** The production resolver: real git remote, real gh credentials, CLI options + optional config file. */
-export async function resolveGitHubEnv(
-  project: string,
-  options: ServerOptions = {},
-): Promise<GitHubEnv> {
-  return {
-    graphql: await graphqlFor(),
-    repo: resolveRepo(project),
-    config: loadConfig(project, options),
-  };
 }

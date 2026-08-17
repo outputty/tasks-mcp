@@ -9,7 +9,6 @@
 import type { ProjectContext, Refs, Task } from "../types.ts";
 import { loadConfig, type ServerOptions } from "../config.ts";
 import { GitHubProvider } from "./github/github.ts";
-import { resolveGitHubEnv } from "./github/client.ts";
 
 /** What a provider reports back for one task on `pull`: the fields it owns, plus refs to remember. */
 export interface RemoteState {
@@ -29,9 +28,10 @@ export interface Provider {
   pull(ctx: ProjectContext): Promise<Map<string, RemoteState>>;
 }
 
-// Registered providers. Adding Linear is one entry here plus its implementation — nothing else moves.
+// Registered providers — each a class wrapping its own API client. Adding Linear is one entry here
+// plus its implementation — nothing else moves.
 const PROVIDERS: Record<string, (options: ServerOptions) => Provider> = {
-  github: (options) => new GitHubProvider((p) => resolveGitHubEnv(p, options)),
+  github: (options) => new GitHubProvider(options),
 };
 
 /** The provider a project uses, from its config (default "github"). */

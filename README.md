@@ -52,7 +52,7 @@ The package is split into a **core** (all the business logic) and a thin **MCP w
 same logic is reachable three ways:
 
 ```bash
-# 1. MCP server — what a coding agent uses (stdio by default, --http for hono)
+# 1. MCP server — what a coding agent uses (stdio by default, --http for the standalone server)
 npx -y @outputty/tasks-mcp
 
 # 2. Direct CLI — the same core, no MCP involved
@@ -118,7 +118,7 @@ body (no labels), and adds a card to the board.
 ```
    bin/cli.ts   ── CLI subcommands  ·  MCP server (stdio / http)
         │
-   src/mcp/     ── the MCP WRAPPER: tools · JSON-RPC protocol · stdio + hono transports
+   src/mcp/     ── the MCP WRAPPER: tools · JSON-RPC protocol · stdio + node:http transports
         │  wraps ↓ ; never the other way round
    src/core/    ── the CORE (business logic): service · cache · graph engine · providers
         │  each call carries { project, branch? }
@@ -164,8 +164,7 @@ Turn it off with `--no-projects`, or aim it at an existing board with `--project
 A tools-only server sends no server-initiated messages. Over stdio it is newline-delimited JSON-RPC; over
 HTTP the Streamable HTTP transport collapses to one JSON-RPC message in, one JSON reply out — no SSE
 stream, no session id. Both handle `initialize`, `tools/list`, and `tools/call` (plus `ping` and the
-`initialized` notification). The whole server leans on just `hono` + `octokit` (plus `yaml` and
-`@hono/node-server`).
+`initialized` notification). The whole server leans on just `octokit` + `yaml` — the HTTP transport is plain `node:http`.
 
 ## Config
 
@@ -213,7 +212,7 @@ npm run build        # tsup -> dist/ (cli, index, mcp)
 
 The GitHub provider is tested with **nock** — the tests drive the real Octokit client, and nock
 intercepts the HTTP so the actual queries and responses are exercised without a network or credentials.
-The service, cache, and protocol tests run against an in-memory fake provider.
+The service and protocol tests run the same way — end to end over the real provider, nock at the network boundary.
 
 ## Releasing
 

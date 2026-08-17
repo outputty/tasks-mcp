@@ -1,17 +1,34 @@
-import { test, expect } from "vitest";
+// Service tests, end to end: a real CachedTaskService over a real GitHubProvider whose HTTP lands on
+// the nock GitHub. The only fakes are the wire responses.
+
+import { test, expect, beforeEach, afterAll } from "vitest";
 import fs from "node:fs";
+import nock from "nock";
 import { CachedTaskService } from "../src/core/service.ts";
 import { ready } from "../src/core/graph.ts";
-import { task, tmp } from "./helpers.ts";
-import { FakeProvider } from "./fake-provider.ts";
+import { task, tmp, tmpRepo } from "./helpers.ts";
+import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
 
-function harness(provider = new FakeProvider()) {
-  const project = tmp();
+beforeEach(() => {
+  nock.cleanAll();
+  nock.disableNetConnect();
+});
+afterAll(() => {
+  nock.cleanAll();
+  nock.enableNetConnect();
+});
+
+function harness() {
+  const gh = installNock(new NockGitHub());
+  const project = tmpRepo();
   const cache = tmp();
-  const svc = new CachedTaskService({ cacheDir: cache.dir }, provider);
+  const svc = new CachedTaskService(
+    { cacheDir: cache.dir },
+    nockProvider({ projects: false }),
+  );
   return {
     svc,
-    provider,
+    gh,
     project: project.dir,
     cacheDir: cache.dir,
     cleanup: () => {
@@ -56,56 +73,51 @@ test("a duplicate id is refused", async () => {
   cleanup();
 });
 
-test("a deleted cache is rebuilt from the provider, deps and all", async () => {
-  const provider = new FakeProvider();
-  const h1 = harness(provider);
-  const ctx = { project: h1.project };
-  await h1.svc.create(ctx, task({ id: "schema" }));
-  await h1.svc.create(ctx, task({ id: "api", deps: ["schema"], tier: 2 }));
+test("a deleted cache is rebuilt from the issues, deps and all", async () => {
+  const { svc, project, cleanup } = harness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "schema" }));
+  await svc.create(ctx, task({ id: "api", deps: ["schema"], tier: 2 }));
 
-  // Fresh cache dir, same provider (the "remote").
+  // Fresh cache dir, same "remote" (the nock GitHub keeps its issues).
   const cache2 = tmp();
-  const svc2 = new CachedTaskService({ cacheDir: cache2.dir }, provider);
+  const svc2 = new CachedTaskService(
+    { cacheDir: cache2.dir },
+    nockProvider({ projects: false }),
+  );
   expect(await svc2.list(ctx)).toEqual([]);
   await svc2.sync(ctx);
   const api = (await svc2.list(ctx)).find((t) => t.id === "api")!;
   expect(api.deps).toEqual(["schema"]);
   expect(api.tier).toBe(2);
-  h1.cleanup();
   cache2.cleanup();
+  cleanup();
 });
 
 test("sync pushes a task the provider never saw (created offline)", async () => {
-  const { svc, provider, project, cleanup } = harness();
+  const { svc, gh, project, cleanup } = harness();
   const ctx = { project };
   await svc.create(ctx, task({ id: "a" }));
-  provider.remote.delete("a"); // the provider "forgot" it
-  provider.created.length = 0;
+  gh.issues.length = 0; // the "remote" lost it
   await svc.sync(ctx);
-  expect(provider.created.map((t) => t.id)).toContain("a"); // re-created on sync
+  expect(gh.issues).toHaveLength(1); // re-created on sync
+  expect(gh.issues[0].body).toContain("id: a");
   cleanup();
 });
 
-test("sync pushes back a task the provider flagged for reconcile", async () => {
-  const { svc, provider, project, cleanup } = harness();
+test("sync adopts a hand-opened issue and stamps our block onto it", async () => {
+  const { svc, gh, project, cleanup } = harness();
   const ctx = { project };
-  await svc.create(ctx, task({ id: "a" }));
-  provider.remote.get("a")!.reconcile = true;
-  await svc.sync(ctx);
-  expect(provider.updated.map((t) => t.id)).toContain("a");
-  cleanup();
-});
-
-test("sync adopts a task the provider has but the cache does not", async () => {
-  const { svc, provider, project, cleanup } = harness();
-  const ctx = { project };
-  provider.remote.set("gh-5", {
-    task: task({ id: "gh-5", title: "reported bug" }),
-    refs: { issueId: "I_9" },
-    reconcile: true,
+  gh.issues.push({
+    id: "I_9",
+    number: 9,
+    title: "reported bug",
+    body: "someone typed this into github",
+    state: "OPEN",
   });
   await svc.sync(ctx);
-  expect((await svc.get(ctx, "gh-5"))?.title).toBe("reported bug");
-  expect(provider.updated.map((t) => t.id)).toContain("gh-5"); // stamped back
+  expect((await svc.get(ctx, "gh-9"))?.title).toBe("reported bug");
+  expect(gh.issues[0].body).toContain("id: gh-9"); // stamped back
+  expect(gh.issues[0].body).toContain("someone typed this into github"); // prose kept
   cleanup();
 });
