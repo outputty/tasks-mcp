@@ -31,10 +31,36 @@ brief: "README.md's prereqs example outputs order [[schema],[api,infra]] ..."
 (real observed, issue #13 of outputty/tasks-mcp — the `add-task` example). `id` comes first —
 the stable key that survives title edits. The block carries only what labels cannot: `deps`,
 `scope`, `brief`, `contract`, `attempts`, `discovered_from`. An issue is **managed** iff its
-body carries the block; prose a human writes below it is preserved across updates.
+body carries the block.
+
+## visible spec (below the block)
+
+The block is a hidden HTML comment, so an issue whose whole record lived only there rendered
+**blank** in GitHub's web UI. Below the block `renderBody` now emits a **visible, concise summary** —
+the brief (the problem and expected solution) as the lead, then `**What to account for**` (the
+contract) — wrapped in `<!-- outputty:spec -->` … `<!-- /outputty:spec -->` sentinels:
+
+```
+<!-- outputty:spec -->
+README.md's prereqs example outputs order [[schema],[api,infra]] — an order the engine can't produce.
+
+**What to account for**
+
+prereqs('deploy') returns dependency-ordered layers, verified by a run.
+<!-- /outputty:spec -->
+```
+
+Metadata (`scope`, `deps`) stays in the machine block, out of the summary — the visible body is a clean
+read, not a field dump. It is **regenerated on every write** (never read back — the block stays the
+source of truth), so it can never drift from the task. `parseBody` strips the sentineled region so it is
+not mistaken for human prose; prose a human writes *below* the region is still preserved across updates.
 
 ### Gotchas
 
+- The visible spec is MCP-owned: a hand-edit *inside* the sentinels is overwritten on the next write.
+  Durable human notes go below the region, or into the issue's comment thread (the task's trail).
+- Existing issues written before this feature have no sentineled region; they gain one the next time
+  their task is written (a plain `sync` won't rewrite an unchanged task — see roadmap #7).
 - Labels win over a legacy block that still carries scalar fields (pre-v0.8 issues).
 - The block IS the management marker — there is no marker label anymore.
 

@@ -61,6 +61,29 @@ test("upsert rewrites the body and preserves human prose below the block", async
   expect(gh.issues[0].body).toContain("Human note: see the design.");
 });
 
+test("the body renders a CONCISE visible spec that regenerates, and round-trips through the block", async () => {
+  const { gh, provider, ctx } = setup();
+  const t = {
+    id: "api",
+    title: "API",
+    brief: "first brief",
+    contract: "handle nulls",
+    scope: ["src/api"],
+  };
+  await provider.upsert(ctx, task(t));
+  // Visible (after the hidden block) = the brief + "what to account for"; scope/deps stay metadata.
+  const visible = gh.issues[0].body.slice(gh.issues[0].body.indexOf("-->") + 3);
+  expect(visible).toContain("first brief"); // problem + solution
+  expect(visible).toContain("handle nulls"); // what to account for (the contract)
+  expect(visible).not.toContain("src/api"); // scope is metadata — not in the visible summary
+  // A changed brief REGENERATES the visible spec — the old text is gone, never duplicated.
+  await provider.upsert(ctx, task({ id: "api", title: "API", brief: "second brief" }));
+  expect(gh.issues[0].body).toContain("second brief");
+  expect(gh.issues[0].body).not.toContain("first brief");
+  // pull still reconstructs the brief from the machine block (BUILD/get_task keep working).
+  expect((await provider.pull(ctx)).get("api")!.task.brief).toBe("second brief");
+});
+
 test("an update keeps foreign labels and replaces only the field labels", async () => {
   const { gh, provider, ctx } = setup();
   await provider.upsert(ctx, task({ id: "t-1", tier: 2 }));
