@@ -164,8 +164,8 @@
     fanned through a three-layer stack leaves nothing to resurrect on the next sync. npm run check
     green (64 tests).
   status: "✅ shipped"
-  status_detail: v0.12.0; delete_task needs the token's delete-issue permission (repo admin/triage).
+  status_detail: v0.12.0 (PR #25); delete_task needs the token's delete-issue permission (repo admin/triage).
   depends_on: [1]
   doc: roadmap/edit-delete-tools.md
   absorbs: []
-  links: []
+  links: ["https://github.com/outputty/tasks-mcp/pull/25"]
