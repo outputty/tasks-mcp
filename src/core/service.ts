@@ -33,6 +33,8 @@ export interface TaskService {
   create(ctx: ProjectContext, task: Task): Promise<Task>;
   update(ctx: ProjectContext, id: string, patch: Partial<Task>): Promise<Task>;
   close(ctx: ProjectContext, id: string): Promise<void>;
+  /** Permanently remove a task from every layer (deepest-first). Explicit — not sync's absence rule. */
+  delete(ctx: ProjectContext, id: string): Promise<void>;
   sync(ctx: ProjectContext): Promise<SyncResult>;
   /** A task's trail: the append-only journal of decisions and actions behind it. */
   getTrail(ctx: ProjectContext, id: string): Promise<TrailEntry[]>;
@@ -125,6 +127,15 @@ export class TaskStack implements TaskService {
 
   async close(ctx: ProjectContext, id: string): Promise<void> {
     await this.update(ctx, id, { status: "done" });
+  }
+
+  /** Delete a task everywhere. Deepest-first, so a remote that refuses (e.g. no delete-issue
+   *  permission) throws before the local cache is touched — no half-deleted state to sync back. */
+  async delete(ctx: ProjectContext, id: string): Promise<void> {
+    const layers = await this.all(ctx);
+    for (const layer of [...layers].reverse()) {
+      if (layer.delete) await layer.delete(ctx, id);
+    }
   }
 
   async getTrail(ctx: ProjectContext, id: string): Promise<TrailEntry[]> {

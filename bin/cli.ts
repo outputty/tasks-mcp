@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // The package entry, on commander. With no subcommand it runs the MCP server — stdio by default (for
 // `.mcp.json` -> `bunx @outputty/tasks-mcp`), or `--http` for the standalone HTTP server. The
-// subcommands drive the same core directly, no MCP involved: `add`, `list`, `ready`, `planning`,
-// `schedule`, `prereqs`, `blockers`, `get`, `close`, `trail`, `trail-add`, `sync`.
+// subcommands drive the same core directly, no MCP involved: `add`, `edit`, `delete`, `list`, `ready`,
+// `planning`, `schedule`, `prereqs`, `blockers`, `get`, `close`, `trail`, `trail-add`, `sync`.
 
 import { Command } from "commander";
 import { runStdio } from "../src/mcp/stdio.ts";
@@ -18,6 +18,7 @@ import {
   prereqs,
   blockers,
   buildTask,
+  buildPatch,
   priorityOf,
   idList,
 } from "../src/core/graph.ts";
@@ -123,12 +124,43 @@ program
   });
 
 program
+  .command("edit")
+  .description("edit any field of a task (only the fields you pass change; the id is fixed)")
+  .argument("<id>", "the task id")
+  .option("--title <text>", "one-line summary")
+  .option("--deps <ids>", "comma-separated ids (replaces the list)")
+  .option("--scope <folders>", "comma-separated folders (replaces the list)")
+  .option("--tier <n>", "1-4; how much model the work needs", (v) => Number.parseInt(v, 10))
+  .option("--qa <level>", "skip | inline | subagent")
+  .option("--priority <level>", "high | normal | low")
+  .option("--spec <state>", "drafting | settled | replan")
+  .option("--stage <label>", "narrative label on a staged deliverable")
+  .option("--brief <text>", "the build brief (problem + expected solution)")
+  .option("--contract <text>", "the done-condition (what to account for)")
+  .action(async (id: string, opts: Record<string, unknown>) => {
+    const patch = buildPatch(id, opts); // same builder the MCP edit_task uses
+    if (!Object.keys(patch).length) throw new Error("edit needs at least one field to change");
+    out(await service().update(ctx(), id, patch));
+  });
+
+program
   .command("close")
   .description("mark a task done (closes its issue)")
   .argument("<id>", "the task id")
   .action(async (id: string) => {
     await service().close(ctx(), id);
     out({ closed: id });
+  });
+
+program
+  .command("delete")
+  .description(
+    "PERMANENTLY delete a task and its issue (needs the token's delete-issue permission)",
+  )
+  .argument("<id>", "the task id")
+  .action(async (id: string) => {
+    await service().delete(ctx(), id);
+    out({ deleted: id });
   });
 
 program

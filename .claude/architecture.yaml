@@ -255,13 +255,17 @@ features:
   - name: MCP server
     kind: feature
     what: |
-      The primary surface: 12 typed tools on the official SDK, over stdio (default) or
-      stateless HTTP.
+      The primary surface: 16 typed tools on the official SDK, over stdio (default) or
+      stateless HTTP. Task CRUD is add/get/edit/amend/close/delete; plus the graph queries,
+      trails, sync, and config.
     how: |
       @modelcontextprotocol/sdk McpServer; every tool declares zod input AND output schemas
-      and returns structuredContent. Transports: StdioServerTransport, and Streamable HTTP
-      (JSON responses) on plain node:http — non-POST /mcp answered 405 by the server itself.
-      SERVER_INFO reads name/version from package.json at build time.
+      and returns structuredContent. edit_task patches any field (buildPatch, shared with the
+      CLI edit); delete_task PERMANENTLY removes a task from every layer deepest-first
+      (GitHub deleteIssue + card, then the cache) and needs the token's delete-issue permission.
+      Transports: StdioServerTransport, and Streamable HTTP (JSON responses) on plain node:http
+      — non-POST /mcp answered 405 by the server itself. SERVER_INFO reads name/version from
+      package.json at build time.
     doc: architecture/surfaces.md
     example: "mcp-registration"
     related: [CLI, library, branch parameter unused]

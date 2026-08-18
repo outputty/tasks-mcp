@@ -111,3 +111,16 @@ test("absence never deletes: a task missing from a layer is pushed back into it"
   expect(await svc.get(ctx, "api")).not.toBeNull();
   cleanup();
 });
+
+test("an EXPLICIT delete removes the task from every layer (unlike sync's absence rule)", async () => {
+  const { svc, gh, mock, ctx, cleanup } = harness();
+  await svc.create(ctx, task({ id: "api" })); // present in all three layers
+
+  await svc.delete(ctx, "api");
+  expect(await svc.get(ctx, "api")).toBeNull(); // file (top)
+  expect(gh.issues).toHaveLength(0); // github (middle)
+  expect(mock.remote.has("api")).toBe(false); // mock (deepest)
+  await svc.sync(ctx); // and it stays gone — no layer resurrects it
+  expect(await svc.get(ctx, "api")).toBeNull();
+  cleanup();
+});

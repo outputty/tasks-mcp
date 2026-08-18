@@ -56,6 +56,13 @@ export class FileProvider implements Provider {
     this.save(ctx.project, all);
   }
 
+  /** Drop one task from the cache. An id the file never held is a no-op. */
+  async delete(ctx: ProjectContext, id: string): Promise<void> {
+    const all = this.load(ctx.project);
+    const kept = all.filter((t) => t.id !== id);
+    if (kept.length !== all.length) this.save(ctx.project, kept);
+  }
+
   /** The file for a project: `<cacheDir>/<basename>-<hash>.yaml`, keyed by the project's path. */
   private fileFor(project: string): string {
     return path.join(this.options.cacheDir ?? defaultCacheDir(), `${projectSlug(project)}.yaml`);

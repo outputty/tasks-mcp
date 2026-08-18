@@ -26,4 +26,8 @@ export class MockProvider implements Provider {
     this.remote.set(task.id, { task: { ...task } });
     this.upserts.push(task.id);
   }
+
+  async delete(_ctx: ProjectContext, id: string): Promise<void> {
+    this.remote.delete(id);
+  }
 }

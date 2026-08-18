@@ -84,6 +84,18 @@ test("the body renders a CONCISE visible spec that regenerates, and round-trips 
   expect((await provider.pull(ctx)).get("api")!.task.brief).toBe("second brief");
 });
 
+test("delete removes the issue and its board card; an unknown id is a no-op", async () => {
+  const { gh, provider, ctx } = setup({}); // board on
+  await provider.upsert(ctx, task({ id: "api" }));
+  expect(gh.issues).toHaveLength(1);
+  expect(gh.items.size).toBe(1);
+  await provider.delete(ctx, "api");
+  expect(gh.issues).toHaveLength(0); // issue gone
+  expect(gh.items.size).toBe(0); // card gone too
+  await provider.delete(ctx, "ghost"); // not here → no throw, no change
+  expect(gh.issues).toHaveLength(0);
+});
+
 test("an update keeps foreign labels and replaces only the field labels", async () => {
   const { gh, provider, ctx } = setup();
   await provider.upsert(ctx, task({ id: "t-1", tier: 2 }));

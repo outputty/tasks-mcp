@@ -6,8 +6,8 @@ over the same `TaskStack`. What the tools DO belongs to [graph engine](graph-eng
 
 ```mermaid
 flowchart TB
-    agent["MCP client"] -->|"stdio (default) or\nStreamable HTTP :3917/mcp"| mcp["createMcpServer\n14 tools, zod in+out"]
-    human["shell"] --> cli["bin/cli.ts (commander)\nlist·ready·planning·schedule·prereqs·\nblockers·get·add·close·trail·trail-add·config·sync"]
+    agent["MCP client"] -->|"stdio (default) or\nStreamable HTTP :3917/mcp"| mcp["createMcpServer\n16 tools, zod in+out"]
+    human["shell"] --> cli["bin/cli.ts (commander)\nlist·ready·planning·schedule·prereqs·blockers·get·\nadd·edit·close·delete·trail·trail-add·config·sync"]
     code["your program"] --> lib["import '@outputty/tasks-mcp'\nmakeService·TaskStack·graph fns"]
     mcp --> stack["TaskStack"]
     cli --> stack
@@ -17,8 +17,9 @@ flowchart TB
 ## MCP server
 
 The primary surface: `createMcpServer` on the official `@modelcontextprotocol/sdk` — never a
-hand-rolled JSON-RPC handler. 14 tools (`list_ready`, `list_planning`, `schedule`, `get_task`,
-`add_task`, `amend_task`, `close_task`, `get_trail`, `append_trail`, `sync`, `prereqs`,
+hand-rolled JSON-RPC handler. 16 tools (`list_ready`, `list_planning`, `schedule`, `get_task`,
+`add_task`, `amend_task`, `edit_task`, `close_task`, `delete_task`, `get_trail`, `append_trail`,
+`sync`, `prereqs`,
 `blockers`, `get_config`, `set_config`), each declaring zod input AND output schemas and
 returning `structuredContent`. Every tool takes `project` — the absolute repo path — because the
 server has no working directory of its own.
@@ -43,8 +44,9 @@ The `mcp-registration` example in `examples.yaml`.
 
 `bin/cli.ts` on commander (user ruling: a real CLI library, never homebrew argv parsing). With
 no command it runs the MCP server; subcommands drive the core directly: `list`, `ready`,
-`planning`, `schedule`, `prereqs <id>`, `blockers`, `get <id>`, `add <id>`, `close <id>`,
-`trail <id>`, `trail-add <id>`, `config`, `sync`. `--project` defaults to cwd; the deployment
+`planning`, `schedule`, `prereqs <id>`, `blockers`, `get <id>`, `add <id>`, `edit <id>`,
+`close <id>`, `delete <id>`, `trail <id>`, `trail-add <id>`, `config`, `sync`. `--project` defaults
+to cwd; the deployment
 flags work on every command.
 
 ### Example
