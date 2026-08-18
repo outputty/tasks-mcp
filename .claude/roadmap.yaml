@@ -144,3 +144,28 @@
   doc: roadmap/readable-issue-bodies.md
   absorbs: []
   links: ["https://github.com/outputty/tasks-mcp/pull/24"]
+- row: 8
+  feature: Edit and delete tools
+  summary: |
+    Problem: the tracker could add, amend (widen scope / set brief only), and close tasks, but had
+    no general edit and no delete — fixing a title/contract or removing a junk issue meant
+    hand-editing GitHub. Solution: two tools. edit_task patches ANY field (title, brief, contract,
+    deps, scope, tier, qa, priority, spec, stage) — only the fields passed change — via a shared
+    buildPatch (the CLI `edit` uses it too). delete_task PERMANENTLY removes a task from every
+    layer, deepest-first (GitHub deleteIssue + board card, then the local cache), so a token without
+    delete-issue permission aborts before the cache is touched. Delete is an explicit, intentional
+    removal — distinct from sync's "absence is not a claim" (which restores accidental gaps).
+
+      tasks-mcp edit api --title "Build the API v2" --tier 1
+      tasks-mcp delete junk-issue
+
+    Output (REAL OBSERVED 2026-08-18, nock suite): edit_task returns the updated task; delete_task
+    removes the issue + card on GitHub and the task from the cache (gone from list_ready); a delete
+    fanned through a three-layer stack leaves nothing to resurrect on the next sync. npm run check
+    green (64 tests).
+  status: "✅ shipped"
+  status_detail: v0.12.0 (PR #25); delete_task needs the token's delete-issue permission (repo admin/triage).
+  depends_on: [1]
+  doc: roadmap/edit-delete-tools.md
+  absorbs: []
+  links: ["https://github.com/outputty/tasks-mcp/pull/25"]

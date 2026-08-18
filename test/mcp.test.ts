@@ -89,7 +89,9 @@ test("tools/list advertises the whole surface, each requiring project", async ()
       "get_task",
       "add_task",
       "amend_task",
+      "edit_task",
       "close_task",
+      "delete_task",
       "get_trail",
       "append_trail",
       "sync",
@@ -130,6 +132,28 @@ test("a dependency holds a task out of ready until its dep closes", async () => 
     arguments: { project, id: "schema" },
   });
   expect(structured(await ready()).ids).toEqual(["api"]);
+  await cleanup();
+});
+
+test("edit_task changes a field, delete_task removes the task, over MCP", async () => {
+  const { client, gh, project, cleanup } = await harness();
+  await client.callTool({
+    name: "add_task",
+    arguments: { project, id: "api", title: "API", tier: 3 },
+  });
+
+  const edited = await client.callTool({
+    name: "edit_task",
+    arguments: { project, id: "api", title: "API v2", tier: 1 },
+  });
+  expect(structured(edited).task.title).toBe("API v2");
+  expect(structured(edited).task.tier).toBe(1);
+
+  const del = await client.callTool({ name: "delete_task", arguments: { project, id: "api" } });
+  expect(structured(del).deleted).toBe("api");
+  expect(gh.issues).toHaveLength(0); // issue deleted on GitHub
+  const ready = structured(await client.callTool({ name: "list_ready", arguments: { project } }));
+  expect(ready.ids).toEqual([]); // gone from the local cache too
   await cleanup();
 });
 

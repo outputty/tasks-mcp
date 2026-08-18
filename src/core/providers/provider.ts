@@ -49,6 +49,13 @@ export interface Provider {
   getTrail?(ctx: ProjectContext, id: string): Promise<TrailEntry[]>;
   /** Append one entry (post a comment) and return the whole trail. Errors if the task has no issue. */
   appendTrail?(ctx: ProjectContext, id: string, entry: TrailEntry): Promise<TrailEntry[]>;
+  /**
+   * Permanently remove one task from this layer. Optional and distinct from sync's "absence is not a
+   * claim": this is an EXPLICIT, intentional delete. Missing from the layer already → a no-op. The
+   * service fans a delete DEEPEST-FIRST, so a remote that refuses (e.g. no delete-issue permission)
+   * aborts before the local cache is touched.
+   */
+  delete?(ctx: ProjectContext, id: string): Promise<void>;
 }
 
 // Registered remote layers. Adding Linear is one entry here plus its class — nothing else moves.

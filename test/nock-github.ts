@@ -42,6 +42,8 @@ export class NockGitHub {
   private readonly routes: Array<[string, (vars: Record<string, any>) => unknown]> = [
     ["createLabel", (v) => this.createLabel(v)],
     ["addComment", (v) => this.addComment(v)],
+    ["deleteIssue", (v) => this.deleteIssue(v)],
+    ["deleteProjectV2Item", (v) => this.deleteItem(v)],
     ["createIssue", (v) => this.createIssue(v)],
     ["updateIssue", (v) => this.updateIssue(v)],
     ["closeIssue", (v) => this.setIssueState(v, "CLOSED", "closeIssue")],
@@ -73,6 +75,18 @@ export class NockGitHub {
     const id = `L_${this.labelSeq++}`;
     this.labels.set(String(vars.n), id);
     return { createLabel: { label: { id } } };
+  }
+
+  private deleteIssue(vars: Record<string, any>): unknown {
+    this.issues = this.issues.filter((i) => i.id !== vars.id);
+    this.comments.delete(String(vars.id));
+    for (const [itemId, it] of this.items) if (it.contentId === vars.id) this.items.delete(itemId);
+    return { deleteIssue: { repository: { id: "REPO" } } };
+  }
+
+  private deleteItem(vars: Record<string, any>): unknown {
+    this.items.delete(String(vars.i));
+    return { deleteProjectV2Item: { deletedItemId: vars.i } };
   }
 
   private addComment(vars: Record<string, any>): unknown {

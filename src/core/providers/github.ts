@@ -579,6 +579,32 @@ export class GitHubProvider implements Provider {
   }
 
   // -------------------------------------------------------------------------------------------------
+  // Delete — permanent removal of the issue (needs the token's delete-issue permission).
+
+  async delete(ctx: ProjectContext, id: string): Promise<void> {
+    const state = await this.state(ctx.project);
+    const index = await this.index(ctx.project, state);
+    const handle = index.get(id);
+    if (!handle) return; // no issue for this id here → nothing to delete
+    // Remove the board card first (best-effort — a deleted issue otherwise leaves a redacted item).
+    if (state.board && handle.projectItem) {
+      await this.removeCard(state.board, handle.projectItem).catch(() => {});
+    }
+    await this.octokit.graphql(
+      `mutation($id:ID!){ deleteIssue(input:{issueId:$id}){ repository{ id } } }`,
+      { id: handle.issueId },
+    );
+    index.delete(id);
+  }
+
+  private async removeCard(board: BoardMeta, itemId: string): Promise<void> {
+    await this.octokit.graphql(
+      `mutation($p:ID!,$i:ID!){ deleteProjectV2Item(input:{projectId:$p,itemId:$i}){ deletedItemId } }`,
+      { p: board.projectId, i: itemId },
+    );
+  }
+
+  // -------------------------------------------------------------------------------------------------
   // The index — how upsert decides create-vs-update without anything above the seam holding handles.
 
   private index(project: string, state: ProjectState): Promise<Map<string, IssueHandle>> {

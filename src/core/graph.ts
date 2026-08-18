@@ -123,6 +123,31 @@ export function buildTask(id: string, input: Record<string, unknown>): Task {
   return task;
 }
 
+/**
+ * A partial update for `edit_task` (and the CLI `edit`): only the fields actually supplied, deps/scope
+ * normalized, the label fields validated. `title` stays out of the patch when absent so a blank never
+ * clobbers the existing title. Every field a task can carry is editable except `id` (the stable key).
+ */
+export function buildPatch(id: string, input: Record<string, unknown>): Partial<Task> {
+  const patch: Partial<Task> = {};
+  if (typeof input.title === "string") patch.title = input.title;
+  if (input.deps !== undefined) patch.deps = asArray(input.deps);
+  if (input.scope !== undefined) patch.scope = asArray(input.scope);
+  for (const key of OPTIONAL_FIELDS) {
+    if (input[key] !== undefined) (patch as Record<string, unknown>)[key] = input[key];
+  }
+  validateLabelFields({ ...patch, id } as Task);
+  return patch;
+}
+
+/** Throw on an out-of-range tier/qa/priority actually present on a patch (each validator defaults an
+ *  absent field, so only validate the ones the edit set). */
+function validateLabelFields(task: Partial<Task> & { id: string }): void {
+  if (task.tier !== undefined) tierOf(task as Task);
+  if (task.qa !== undefined) qaOf(task as Task);
+  if (task.priority !== undefined) priorityOf(task as Task);
+}
+
 /** The whole plan as ordered layers, in dependency order. Throws on a dependency cycle. */
 export function schedule(tasks: Task[]): Task[][] {
   const done = doneIds(tasks);

@@ -112,20 +112,22 @@ working directory of its own. Reads are answered from the local file layer and n
 network; the first GitHub-touching call (a write, or `sync`) resolves repo, credentials, labels, and
 the board once.
 
-| Tool            | Answers                                                        | Writes |
-| --------------- | -------------------------------------------------------------- | ------ |
-| `prereqs`       | what must be done before this task can start, in build order   | —      |
-| `blockers`      | which tasks hold up the most work, ranked                      | —      |
-| `list_ready`    | which tasks can be worked right now (open, settled, deps done) | —      |
-| `list_planning` | which tasks planning still owns (drafting / replan)            | —      |
-| `schedule`      | the whole open plan as dependency layers; errors on a cycle    | —      |
-| `get_task`      | one task's full record                                         | —      |
-| `add_task`      | create a task (file + issue + labels + board card)             | ✎      |
-| `amend_task`    | widen an open task's scope, or set its brief                   | ✎      |
-| `close_task`    | mark done (closes the issue, moves the card)                   | ✎      |
-| `get_trail`     | a task's trail: its issue comment thread, oldest first         | —      |
-| `append_trail`  | append one entry to a task's trail (posts an issue comment)    | ✎      |
-| `sync`          | reconcile every layer both ways; adopt hand-opened issues      | ✎      |
+| Tool            | Answers                                                         | Writes |
+| --------------- | --------------------------------------------------------------- | ------ |
+| `prereqs`       | what must be done before this task can start, in build order    | —      |
+| `blockers`      | which tasks hold up the most work, ranked                       | —      |
+| `list_ready`    | which tasks can be worked right now (open, settled, deps done)  | —      |
+| `list_planning` | which tasks planning still owns (drafting / replan)             | —      |
+| `schedule`      | the whole open plan as dependency layers; errors on a cycle     | —      |
+| `get_task`      | one task's full record                                          | —      |
+| `add_task`      | create a task (file + issue + labels + board card)              | ✎      |
+| `amend_task`    | widen an open task's scope, or set its brief                    | ✎      |
+| `edit_task`     | edit any field of a task (only the fields you pass change)      | ✎      |
+| `close_task`    | mark done (closes the issue, moves the card)                    | ✎      |
+| `delete_task`   | permanently delete a task + its issue (needs delete permission) | ✎      |
+| `get_trail`     | a task's trail: its issue comment thread, oldest first          | —      |
+| `append_trail`  | append one entry to a task's trail (posts an issue comment)     | ✎      |
+| `sync`          | reconcile every layer both ways; adopt hand-opened issues       | ✎      |
 
 A task carries: `id`, `title`, `status`, `deps`, `scope`, the execution-modifying properties `tier`
 (1–4), `qa` (skip/inline/subagent), `priority` (high/normal/low), `spec`, `stage`, `kind`, and

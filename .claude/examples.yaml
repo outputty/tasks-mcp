@@ -13,9 +13,9 @@
     // .mcp.json — the MCP client launches the server on demand; no clone, no install step
     { "mcpServers": { "tasks": { "command": "npx", "args": ["-y", "@outputty/tasks-mcp"] } } }
   output: |
-    14 tools registered (verified in src/mcp/server.ts): list_ready, list_planning, schedule,
-    get_task, add_task, amend_task, close_task, get_trail, append_trail, sync, prereqs, blockers,
-    get_config, set_config.
+    16 tools registered (verified in src/mcp/server.ts): list_ready, list_planning, schedule,
+    get_task, add_task, amend_task, edit_task, close_task, delete_task, get_trail, append_trail,
+    sync, prereqs, blockers, get_config, set_config.
 - name: prereqs
   input: |
     // tool: prereqs — "I want to start on deploy; what has to be done first?"

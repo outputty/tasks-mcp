@@ -18,6 +18,7 @@ import {
   prereqs,
   blockers,
   buildTask,
+  buildPatch,
   asArray,
   tierOf,
   qaOf,
@@ -85,7 +86,7 @@ const result = <T extends Record<string, unknown>>(structured: T) => ({
 });
 
 /** The MCP server over one task service. A transport (stdio or HTTP) connects to it. */
-// Deviation from the 24-line cap, justified: this is a declarative tool table — fourteen registerTool
+// Deviation from the 24-line cap, justified: this is a declarative tool table — sixteen registerTool
 // calls that are schema data plus one-expression handlers. Splitting it into arbitrary function
 // groups would hide the surface, and every handler body is under the cap on its own.
 // oxlint-disable-next-line max-lines-per-function
@@ -234,6 +235,40 @@ export function createMcpServer(service: TaskService): McpServer {
   );
 
   server.registerTool(
+    "edit_task",
+    {
+      description:
+        "Edit any field of a task (title, brief, contract, deps, scope, tier, qa, priority, spec, " +
+        "stage). Only the fields passed change; the id is fixed. Rewrites the issue body and labels. " +
+        "Unlike amend_task, it can narrow scope and edit a done task.",
+      inputSchema: {
+        project: PROJECT,
+        branch: BRANCH,
+        id: z.string().describe("The task id (unchanged)."),
+        title: z.string().optional().describe("One-line summary."),
+        deps: LIST.optional().describe("Ids this task waits on (REPLACES the list)."),
+        scope: LIST.optional().describe("Folders the task may edit (REPLACES the list)."),
+        brief: z
+          .string()
+          .optional()
+          .describe("The build brief: the problem and expected solution."),
+        contract: z.string().optional().describe("The done-condition (what to account for)."),
+        tier: z.number().optional().describe("1-4; how much model the work needs."),
+        qa: z.enum(QA_LEVELS).optional().describe("How much review."),
+        priority: z.enum(PRIORITIES).optional().describe("How urgent."),
+        spec: z.enum(SPEC_STATES).optional().describe("Planning lifecycle."),
+        stage: z.string().optional().describe("Narrative label on a staged deliverable."),
+      },
+      outputSchema: { task: z.unknown() },
+    },
+    async (args) => {
+      const patch = buildPatch(args.id, args); // normalizes deps/scope, validates the label fields
+      if (!Object.keys(patch).length) throw new Error("edit needs at least one field to change");
+      return result({ task: await service.update(ctxOf(args), args.id, patch) });
+    },
+  );
+
+  server.registerTool(
     "close_task",
     {
       description: "Mark a task done (closes its issue).",
@@ -247,6 +282,26 @@ export function createMcpServer(service: TaskService): McpServer {
     async (args) => {
       await service.close(ctxOf(args), args.id);
       return result({ closed: args.id });
+    },
+  );
+
+  server.registerTool(
+    "delete_task",
+    {
+      description:
+        "PERMANENTLY delete a task and its GitHub issue (deleteIssue) from every layer, deepest-first. " +
+        "Needs the token's delete-issue permission (repo admin/triage); a normal token cannot. " +
+        "Irreversible — to just mark a task done, use close_task instead.",
+      inputSchema: {
+        project: PROJECT,
+        branch: BRANCH,
+        id: z.string().describe("The task id to delete."),
+      },
+      outputSchema: { deleted: z.string() },
+    },
+    async (args) => {
+      await service.delete(ctxOf(args), args.id);
+      return result({ deleted: args.id });
     },
   );
 
