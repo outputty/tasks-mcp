@@ -138,8 +138,8 @@
     regenerates the visible spec (old text gone, never duplicated); pull still recovers the brief
     from the block. npm run check green (61 tests).
   status: "✅ shipped"
-  status_detail: v0.11.0; non-breaking (the machine block is unchanged). A blank pre-existing issue gains a visible spec the next time its task is written — a plain sync won't rewrite an unchanged task.
+  status_detail: v0.11.0 (PR #24); non-breaking (the machine block is unchanged). A blank pre-existing issue gains a visible spec the next time its task is written — a plain sync won't rewrite an unchanged task.
   depends_on: [3]
   doc: roadmap/readable-issue-bodies.md
   absorbs: []
-  links: []
+  links: ["https://github.com/outputty/tasks-mcp/pull/24"]
