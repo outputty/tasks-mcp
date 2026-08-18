@@ -13,9 +13,12 @@
 // The layer owns its own bookkeeping: a per-project index from task id to issue/card node ids, built
 // from one listing pass and refreshed by every `pull`. Nothing above the seam sees a GitHub handle —
 // `upsert` decides create-vs-update from the index alone. The task id lives in a hidden YAML block in
-// the issue body (alongside deps/scope/brief/…); the execution-modifying scalars (kind, tier, qa,
-// spec, stage, priority) are worn as `field:value` labels. An issue is "managed" iff it carries the
-// block.
+// the issue body (alongside deps/scope/brief/…) — the source of truth `pull` reads back; the
+// execution-modifying scalars (kind, tier, qa, spec, stage, priority) are worn as `field:value`
+// labels. An issue is "managed" iff it carries the block. Below the block, the body renders a VISIBLE,
+// human-readable spec (brief, contract, scope, deps) between `<!-- outputty:spec -->` sentinels,
+// regenerated on every write so it never goes stale — that render is for the GitHub web UI, never read
+// back. The issue's comment thread is the task's TRAIL (see getTrail/appendTrail).
 
 import { spawnSync } from "node:child_process";
 import { Octokit } from "octokit";
@@ -104,6 +107,11 @@ const META_CLOSE = "-->";
 // Fields carried in the body block, in a stable order. `id` leads; title/status live outside the
 // block; the label-worn fields live on the issue as labels.
 const META_KEYS = ["deps", "scope", "brief", "contract", "attempts", "discovered_from"] as const;
+// The VISIBLE spec region markers. The body shows a human-readable render of the task between them,
+// regenerated on every write; the hidden machine block above stays the source of truth. Sentinels are
+// HTML comments (invisible on GitHub) so parseBody can strip the region and keep real human prose.
+const SPEC_OPEN = "<!-- outputty:spec -->";
+const SPEC_CLOSE = "<!-- /outputty:spec -->";
 
 // The label-worn fields (LABEL_FIELD_NAMES is the one source), each with its label color.
 const LABEL_FIELDS: Record<LabelFieldName, string> = {
@@ -167,7 +175,20 @@ function skipMeta(key: string, value: unknown): boolean {
   return Array.isArray(value) && value.length === 0 && key !== "deps" && key !== "scope";
 }
 
-/** Serialise a task into an issue body: the hidden block (id first), then any human prose kept below. */
+/** The VISIBLE body: a readable markdown render of the task's spec, wrapped in sentinels. Regenerated on
+ *  every write, so it never goes stale; the machine block, not this, is what pull reads back. */
+function renderSpec(task: Task): string {
+  const lines: string[] = [];
+  if (task.brief) lines.push(task.brief.trim());
+  if (task.contract) lines.push(`**Contract**\n\n${task.contract.trim()}`);
+  if (task.scope.length) lines.push(`**Scope:** ${task.scope.map((s) => `\`${s}\``).join(" · ")}`);
+  if (task.deps.length)
+    lines.push(`**Depends on:** ${task.deps.map((d) => `\`${d}\``).join(", ")}`);
+  return `${SPEC_OPEN}\n${lines.join("\n\n")}\n${SPEC_CLOSE}`;
+}
+
+/** Serialise a task into an issue body: the hidden machine block (id first), the visible spec render,
+ *  then any genuinely human-added prose kept below (regenerating the spec never touches it). */
 function renderBody(task: Task, human = ""): string {
   const meta: Record<string, unknown> = { id: task.id };
   for (const key of META_KEYS) {
@@ -176,7 +197,8 @@ function renderBody(task: Task, human = ""): string {
   }
   const yaml = stringify(meta).trim();
   const block = `${META_OPEN}\n${yaml}\n${META_CLOSE}`;
-  return (human ? `${block}\n\n${human}` : block).trimEnd() + "\n";
+  const parts = human ? [block, renderSpec(task), human] : [block, renderSpec(task)];
+  return parts.join("\n\n").trimEnd() + "\n";
 }
 
 function parseBody(body: string | null | undefined): {
@@ -195,7 +217,17 @@ function parseBody(body: string | null | undefined): {
   } catch {
     meta = {};
   }
-  return { meta, human: body.slice(end + META_CLOSE.length).trim() };
+  return { meta, human: stripSpec(body.slice(end + META_CLOSE.length)) };
+}
+
+/** Drop the regenerated visible-spec region, leaving only genuinely human-added prose. A body from
+ *  before this feature (no sentinels) is returned as-is. */
+function stripSpec(text: string): string {
+  const start = text.indexOf(SPEC_OPEN);
+  if (start === -1) return text.trim();
+  const end = text.indexOf(SPEC_CLOSE, start);
+  if (end === -1) return text.trim();
+  return (text.slice(0, start) + text.slice(end + SPEC_CLOSE.length)).trim();
 }
 
 /** GitHub's issue state → the task status it means. */

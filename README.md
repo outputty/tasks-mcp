@@ -131,8 +131,9 @@ A task carries: `id`, `title`, `status`, `deps`, `scope`, the execution-modifyin
 (1–4), `qa` (skip/inline/subagent), `priority` (high/normal/low), `spec`, `stage`, `kind`, and
 `brief`/`contract` prose. On GitHub, the scalar properties are worn as **`field:value` labels**
 (`tier:2`, `priority:high`, …) — visible, filterable, and editable in the GitHub UI; edit a label
-there and `sync` pulls the change back. See [docs/architecture.md](docs/architecture.md) for the full
-mapping.
+there and `sync` pulls the change back. The issue **body renders a readable spec** (brief, then
+contract, scope, deps) for the web UI, regenerated on every write, with the machine-readable record
+kept in a hidden block above it. See [docs/architecture.md](docs/architecture.md) for the full mapping.
 
 ## Trails — the decisions behind a task
 

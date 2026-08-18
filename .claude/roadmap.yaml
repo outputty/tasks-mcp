@@ -119,3 +119,27 @@
   doc: roadmap/task-trails.md
   absorbs: []
   links: ["https://github.com/outputty/tasks-mcp/pull/22"]
+- row: 7
+  feature: Readable issue bodies — a regenerated visible spec
+  summary: |
+    Problem: add_task put the whole task record (brief, contract, scope, deps) inside a hidden
+    <!-- outputty:task --> HTML comment, so managed issues rendered BLANK in GitHub's web UI —
+    only the title showed. get_task/BUILD read fine (from the comment), but a human browsing the
+    repo saw nothing. Solution: renderBody now emits a VISIBLE, human-readable spec below the
+    hidden block (brief, then **Contract**, **Scope**, **Depends on**), wrapped in
+    <!-- outputty:spec --> sentinels and regenerated on every write so it never drifts from the
+    task. parseBody strips that region so it never round-trips or is mistaken for human prose; the
+    hidden block stays the source of truth (get_task/BUILD unchanged).
+
+      add_task({ id, brief, contract, scope, deps })  # the issue body is now readable in the browser
+
+    Output (REAL OBSERVED 2026-08-17, nock suite): the body shows the brief as a paragraph, then
+    **Contract** / **Scope:** / **Depends on:**, machine block hidden above; a changed brief
+    regenerates the visible spec (old text gone, never duplicated); pull still recovers the brief
+    from the block. npm run check green (61 tests).
+  status: "✅ shipped"
+  status_detail: v0.11.0; non-breaking (the machine block is unchanged). A blank pre-existing issue gains a visible spec the next time its task is written — a plain sync won't rewrite an unchanged task.
+  depends_on: [3]
+  doc: roadmap/readable-issue-bodies.md
+  absorbs: []
+  links: []

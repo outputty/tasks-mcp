@@ -61,6 +61,20 @@ test("upsert rewrites the body and preserves human prose below the block", async
   expect(gh.issues[0].body).toContain("Human note: see the design.");
 });
 
+test("the body carries a VISIBLE spec that regenerates, and still round-trips through the block", async () => {
+  const { gh, provider, ctx } = setup();
+  await provider.upsert(ctx, task({ id: "api", title: "API", brief: "first brief" }));
+  // The brief is visible — after the hidden machine block, not only inside it.
+  const visible = gh.issues[0].body.slice(gh.issues[0].body.indexOf("-->") + 3);
+  expect(visible).toContain("first brief");
+  // A changed brief REGENERATES the visible spec — the old text is gone, never duplicated.
+  await provider.upsert(ctx, task({ id: "api", title: "API", brief: "second brief" }));
+  expect(gh.issues[0].body).toContain("second brief");
+  expect(gh.issues[0].body).not.toContain("first brief");
+  // pull still reconstructs the brief from the machine block (BUILD/get_task keep working).
+  expect((await provider.pull(ctx)).get("api")!.task.brief).toBe("second brief");
+});
+
 test("an update keeps foreign labels and replaces only the field labels", async () => {
   const { gh, provider, ctx } = setup();
   await provider.upsert(ctx, task({ id: "t-1", tier: 2 }));
