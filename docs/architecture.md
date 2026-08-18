@@ -47,10 +47,11 @@ A task's full record round-trips through its issue, split across three homes:
 | `title` / `status`                                                        | issue title / open ↔ closed                                              |
 
 An issue is "managed" iff its body carries the block. Below the hidden block, the body renders a
-**visible, human-readable spec** — the brief, then contract, scope, and deps — wrapped in
-`<!-- outputty:spec -->` sentinels and **regenerated on every write**, so the issue reads properly in
-GitHub's web UI without the block being the source of truth. The regenerated region is stripped on
-read; genuinely human-written prose below it is preserved across updates.
+**visible, concise summary** — the brief (the problem and expected solution), then **What to account
+for** (the contract) — wrapped in `<!-- outputty:spec -->` sentinels and **regenerated on every write**,
+so the issue reads cleanly in GitHub's web UI. Metadata (scope, deps) stays in the block, not the
+summary. The regenerated region is stripped on read; genuinely human-written prose below it is preserved
+across updates.
 
 **Labels are first-class.** They make the execution properties visible and filterable in the GitHub
 UI, and they are writable there too: change `tier:2` to `tier:1` on the issue and the next `sync`

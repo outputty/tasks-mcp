@@ -36,21 +36,24 @@ body carries the block.
 ## visible spec (below the block)
 
 The block is a hidden HTML comment, so an issue whose whole record lived only there rendered
-**blank** in GitHub's web UI. Below the block `renderBody` now emits a **visible, human-readable
-render** — the brief as the lead paragraph, then `**Contract**`, `**Scope:**`, `**Depends on:**` —
-wrapped in `<!-- outputty:spec -->` … `<!-- /outputty:spec -->` sentinels:
+**blank** in GitHub's web UI. Below the block `renderBody` now emits a **visible, concise summary** —
+the brief (the problem and expected solution) as the lead, then `**What to account for**` (the
+contract) — wrapped in `<!-- outputty:spec -->` … `<!-- /outputty:spec -->` sentinels:
 
 ```
 <!-- outputty:spec -->
-README.md's prereqs example outputs order [[schema],[api,infra]] ...
+README.md's prereqs example outputs order [[schema],[api,infra]] — an order the engine can't produce.
 
-**Scope:** `README.md`
+**What to account for**
+
+prereqs('deploy') returns dependency-ordered layers, verified by a run.
 <!-- /outputty:spec -->
 ```
 
-It is **regenerated on every write** (never read back — the block stays the source of truth), so it
-can never drift from the task. `parseBody` strips the sentineled region so it is not mistaken for
-human prose; prose a human writes *below* the region is still preserved across updates.
+Metadata (`scope`, `deps`) stays in the machine block, out of the summary — the visible body is a clean
+read, not a field dump. It is **regenerated on every write** (never read back — the block stays the
+source of truth), so it can never drift from the task. `parseBody` strips the sentineled region so it is
+not mistaken for human prose; prose a human writes *below* the region is still preserved across updates.
 
 ### Gotchas
 

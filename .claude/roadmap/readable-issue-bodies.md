@@ -10,11 +10,12 @@ hidden `<!-- outputty:task -->` HTML comment. GitHub renders HTML comments invis
 by `add_task` showed a **blank body** in the browser (only the title carried meaning). `get_task`/BUILD
 read the brief fine (from the comment), but a human browsing the repo saw nothing.
 
-After: below the hidden block, `renderBody` emits a visible render — the brief as the lead paragraph,
-then `**Contract**`, `**Scope:**`, `**Depends on:**` — wrapped in `<!-- outputty:spec -->` …
-`<!-- /outputty:spec -->` sentinels. Real observed (nock suite): the body reads cleanly; a changed
-brief regenerates the region (old text gone, never duplicated); `pull` still recovers the brief from
-the machine block.
+After: below the hidden block, `renderBody` emits a **concise summary** — the brief (the problem and
+expected solution) as the lead, then `**What to account for**` (the contract) — wrapped in
+`<!-- outputty:spec -->` … `<!-- /outputty:spec -->` sentinels. Metadata (`scope`, `deps`) stays in the
+machine block, out of the summary. Real observed (nock suite): the body reads cleanly; a changed brief
+regenerates the region (old text gone, never duplicated); `pull` still recovers the brief from the
+machine block.
 
 ## The design
 

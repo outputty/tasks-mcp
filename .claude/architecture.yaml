@@ -136,15 +136,16 @@ features:
     kind: feature
     what: |
       The hidden YAML block leading a managed issue's body carries what labels cannot (the source
-      of truth pull reads); below it, a VISIBLE regenerated spec makes the issue readable in the
-      GitHub web UI; human prose below that survives every update.
+      of truth pull reads); below it, a VISIBLE regenerated summary makes the issue read cleanly in
+      the GitHub web UI; human prose below that survives every update.
     how: |
       <!-- outputty:task ... --> with id first (the stable key), then deps, scope, brief,
       contract, attempts, discovered_from. The block IS the management marker. Labels win over
-      a legacy block still carrying scalar fields. Below the block, renderBody emits a visible
-      render (brief, **Contract**, **Scope**, **Depends on**) wrapped in <!-- outputty:spec -->
-      sentinels, regenerated every write and stripped by parseBody so it never round-trips or is
-      mistaken for human prose. MCP-owned: a hand-edit inside the sentinels is overwritten next write.
+      a legacy block still carrying scalar fields. Below the block, renderBody emits a CONCISE
+      summary — the brief (problem + expected solution), then **What to account for** (the contract)
+      — wrapped in <!-- outputty:spec --> sentinels, regenerated every write and stripped by parseBody
+      so it never round-trips or is mistaken for human prose. scope/deps stay in the block, out of the
+      summary. MCP-owned: a hand-edit inside the sentinels is overwritten next write.
     doc: architecture/github-mapping.md
     example: "add-task"
     related: [GitHub layer, field:value labels, adoption]

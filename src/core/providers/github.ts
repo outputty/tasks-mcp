@@ -16,9 +16,10 @@
 // the issue body (alongside deps/scope/brief/…) — the source of truth `pull` reads back; the
 // execution-modifying scalars (kind, tier, qa, spec, stage, priority) are worn as `field:value`
 // labels. An issue is "managed" iff it carries the block. Below the block, the body renders a VISIBLE,
-// human-readable spec (brief, contract, scope, deps) between `<!-- outputty:spec -->` sentinels,
-// regenerated on every write so it never goes stale — that render is for the GitHub web UI, never read
-// back. The issue's comment thread is the task's TRAIL (see getTrail/appendTrail).
+// CONCISE summary — the brief (the problem + expected solution), then what to account for (the
+// contract) — between `<!-- outputty:spec -->` sentinels, regenerated on every write so it never goes
+// stale. That render is for the GitHub web UI, never read back (scope/deps stay in the block). The
+// issue's comment thread is the task's TRAIL (see getTrail/appendTrail).
 
 import { spawnSync } from "node:child_process";
 import { Octokit } from "octokit";
@@ -175,15 +176,14 @@ function skipMeta(key: string, value: unknown): boolean {
   return Array.isArray(value) && value.length === 0 && key !== "deps" && key !== "scope";
 }
 
-/** The VISIBLE body: a readable markdown render of the task's spec, wrapped in sentinels. Regenerated on
- *  every write, so it never goes stale; the machine block, not this, is what pull reads back. */
+/** The VISIBLE body: a CONCISE human summary — the brief (problem + expected solution), then what to
+ *  account for (the contract). Metadata (scope, deps) stays in the machine block, not here — this is a
+ *  clean read for the GitHub web UI. Regenerated every write, so it never goes stale; the block, not
+ *  this, is what pull reads back. */
 function renderSpec(task: Task): string {
   const lines: string[] = [];
-  if (task.brief) lines.push(task.brief.trim());
-  if (task.contract) lines.push(`**Contract**\n\n${task.contract.trim()}`);
-  if (task.scope.length) lines.push(`**Scope:** ${task.scope.map((s) => `\`${s}\``).join(" · ")}`);
-  if (task.deps.length)
-    lines.push(`**Depends on:** ${task.deps.map((d) => `\`${d}\``).join(", ")}`);
+  if (task.brief) lines.push(task.brief.trim()); // the problem + expected solution, concise
+  if (task.contract) lines.push(`**What to account for**\n\n${task.contract.trim()}`);
   return `${SPEC_OPEN}\n${lines.join("\n\n")}\n${SPEC_CLOSE}`;
 }
 
