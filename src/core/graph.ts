@@ -262,6 +262,38 @@ function byImpact(a: Blocker, b: Blocker): number {
   return a.task.id < b.task.id ? -1 : 1;
 }
 
+/** One task that could start right now, with the weight that ranks it. */
+export interface Eligible {
+  task: Task;
+  /** How many open tasks transitively wait on this one. */
+  blocks: number;
+  /** (blocks + 1) x priority weight. */
+  score: number;
+}
+
+// high 3, normal 2, low 1. Priority MULTIPLIES reach rather than outranking it: a low task blocking
+// five beats a high task blocking none, while priority decides between tasks of comparable reach.
+const priorityWeight = (task: Task): number => PRIORITIES.length - priorityRank(task);
+
+/**
+ * The ready tasks, ranked — the DEFAULT order, not the decision. The orchestrator starts from this
+ * and re-reads the roadmap before it picks. Highest score first, then most blocked, then id.
+ */
+export function eligible(tasks: Task[]): Eligible[] {
+  const graph = buildGraph(tasks);
+  const ranked = ready(tasks).map((task) => {
+    const blocks = openReach(graph, task.id, "out").size;
+    return { task, blocks, score: (blocks + 1) * priorityWeight(task) };
+  });
+  return ranked.sort(byScore);
+}
+
+function byScore(a: Eligible, b: Eligible): number {
+  if (a.score !== b.score) return b.score - a.score;
+  if (a.blocks !== b.blocks) return b.blocks - a.blocks;
+  return a.task.id < b.task.id ? -1 : 1;
+}
+
 /** Fill the structural defaults a backend may omit, so the graph functions never see undefined. */
 export const withDefaults = (task: Partial<Task> & { id: string }): Task => ({
   status: "open",

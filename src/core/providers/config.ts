@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { parse, stringify } from "yaml";
 import { z } from "zod";
 import type { ProjectConfig, ServerOptions } from "../types.ts";
@@ -51,6 +52,32 @@ export function projectSlug(project: string): string {
   const base = path.basename(project) || "repo";
   const hash = createHash("sha256").update(project).digest("hex").slice(0, 8);
   return `${base}-${hash}`;
+}
+
+/**
+ * The REPO a project belongs to: the primary checkout, shared by every git worktree cut from it.
+ * `--git-common-dir` resolves to the primary `.git` from inside a worktree, so a worktree and the
+ * checkout it came from answer the same path. Falls back to the project itself outside a repo.
+ */
+export function repoRoot(project: string): string {
+  const proc = spawnSync(
+    "git",
+    ["-C", project, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+    { encoding: "utf8" },
+  );
+  if (proc.status !== 0) return project;
+  const common = proc.stdout.trim();
+  if (!common) return project;
+  return path.basename(common) === ".git" ? path.dirname(common) : common;
+}
+
+/**
+ * The slug the CROSS-SESSION event spool keys on. Worktrees must share it: a worker session raises a
+ * note from its worktree while the orchestrator watches from the primary checkout, and the note has to
+ * find it. Task caches stay per-path on `projectSlug`; only the spool is shared.
+ */
+export function repoSlug(project: string): string {
+  return projectSlug(repoRoot(project));
 }
 
 export class ConfigProvider {

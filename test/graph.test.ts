@@ -1,6 +1,7 @@
 import { test, expect } from "vitest";
 import {
   ready,
+  eligible,
   planning,
   schedule,
   prereqs,
@@ -132,4 +133,38 @@ test("priorityOf: defaults to normal, validates the set", () => {
   expect(priorityOf(task({ id: "a", priority: "high" }))).toBe("high");
   // @ts-expect-error deliberately bad value
   expect(() => priorityOf(task({ id: "a", priority: "urgent" }))).toThrow(/unknown priority/);
+});
+
+test("eligible: priority multiplies reach, so a low task blocking five beats a lone high task", () => {
+  const tasks = [
+    task({ id: "solo", priority: "high" }), // (0 + 1) x 3 = 3
+    task({ id: "hub", priority: "low" }), //  (5 + 1) x 1 = 6
+    ...["w1", "w2", "w3", "w4", "w5"].map((id) => task({ id, deps: ["hub"] })),
+  ];
+  expect(eligible(tasks).map((e) => [e.task.id, e.score])).toEqual([
+    ["hub", 6],
+    ["solo", 3],
+  ]);
+});
+
+test("eligible: an equal score breaks the tie on reach, not priority", () => {
+  const tasks = [
+    task({ id: "a", priority: "high" }), // blocks x        -> (1 + 1) x 3 = 6
+    task({ id: "b", priority: "normal" }), // blocks y and z -> (2 + 1) x 2 = 6
+    task({ id: "x", deps: ["a"] }),
+    task({ id: "y", deps: ["b"] }),
+    task({ id: "z", deps: ["b"] }),
+  ];
+  expect(eligible(tasks).map((e) => e.task.id)).toEqual(["b", "a"]);
+});
+
+test("eligible: only ready tasks rank — drafting, replan, blocked and done are all out", () => {
+  const tasks = [
+    task({ id: "ok" }),
+    task({ id: "drafting", spec: "drafting" }),
+    task({ id: "sent-back", spec: "replan" }),
+    task({ id: "finished", status: "done" }),
+    task({ id: "waiting", deps: ["drafting"] }),
+  ];
+  expect(eligible(tasks).map((e) => e.task.id)).toEqual(["ok"]);
 });

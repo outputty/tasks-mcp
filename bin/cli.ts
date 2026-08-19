@@ -2,17 +2,18 @@
 // The package entry, on commander. With no subcommand it runs the MCP server — stdio by default (for
 // `.mcp.json` -> `bunx @outputty/tasks-mcp`), or `--http` for the standalone HTTP server. The
 // subcommands drive the same core directly, no MCP involved: `add`, `edit`, `delete`, `list`, `ready`,
-// `planning`, `schedule`, `prereqs`, `blockers`, `get`, `close`, `trail`, `trail-add`, `sync`.
+// `planning`, `schedule`, `prereqs`, `blockers`, `get`, `close`, `trail`, `trail-add`, `sync`, `notify`.
 
 import { Command } from "commander";
 import { runStdio } from "../src/mcp/stdio.ts";
 import { createHttpServer } from "../src/mcp/http.ts";
 import { SERVER_INFO } from "../src/mcp/server.ts";
 import { makeService, startBackgroundSync } from "../src/core/service.ts";
+import { Doorbell } from "../src/core/channel.ts";
 import type { ServerOptions } from "../src/core/types.ts";
 import type { ProjectContext, TrailEntry, TrailKind } from "../src/core/types.ts";
 import {
-  ready,
+  eligible,
   planning,
   schedule,
   prereqs,
@@ -68,8 +69,8 @@ program
 
 program
   .command("ready")
-  .description("the tasks ready to build right now")
-  .action(async () => out(ready(await service().list(ctx())).map((t) => t.id)));
+  .description("the tasks ready to build right now, best first")
+  .action(async () => out(eligible(await service().list(ctx())).map((e) => e.task.id)));
 
 program
   .command("planning")
@@ -193,6 +194,15 @@ program
   });
 
 program
+  .command("notify")
+  .description("ring the channel doorbell so an idle orchestrator session re-evaluates")
+  .requiredOption("--note <text>", "one line: why the orchestrator should look again")
+  .action(async (opts: Record<string, unknown>) => {
+    await service().notify(ctx(), opts.note as string);
+    out({ note: opts.note });
+  });
+
+program
   .command("config")
   .description("the configuration, layer by layer: flags, global spec, repo override, effective")
   .action(async () => out(await service().getConfig(ctx())));
@@ -203,12 +213,15 @@ program
   .action(async () => out(await service().sync(ctx())));
 
 // No subcommand: run the MCP server on the chosen transport. One service instance backs both the
-// transport and the background loop, so the loop reconciles exactly the projects the server serves.
+// transport and the background loop, so the loop reconciles exactly the projects the server serves —
+// and the loop is also what drains the event spool and rings the channel.
 program.action(async () => {
   const opts = program.opts();
-  const svc = service();
+  // One doorbell, shared by the service that rings it and the transport that delivers it.
+  const doorbell = new Doorbell();
+  const svc = makeService(serverOptions(), doorbell);
   if (opts.syncInterval > 0) startBackgroundSync(svc, opts.syncInterval);
-  if (!opts.http) return runStdio(svc);
+  if (!opts.http) return runStdio(svc, doorbell);
   console.error(
     `tasks-mcp (http) listening on http://localhost:${opts.port}/mcp  (health: /health)`,
   );

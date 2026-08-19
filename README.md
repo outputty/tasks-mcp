@@ -117,7 +117,7 @@ the board once.
 | `prereqs`       | what must be done before this task can start, in build order    | —      |
 | `blockers`      | which tasks hold up the most work, ranked                       | —      |
 | `list_tasks`    | every task, full records — the whole graph                      | —      |
-| `list_ready`    | which tasks can be worked right now (open, settled, deps done)  | —      |
+| `list_ready`    | which tasks can be worked right now, ranked best first          | —      |
 | `list_planning` | which tasks planning still owns (drafting / replan)             | —      |
 | `schedule`      | the whole open plan as dependency layers; errors on a cycle     | —      |
 | `get_task`      | one task's full record                                          | —      |
@@ -129,6 +129,7 @@ the board once.
 | `get_trail`     | a task's trail: its issue comment thread, oldest first          | —      |
 | `append_trail`  | append one entry to a task's trail (posts an issue comment)     | ✎      |
 | `sync`          | reconcile every layer both ways; adopt hand-opened issues       | ✎      |
+| `notify`        | ring the channel doorbell with a one-line reason                | ✎      |
 
 A task carries: `id`, `title`, `status`, `deps`, `scope`, the execution-modifying properties `tier`
 (1–4), `qa` (skip/inline/subagent), `priority` (high/normal/low), `spec`, `stage`, `kind`, and
@@ -167,6 +168,52 @@ and `link` are optional — outputty tucks them into a hidden marker on the comm
 comment still renders as plain text on GitHub while round-tripping the tags. A comment a person leaves by
 hand has no `kind`/`link`, just its `note`, `author`, and `at`. Trails need a GitHub-backed project;
 `append_trail` requires the task's issue to exist (`sync` it first).
+
+## The channel — waking an idle session
+
+The server is also a [Claude Code channel](https://code.claude.com/docs/en/channels-reference): it
+pushes events into a running session, so a caller can sit idle instead of polling on a timer. Start
+the session that should receive them with the research-preview flag, naming the `.mcp.json` key:
+
+```bash
+claude --dangerously-load-development-channels server:tasks
+```
+
+**One event exists, and it is a doorbell.** It carries no state, because Claude Code delivers channel
+events on the session's _next_ turn — any count stamped at emit time would already be stale:
+
+```text
+<channel source="tasks">task graph changed — re-evaluate</channel>
+```
+
+The reader answers it by asking for the truth. `list_ready` is **ranked**, best first, by
+`(blocks + 1) x priority weight` — so reach and urgency combine instead of one overriding the other:
+
+```jsonc
+// tool: list_ready     { "project": "/abs/repo" }
+{ "ids": ["hub", "solo"],
+  "tasks": [ { "id": "hub",  "blocks": 5, "score": 6, "priority": "low",  … },
+             { "id": "solo", "blocks": 0, "score": 3, "priority": "high", … } ] }
+```
+
+A low task blocking five outranks a lone high task; priority decides between tasks of comparable
+reach. The order is a **starting point, not a decision** — the caller weighs its own roadmap on top.
+
+> `list_ready` reports what the **graph** allows. A task already being worked still appears, because
+> nothing here tracks dispatch. Whoever starts work owns that: what is in flight, and how much of it
+> may run at once.
+
+Two things ring the doorbell: a background sync that changed what can be started, and an explicit
+`notify` — the hook for anything the graph does not say, like a planning gate reached. Rings inside
+one tick coalesce, so ten tasks closing at once wake the session exactly once. A note travels between
+processes through a spool keyed on the **repo**, so a worker in a worktree can ring an orchestrator
+watching from the primary checkout. The channel needs `--sync-interval` to be on; without it the loop
+that polls and drains never runs.
+
+> The channel is **additive**. In a session started without the flag — or under `--http` — the events
+> are dropped and every tool keeps working exactly as before. Channels are an Anthropic research
+> preview, and a custom one is not on the approved allowlist, which is why the flag says
+> `--dangerously-`.
 
 ## Configuration
 
