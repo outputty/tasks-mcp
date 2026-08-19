@@ -116,6 +116,7 @@ the board once.
 | --------------- | --------------------------------------------------------------- | ------ |
 | `prereqs`       | what must be done before this task can start, in build order    | —      |
 | `blockers`      | which tasks hold up the most work, ranked                       | —      |
+| `list_tasks`    | every task, full records — the whole graph                      | —      |
 | `list_ready`    | which tasks can be worked right now (open, settled, deps done)  | —      |
 | `list_planning` | which tasks planning still owns (drafting / replan)             | —      |
 | `schedule`      | the whole open plan as dependency layers; errors on a cycle     | —      |
@@ -187,14 +188,15 @@ zod-validated — a typo'd key or mistyped value fails loudly, naming the file.
 
 Deployment flags (in `.mcp.json`'s `args`, e.g. `["-y", "@outputty/tasks-mcp", "--no-projects"]`):
 
-| Flag                    | Description                             | Default       |
-| ----------------------- | --------------------------------------- | ------------- |
-| `--http` / `--port <n>` | standalone HTTP server instead of stdio | stdio, `3917` |
-| `--provider <name>`     | the remote layer backing each project   | `github`      |
-| `--project-number <n>`  | target an existing Projects board       | find/create   |
-| `--no-projects`         | disable the board sync                  | board on      |
-| `--board <title>`       | board title to find/create              | `Tasks`       |
-| `--cache-dir <dir>`     | where the file layer + config live      | OS cache dir  |
+| Flag                    | Description                                             | Default       |
+| ----------------------- | ------------------------------------------------------- | ------------- |
+| `--http` / `--port <n>` | standalone HTTP server instead of stdio                 | stdio, `3917` |
+| `--provider <name>`     | the remote layer backing each project                   | `github`      |
+| `--project-number <n>`  | target an existing Projects board                       | find/create   |
+| `--no-projects`         | disable the board sync                                  | board on      |
+| `--board <title>`       | board title to find/create                              | `Tasks`       |
+| `--cache-dir <dir>`     | where the file layer + config live                      | OS cache dir  |
+| `--sync-interval <s>`   | background sync cadence while the server runs (0 = off) | off           |
 
 Credentials come from `GITHUB_TOKEN` / `GH_TOKEN`, else `gh auth token`.
 

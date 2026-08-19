@@ -86,7 +86,7 @@ const result = <T extends Record<string, unknown>>(structured: T) => ({
 });
 
 /** The MCP server over one task service. A transport (stdio or HTTP) connects to it. */
-// Deviation from the 24-line cap, justified: this is a declarative tool table — sixteen registerTool
+// Deviation from the 24-line cap, justified: this is a declarative tool table — seventeen registerTool
 // calls that are schema data plus one-expression handlers. Splitting it into arbitrary function
 // groups would hide the surface, and every handler body is under the cap on its own.
 // oxlint-disable-next-line max-lines-per-function
@@ -151,6 +151,21 @@ export function createMcpServer(service: TaskService): McpServer {
           display: idList(layer),
         })),
       });
+    },
+  );
+
+  server.registerTool(
+    "list_tasks",
+    {
+      description:
+        "Every task, full records — the whole graph, open and done. For the scannable working " +
+        "subsets use list_ready / list_planning; for one task use get_task.",
+      inputSchema: { project: PROJECT, branch: BRANCH },
+      outputSchema: { ids: z.array(z.string()), tasks: z.array(z.unknown()) },
+    },
+    async (args) => {
+      const tasks = await service.list(ctxOf(args));
+      return result({ ids: tasks.map((t) => t.id), tasks });
     },
   );
 
