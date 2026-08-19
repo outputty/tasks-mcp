@@ -7,7 +7,7 @@ import nock from "nock";
 import { TaskStack, DuplicateTaskError } from "../src/core/service.ts";
 import { FileProvider } from "../src/core/providers/file.ts";
 import { ready } from "../src/core/graph.ts";
-import { Doorbell, postEvent } from "../src/core/channel.ts";
+import { Doorbell, drainEvents, postEvent } from "../src/core/channel.ts";
 import { task, tmp, tmpRepo } from "./helpers.ts";
 import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
 
@@ -40,6 +40,11 @@ function harness() {
   };
 }
 
+/** The project's task file. The cache dir also holds the event spool and any config override, so
+ *  every caller here picks the YAML out rather than assuming it is the only entry. */
+const taskFiles = (cacheDir: string): string[] =>
+  fs.readdirSync(cacheDir).filter((f) => f.endsWith(".yaml"));
+
 test("the file layer lives outside the repo, in the given cacheDir", async () => {
   const { svc, project, cacheDir, cleanup } = harness();
   const ctx = { project };
@@ -47,7 +52,7 @@ test("the file layer lives outside the repo, in the given cacheDir", async () =>
   await svc.create(ctx, task({ id: "api", deps: ["schema"] }));
 
   expect(fs.existsSync(`${project}/.claude/tasks.cache.yaml`)).toBe(false); // nothing in the repo
-  const files = fs.readdirSync(cacheDir);
+  const files = taskFiles(cacheDir);
   expect(files).toHaveLength(1);
   expect(fs.readFileSync(`${cacheDir}/${files[0]}`, "utf8")).toContain("- schema");
   cleanup();
@@ -124,7 +129,7 @@ test("a file written before the stack (with a refs key) still loads", async () =
   const { svc, project, cacheDir, cleanup } = harness();
   const ctx = { project };
   await svc.create(ctx, task({ id: "old" }));
-  const file = `${cacheDir}/${fs.readdirSync(cacheDir)[0]}`;
+  const file = `${cacheDir}/${taskFiles(cacheDir)[0]}`;
   fs.writeFileSync(
     file,
     "tasks:\n  - id: old\n    title: from before\n    status: open\n    refs:\n      issueId: I_1\n",
@@ -212,7 +217,7 @@ test("the background poll rings when what can be started changes, and stays quie
 
   await svc.syncSeen(); // first pass: a startable task appeared
   await settle();
-  expect(rung).toEqual(["task graph changed — re-evaluate"]);
+  expect(rung).toEqual(["ready now: schema — re-evaluate"]); // the ring names which way to look
 
   await svc.syncSeen(); // nothing moved
   await settle();
@@ -243,5 +248,49 @@ test("a note another process spooled is delivered on the next poll", async () =>
   await svc.syncSeen();
   await settle();
   expect(rung).toContain("spec gate on channel-emitter");
+  cleanup();
+});
+
+test("closing a task spools a note for every other process, naming what moved", async () => {
+  const { svc, project, cacheDir, cleanup } = harness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "schema" }));
+  drainEvents(cacheDir, project, 999_999); // the create's own note, consumed
+
+  await svc.close(ctx, "schema");
+
+  // Drained as ANOTHER session would drain it: our own pid is filtered out of our own reads, and a
+  // closure has to travel, or the orchestrator learns of it only on its next background sync.
+  expect(drainEvents(cacheDir, project, 999_999)).toEqual(["task schema closed — re-evaluate"]);
+  svc.stop();
+  cleanup();
+});
+
+test("an edit that only touches prose spools nothing — a retitled task is not news", async () => {
+  const { svc, project, cacheDir, cleanup } = harness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "schema" }));
+  drainEvents(cacheDir, project, 999_999);
+
+  await svc.update(ctx, "schema", { title: "Design the schema" });
+
+  expect(drainEvents(cacheDir, project, 999_999)).toEqual([]);
+  svc.stop();
+  cleanup();
+});
+
+test("a dependency change spools, because it can move what is ready", async () => {
+  const { svc, project, cacheDir, cleanup } = harness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "schema" }));
+  await svc.create(ctx, task({ id: "api" }));
+  drainEvents(cacheDir, project, 999_999);
+
+  await svc.update(ctx, "api", { deps: ["schema"] });
+
+  expect(drainEvents(cacheDir, project, 999_999)).toEqual([
+    "task api changed its dependencies — re-evaluate",
+  ]);
+  svc.stop();
   cleanup();
 });

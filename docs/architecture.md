@@ -142,10 +142,13 @@ listener and the server can push `notifications/claude/channel` into a live sess
 `claude/channel/permission` is deliberately **not** declared: relay forwards tool-approval prompts to
 whoever is on the other end of a channel, and here that is a spool file, not a human.
 
-Exactly one event exists, and it carries no state. Channel events are delivered on the session's next
-turn and batched, so any count stamped at emit time would be stale by the time it is read; the reader
-calls `list_ready` instead. Two mechanisms carry a ring, because a worker session and an orchestrator
-never share a process:
+Exactly one event exists, and it carries no state to act on. Channel events are delivered on the
+session's next turn and batched, so any count stamped at emit time would be stale by the time it is
+read; the reader calls `list_ready` instead. What the ring text does carry is the **direction** to
+look — `task api closed — re-evaluate`, `ready now: deploy — re-evaluate` — because a bare "something
+changed" is too easy to reconcile with a stale belief that nothing has.
+
+Two mechanisms carry a ring, because a worker session and an orchestrator never share a process:
 
 | Hop           | Mechanism                                                            | Where             |
 | ------------- | -------------------------------------------------------------------- | ----------------- |
@@ -157,10 +160,18 @@ it posted itself so one ring is never delivered twice. The spool keys on `repoSl
 checkout, resolved through `git rev-parse --git-common-dir` — rather than on `projectSlug`, so a note
 raised in a worktree reaches a session watching from the checkout it was cut from.
 
-The background sync loop is what drains the spool and compares the eligible set from pass to pass: the
-channel is dark without `--sync-interval`. Only the **stdio** transport wires the doorbell to a
-notification (`mcp/stdio.ts`), because that is how Claude Code spawns a channel server. Under HTTP the
-ring goes nowhere and every tool still works.
+**The spool is watched, not polled.** `watchEvents` puts an `fs.watch` on the spool directory the
+first time a project is named, so a note lands in the other session immediately and with no
+configuration — the wake path must never depend on a flag someone has to remember. `fs.watch`
+coalesces bursts and can miss an event on some filesystems, so the background sync's drain stays
+behind it as a backstop rather than as the primary path.
+
+Three things ring: an **explicit `notify`**, a **graph mutation** (`create`, a status/spec/deps change,
+`delete` — announced to other processes but not to the session that made it, which already knows), and
+a **background sync whose eligible set moved**. A prose-only edit rings nothing; a retitled task is not
+news. Only the **stdio** transport wires the doorbell to a notification (`mcp/stdio.ts`), because that
+is how Claude Code spawns a channel server. Under HTTP the ring goes nowhere and every tool still
+works.
 
 **Dispatch is not modelled here.** `list_ready` answers what the graph allows, and a task being worked
 right now still appears in it. Tracking what is in flight, and capping how much runs at once, belongs

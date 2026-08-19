@@ -8,7 +8,14 @@ export {
   type TaskService,
   type SyncResult,
 } from "./service.ts";
-export { Doorbell, postEvent, drainEvents, DEFAULT_NOTE, type RingSink } from "./channel.ts";
+export {
+  Doorbell,
+  postEvent,
+  drainEvents,
+  watchEvents,
+  DEFAULT_NOTE,
+  type RingSink,
+} from "./channel.ts";
 export {
   ConfigProvider,
   ProjectConfigSchema,
