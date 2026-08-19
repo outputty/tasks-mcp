@@ -6,13 +6,7 @@ import { test, expect } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
-import {
-  Doorbell,
-  drainEvents,
-  postEvent,
-  watchEvents,
-  DEFAULT_NOTE,
-} from "../src/core/channel.ts";
+import { Doorbell, EventLog, postEvent, DEFAULT_NOTE } from "../src/core/channel.ts";
 import { createMcpServer } from "../src/mcp/server.ts";
 import { TaskStack } from "../src/core/service.ts";
 import { FileProvider } from "../src/core/providers/file.ts";
@@ -62,9 +56,33 @@ test("the spool carries a note from another process, and never echoes your own",
   postEvent(cache.dir, repo.dir, "a worker died", 999_999); // another session
   postEvent(cache.dir, repo.dir, "my own ring"); // this process, already delivered locally
 
-  expect(drainEvents(cache.dir, repo.dir)).toEqual(["a worker died"]);
-  expect(drainEvents(cache.dir, repo.dir)).toEqual([]); // exactly once: both notes are consumed
+  const log = new EventLog(cache.dir, repo.dir);
+  expect(log.read()).toEqual(["a worker died"]);
+  expect(log.read()).toEqual([]); // once per reader, however often it reads
 
+  cache.cleanup();
+  repo.cleanup();
+});
+
+test("every session gets the note — one reading it does not take it from the others", async () => {
+  const cache = tmp();
+  const repo = tmpRepo();
+  const orchestrator: string[] = [];
+  const worker: string[] = [];
+  const stopO = new EventLog(cache.dir, repo.dir).watch((n) => void orchestrator.push(n));
+  const stopW = new EventLog(cache.dir, repo.dir).watch((n) => void worker.push(n));
+
+  postEvent(cache.dir, repo.dir, "task rollback-fail-path closed — re-evaluate", 999_999);
+  await until(() => orchestrator.length > 0 && worker.length > 0);
+
+  // Only the orchestrator has a channel listener behind its doorbell. If reading CONSUMED the file,
+  // the worker's read would destroy the only copy and the orchestrator would simply never be told —
+  // which is exactly what a claim-by-rename spool did.
+  expect(orchestrator).toEqual(["task rollback-fail-path closed — re-evaluate"]);
+  expect(worker).toEqual(["task rollback-fail-path closed — re-evaluate"]);
+
+  stopO();
+  stopW();
   cache.cleanup();
   repo.cleanup();
 });
@@ -74,7 +92,7 @@ test("worktrees and their primary checkout share one spool", async () => {
   const repo = tmpRepo();
   // A git worktree resolves --git-common-dir back to the primary checkout, so both key the same spool.
   postEvent(cache.dir, repo.dir, "slot freed by parser — re-evaluate", 999_999);
-  expect(drainEvents(cache.dir, repo.dir)).toEqual(["slot freed by parser — re-evaluate"]);
+  expect(new EventLog(cache.dir, repo.dir).read()).toEqual(["slot freed by parser — re-evaluate"]);
   cache.cleanup();
   repo.cleanup();
 });
@@ -83,7 +101,7 @@ test("the watcher delivers another process's note with no sync loop running", as
   const cache = tmp();
   const repo = tmpRepo();
   const seen: string[] = [];
-  const stop = watchEvents(cache.dir, repo.dir, (note) => void seen.push(note));
+  const stop = new EventLog(cache.dir, repo.dir).watch((note) => void seen.push(note));
 
   // Nothing polls here: no background sync, no tool call. This is the path that has to wake a session
   // sitting idle at its prompt, which is why it must not depend on --sync-interval being set.
@@ -102,7 +120,7 @@ test("a note spooled before the watch began is delivered the moment it starts", 
   postEvent(cache.dir, repo.dir, "spec gate on channel-emitter", 999_999); // while nobody watched
 
   const seen: string[] = [];
-  const stop = watchEvents(cache.dir, repo.dir, (note) => void seen.push(note));
+  const stop = new EventLog(cache.dir, repo.dir).watch((note) => void seen.push(note));
   await until(() => seen.length > 0);
 
   expect(seen).toEqual(["spec gate on channel-emitter"]);
@@ -115,14 +133,14 @@ test("a stopped watcher delivers nothing more", async () => {
   const cache = tmp();
   const repo = tmpRepo();
   const seen: string[] = [];
-  const stop = watchEvents(cache.dir, repo.dir, (note) => void seen.push(note));
+  const stop = new EventLog(cache.dir, repo.dir).watch((note) => void seen.push(note));
   stop();
 
   postEvent(cache.dir, repo.dir, "too late", 999_999);
   await tick();
 
   expect(seen).toEqual([]);
-  expect(drainEvents(cache.dir, repo.dir)).toEqual(["too late"]); // still spooled, just undelivered
+  expect(new EventLog(cache.dir, repo.dir).read()).toEqual(["too late"]); // spooled, undelivered
   cache.cleanup();
   repo.cleanup();
 });

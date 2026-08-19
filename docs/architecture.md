@@ -150,21 +150,28 @@ changed" is too easy to reconcile with a stale belief that nothing has.
 
 Two mechanisms carry a ring, because a worker session and an orchestrator never share a process:
 
-| Hop           | Mechanism                                                            | Where             |
-| ------------- | -------------------------------------------------------------------- | ----------------- |
-| in-process    | `Doorbell` — coalesces every ring in one tick into a single event    | `core/channel.ts` |
-| cross-process | a spool file per note, claimed by rename so it delivers exactly once | `core/channel.ts` |
+| Hop           | Mechanism                                                           | Where             |
+| ------------- | ------------------------------------------------------------------- | ----------------- |
+| in-process    | `Doorbell` — coalesces every ring in one tick into a single event   | `core/channel.ts` |
+| cross-process | a spool file per note, broadcast to every session watching the repo | `core/channel.ts` |
 
-`TaskStack.notify` does both: it rings locally _and_ posts to the spool, and a drainer discards notes
-it posted itself so one ring is never delivered twice. The spool keys on `repoSlug` — the primary
+`TaskStack.notify` does both: it rings locally _and_ posts to the spool, and a reader skips notes it
+posted itself so one ring is never delivered twice. The spool keys on `repoSlug` — the primary
 checkout, resolved through `git rev-parse --git-common-dir` — rather than on `projectSlug`, so a note
 raised in a worktree reaches a session watching from the checkout it was cut from.
 
-**The spool is watched, not polled.** `watchEvents` puts an `fs.watch` on the spool directory the
+**The spool is a broadcast, not a queue.** Reading it never removes a file. Every session's server
+reads the spool, but only some of them have a channel listener behind their doorbell — so a note
+_consumed_ by a worker session is a note the orchestrator never sees, and with instant delivery that
+race is near-certain rather than occasional. Instead each `EventLog` remembers the files it has handed
+over, so a note reaches every process exactly once, and files are swept by age (five minutes, read
+from the filename so sweeping costs no `stat`).
+
+**The spool is watched, not polled.** `EventLog.watch` puts an `fs.watch` on the spool directory the
 first time a project is named, so a note lands in the other session immediately and with no
-configuration — the wake path must never depend on a flag someone has to remember. `fs.watch`
-coalesces bursts and can miss an event on some filesystems, so the background sync's drain stays
-behind it as a backstop rather than as the primary path.
+configuration — the wake path must never depend on a flag someone has to remember. A dropped `fs.watch`
+event self-heals, since the next one re-reads the whole directory and hands over anything unseen; the
+background sync reads the same log as a further backstop.
 
 Three things ring: an **explicit `notify`**, a **graph mutation** (`create`, a status/spec/deps change,
 `delete` — announced to other processes but not to the session that made it, which already knows), and

@@ -38,6 +38,15 @@ answered three consecutive doorbells with "nothing changed" while two merged bui
    announces itself to the other processes — and only to them, since the session that made the change
    already knows. A prose-only edit stays silent: a retitled task is not news.
 
+3. **The spool was a queue, and it needed to be a broadcast.** Notes were claimed by rename so each
+   was delivered exactly once — right for a work queue, wrong for a doorbell. Every session's server
+   reads the spool, but only the orchestrator has a channel listener behind its doorbell, so a note
+   read by a worker session was rung into a void and gone. Watching turned that from occasional into
+   near-certain, because every server now read instantly instead of once a minute. `EventLog` reads
+   without consuming and remembers what it has handed over, so delivery is once *per process*; files
+   are swept by age. Observed with three listener processes and one poster: before, the note reached
+   worker-B and the orchestrator got nothing; after, all three received it.
+
 Two smaller calls fell out of the same investigation. Rings **name the movement**
 (`task <id> closed`, `ready now: <ids>`), and a coalesced burst joins the notes instead of replacing
 them with `N changes` — the burst is exactly when the reader most needs to know what moved. And `poll`
