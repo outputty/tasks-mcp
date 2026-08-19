@@ -83,6 +83,7 @@ test("tools/list advertises the whole surface, each requiring project", async ()
   const { tools } = await client.listTools();
   expect(tools.map((t) => t.name)).toEqual(
     expect.arrayContaining([
+      "list_tasks",
       "list_ready",
       "list_planning",
       "schedule",
@@ -112,6 +113,24 @@ test("add_task then list_ready surfaces the new task", async () => {
     arguments: { project },
   });
   expect(structured(res).ids).toEqual(["solo"]);
+  await cleanup();
+});
+
+test("list_tasks returns every task, full records, open and done", async () => {
+  const { client, project, cleanup } = await harness();
+  await client.callTool({
+    name: "add_task",
+    arguments: { project, id: "schema", title: "Design the schema", tier: 2 },
+  });
+  await client.callTool({ name: "add_task", arguments: { project, id: "api", deps: ["schema"] } });
+  await client.callTool({ name: "close_task", arguments: { project, id: "schema" } });
+
+  const res = structured(await client.callTool({ name: "list_tasks", arguments: { project } }));
+  expect(res.ids.sort()).toEqual(["api", "schema"]);
+  const schema = res.tasks.find((t: { id: string }) => t.id === "schema");
+  expect(schema.status).toBe("done"); // closed tasks included
+  expect(schema.tier).toBe(2); // full fields, not index rows
+  expect(res.tasks.find((t: { id: string }) => t.id === "api").deps).toEqual(["schema"]);
   await cleanup();
 });
 
