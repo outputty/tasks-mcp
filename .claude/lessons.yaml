@@ -136,3 +136,41 @@
     ride a hidden <!-- outputty:trail --> marker on outputty's own writes. Consequence: trails now need
     a GitHub-backed project and reads hit the network. Do NOT re-propose a local .trails store or a
     trailsDir knob — that design was considered and dropped.
+- title: A round-trip probe through your own process proves nothing about the channel
+  kind: discovery
+  files: [src/core/service.ts, src/core/channel.ts]
+  version: 0.15.0
+  body: |
+    An orchestrator confirmed the channel was "alive in both directions" by calling notify and
+    watching its own note echo back. It was a false positive: notify rings the local doorbell
+    AND spools for other processes, so a note raised in the session that receives it never
+    leaves the process. The cross-process leg was untested by that probe and, at the time, dead
+    — drainEvents was reachable only from the background sync loop, off by default. Test a
+    cross-process path with two real processes or not at all; the probe now lives in the suite
+    as the watchEvents tests, and the doc says the spool is watched, not polled.
+- title: A wake path behind an opt-in flag is a wake path that will be off
+  kind: fix
+  files: [src/core/channel.ts, src/core/service.ts, .mcp.json]
+  version: 0.15.0
+  body: |
+    The channel's cross-process half ran only inside startBackgroundSync, gated on
+    --sync-interval (default 0). The plugin documented the workaround ("the channel is dark
+    without it") instead of the bug, and this repo's own .mcp.json never got the flag. Fix:
+    watchEvents puts an fs.watch on the spool so delivery needs no configuration, with the sync
+    drain kept behind it as a backstop for the events fs.watch coalesces or misses. Rule the
+    fix encodes: if a feature only works when someone remembers a flag, the flag is the bug.
+- title: A doorbell that never says what moved gets rationalised away
+  kind: direction
+  files: [src/core/channel.ts]
+  version: 0.15.0
+  body: |
+    Every ring read "task graph changed — re-evaluate", and Doorbell.flush replaced a burst with
+    "N changes — re-evaluate", discarding the texts exactly when there was most to say. An
+    orchestrator answered three such rings by checking git log origin/main WITHOUT fetching,
+    got its session-start head back, and concluded nothing had merged — overriding a status:
+    done it had already seen. Two tasks stayed undispatched. Rings now name the movement (task
+    <id> closed, ready now: <ids>) and a burst joins them, first three named plus a count. The
+    no-state rule survives intact: the text says which way to look, never a figure to act on.
+    The reader-side half of this went into the plugin charter — git is not evidence of another
+    session's merge.
+

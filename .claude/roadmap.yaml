@@ -169,3 +169,49 @@
   doc: roadmap/edit-delete-tools.md
   absorbs: []
   links: ["https://github.com/outputty/tasks-mcp/pull/25"]
+- row: 9
+  feature: The channel — waking an idle session, and a ranked list_ready
+  summary: |
+    Problem: an orchestrator session had to poll to learn the graph had moved, and list_ready
+    returned an unordered set with no sense of what mattered. Solution: the server declares the
+    `claude/channel` capability and pushes ONE doorbell event into a live session — coalesced
+    in-process, carried across processes by a spool keyed on the REPO (so a worker in a worktree
+    reaches an orchestrator in the primary checkout); list_ready came back ranked by
+    (blocks + 1) x priority weight, reach and urgency combined.
+
+      claude --dangerously-load-development-channels server:tasks
+
+    Output (REAL OBSERVED 2026-08-19): two node processes over the built dist, no sync loop and
+    no --sync-interval — a close in one printed `RING → task rollback closed — re-evaluate` in
+    the other; a prose-only retitle printed nothing. npm run check green (91 tests).
+  status: "✅ shipped"
+  status_detail: v0.14.0; the wake path was flag-gated and unnamed until the 0.15.0 repair below.
+  depends_on: [1]
+  doc: roadmap/channel.md
+  absorbs: []
+  links: ["https://github.com/outputty/tasks-mcp/pull/28"]
+- row: 10
+  feature: A wake path that needs no flag, and a ring that says what moved
+  summary: |
+    Problem: the channel's cross-process half only ran inside the background sync loop, so it was
+    dark unless someone remembered `--sync-interval` (this repo's own .mcp.json had no flag); a
+    closing task spooled nothing at all, reaching other sessions only on THEIR next reconcile; and
+    every ring said the same eight words, so a real orchestrator answered three of them with
+    "nothing changed" while two merged builds sat undispatched. Solution: watchEvents puts an
+    fs.watch on the spool, so a note lands at once with no configuration; every graph mutation
+    announces itself to the other processes (prose-only edits stay silent); rings name what moved
+    and a coalesced burst joins the notes instead of counting them; the poll is guarded so a junk
+    field cannot reject into the background loop's voided promise.
+
+      node listener.mjs & node close.mjs
+
+    Output (REAL OBSERVED 2026-08-19): `RING → task rollback closed — re-evaluate` delivered to a
+    listener started with no sync loop; backlog notes delivered at watch start; a retitle silent.
+    npm run check green (91 tests).
+  status: "✅ shipped"
+  status_detail: Fixed inline on main; the plugin's charter gained the rule that git is never evidence of another session's merge.
+  depends_on: [9]
+  doc: roadmap/channel.md
+  absorbs: []
+  links: []
+

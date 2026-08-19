@@ -179,11 +179,14 @@ the session that should receive them with the research-preview flag, naming the 
 claude --dangerously-load-development-channels server:tasks
 ```
 
-**One event exists, and it is a doorbell.** It carries no state, because Claude Code delivers channel
-events on the session's _next_ turn — any count stamped at emit time would already be stale:
+**One event exists, and it is a doorbell.** It carries no state to act on, because Claude Code
+delivers channel events on the session's _next_ turn — any count stamped at emit time would already be
+stale. It does name the direction to look, so "nothing changed" is not a defensible reading of a ring
+that fired because two tasks finished:
 
 ```text
-<channel source="tasks">task graph changed — re-evaluate</channel>
+<channel source="tasks">task rollback-fail-path closed — re-evaluate</channel>
+<channel source="tasks">ready now: deploy, docs; 1 left the ready set — re-evaluate</channel>
 ```
 
 The reader answers it by asking for the truth. `list_ready` is **ranked**, best first, by
@@ -203,12 +206,16 @@ reach. The order is a **starting point, not a decision** — the caller weighs i
 > nothing here tracks dispatch. Whoever starts work owns that: what is in flight, and how much of it
 > may run at once.
 
-Two things ring the doorbell: a background sync that changed what can be started, and an explicit
-`notify` — the hook for anything the graph does not say, like a planning gate reached. Rings inside
-one tick coalesce, so ten tasks closing at once wake the session exactly once. A note travels between
-processes through a spool keyed on the **repo**, so a worker in a worktree can ring an orchestrator
-watching from the primary checkout. The channel needs `--sync-interval` to be on; without it the loop
-that polls and drains never runs.
+Three things ring the doorbell: a **graph mutation** (a task added, closed, reopened, respecced, its
+deps changed, or deleted), a **background sync** that changed what can be started, and an explicit
+`notify` — the hook for anything the graph does not say, like a planning gate reached. A prose-only
+edit rings nothing. Rings inside one tick coalesce, so ten tasks closing at once wake the session
+exactly once.
+
+A note travels between processes through a spool keyed on the **repo**, so a worker in a worktree can
+ring an orchestrator watching from the primary checkout — and the spool is **watched**, not polled, so
+it arrives at once and needs no flags. `--sync-interval` adds a background reconcile with GitHub (it
+is what notices a label edited in the web UI), but the channel no longer depends on it.
 
 > The channel is **additive**. In a session started without the flag — or under `--http` — the events
 > are dropped and every tool keeps working exactly as before. Channels are an Anthropic research

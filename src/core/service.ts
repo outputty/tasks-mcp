@@ -12,7 +12,7 @@ import type { ServerOptions } from "./types.ts";
 import { ConfigProvider, defaultCacheDir, type ConfigSources } from "./providers/config.ts";
 import { buildStack } from "./providers/provider.ts";
 import { eligible, withDefaults } from "./graph.ts";
-import { Doorbell, drainEvents, postEvent } from "./channel.ts";
+import { Doorbell, DEFAULT_NOTE, drainEvents, postEvent, watchEvents } from "./channel.ts";
 
 export interface SyncResult {
   pulled: number;
@@ -48,6 +48,10 @@ export interface TaskService {
   getConfig(ctx: ProjectContext): Promise<ConfigSources>;
   /** Ring the doorbell from anywhere, with a one-line reason. */
   notify(ctx: ProjectContext, note: string): Promise<void>;
+  /** Release the cross-process event watchers. A long-running server never needs to: the watchers are
+   *  unref'd and die with the process. A test or a short-lived embedder that wants a clean exit calls
+   *  it. */
+  stop(): void;
   /** Write preferences centrally: into the global spec, or one repo's override. */
   setConfig(
     ctx: ProjectContext,
@@ -68,6 +72,9 @@ export class TaskStack implements TaskService {
   // The ids that could be started, as of the last poll — the only state the doorbell needs to tell a
   // real change from a sync pass that moved nothing.
   private readonly lastEligible = new Map<string, string>();
+  // One spool watcher per project served — the cross-process doorbell, started the first time a
+  // project is named and never depending on the sync loop being switched on.
+  private readonly watchers = new Map<string, () => void>();
 
   constructor(
     private readonly options: ServerOptions = {},
@@ -82,6 +89,7 @@ export class TaskStack implements TaskService {
 
   private layers(ctx: ProjectContext): Provider[] {
     this.seen.add(ctx.project);
+    this.watch(ctx.project);
     if (this.providers) return this.providers;
     const remote = this.config.get(ctx.project).provider ?? "github";
     let stack = this.stacks.get(remote);
@@ -90,6 +98,19 @@ export class TaskStack implements TaskService {
       this.stacks.set(remote, stack);
     }
     return stack;
+  }
+
+  /** Deliver another process's notes for this project from now on. Once per project: the repo lookup
+   *  behind the spool path shells out to git, so a repeat call would pay for it on every operation. */
+  private watch(project: string): void {
+    if (this.watchers.has(project)) return;
+    const stop = watchEvents(this.cacheDir(), project, (note) => this.doorbell.ring(note));
+    this.watchers.set(project, stop);
+  }
+
+  stop(): void {
+    for (const close of this.watchers.values()) close();
+    this.watchers.clear();
   }
 
   async getConfig(ctx: ProjectContext): Promise<ConfigSources> {
@@ -132,6 +153,7 @@ export class TaskStack implements TaskService {
     const top = await this.top(ctx);
     if ((await top.pull(ctx)).has(task.id)) throw new DuplicateTaskError(task.id);
     await this.fanDown(ctx, task);
+    this.announce(ctx, `task ${task.id} added — re-evaluate`);
     return task;
   }
 
@@ -140,6 +162,8 @@ export class TaskStack implements TaskService {
     if (!current) throw new Error(`no task ${id}`);
     const merged = withDefaults({ ...current, ...patch, id });
     await this.fanDown(ctx, merged);
+    const moved = movement(current, merged);
+    if (moved) this.announce(ctx, `task ${id} ${moved} — re-evaluate`);
     return merged;
   }
 
@@ -154,12 +178,20 @@ export class TaskStack implements TaskService {
     for (const layer of [...layers].reverse()) {
       if (layer.delete) await layer.delete(ctx, id);
     }
+    this.announce(ctx, `task ${id} deleted — re-evaluate`);
   }
 
   /** Ring here AND post for every OTHER process watching this repo — a worker session and the
    *  orchestrator never share one, so a note raised in either has to travel to the other. */
   async notify(ctx: ProjectContext, note: string): Promise<void> {
     this.doorbell.ring(note);
+    postEvent(this.cacheDir(), ctx.project, note);
+  }
+
+  /** Tell every OTHER process that the graph moved. A mutating session already knows what it just
+   *  did, so this never rings its own doorbell — `notify` is the tool for that. Without it a closure
+   *  reaches the orchestrator only on ITS next background sync, which is a wake path that can be off. */
+  private announce(ctx: ProjectContext, note: string): void {
     postEvent(this.cacheDir(), ctx.project, note);
   }
 
@@ -202,7 +234,7 @@ export class TaskStack implements TaskService {
     const out = new Map<string, SyncResult>();
     for (const project of this.seen) {
       out.set(project, await this.syncQuietly(project));
-      await this.poll(project);
+      await this.pollQuietly(project);
     }
     return out;
   }
@@ -213,14 +245,24 @@ export class TaskStack implements TaskService {
    */
   private async poll(project: string): Promise<void> {
     for (const note of drainEvents(this.cacheDir(), project)) this.doorbell.ring(note);
-    const signature = eligible(await this.list({ project }))
-      .map((e) => e.task.id)
-      .join(",");
+    const ids = eligible(await this.list({ project })).map((e) => e.task.id);
+    const signature = ids.join(",");
     const previous = this.lastEligible.get(project);
     this.lastEligible.set(project, signature);
     if (previous === signature) return;
     if (previous === undefined && signature === "") return; // nothing to wake about at startup
-    this.doorbell.ring();
+    this.doorbell.ring(readyMoved(previous ?? "", ids));
+  }
+
+  /** The poll, never fatal. One junk field on one task throws out of `eligible`, and the background
+   *  loop voids this promise — an unhandled rejection there would take the whole server down over a
+   *  task someone mistyped in the GitHub UI. */
+  private async pollQuietly(project: string): Promise<void> {
+    try {
+      await this.poll(project);
+    } catch (err) {
+      console.error(`[tasks-mcp] doorbell poll failed for ${project}:`, err);
+    }
   }
 
   /** One project's sync for the background loop: an error is logged to stderr and swallowed, so one
@@ -255,6 +297,38 @@ export class TaskStack implements TaskService {
     }
     return pushed;
   }
+}
+
+/** A task's spec, defaulted — absent has always meant settled. */
+const specOf = (task: Task): string => task.spec ?? "settled";
+
+/**
+ * What an update did to the SHAPE of the graph, or null when it only touched prose. Only a change that
+ * can move the ready set is worth waking another session for: a retitled task is not news, a closed
+ * one is.
+ */
+function movement(before: Task, after: Task): string | null {
+  if (before.status !== after.status) return after.status === "done" ? "closed" : "reopened";
+  if (specOf(before) !== specOf(after)) return `moved to spec ${specOf(after)}`;
+  if (!isDeepStrictEqual(before.deps, after.deps)) return "changed its dependencies";
+  return null;
+}
+
+/**
+ * The ring text for a ready set that moved: which ids entered it, and how many left. This is a HINT
+ * about which way to look, never state to act on — the reader still calls `list_ready`, which is why
+ * no total is quoted. Naming the direction is what stops "nothing changed" being a defensible read of
+ * a doorbell that rang because two tasks finished.
+ */
+function readyMoved(previous: string, now: string[]): string {
+  const before = new Set(previous ? previous.split(",") : []);
+  const fresh = now.filter((id) => !before.has(id));
+  const gone = [...before].filter((id) => !now.includes(id));
+  const parts: string[] = [];
+  if (fresh.length) parts.push(`ready now: ${fresh.join(", ")}`);
+  if (gone.length) parts.push(`${gone.length} left the ready set`);
+  if (parts.length === 0) return DEFAULT_NOTE;
+  return `${parts.join("; ")} — re-evaluate`;
 }
 
 /** One layer's batch of pushes: the batch method when the layer has one, else task by task. */
