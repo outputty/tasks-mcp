@@ -93,9 +93,10 @@ export class ConfigProvider {
     return this.get(project);
   }
 
-  /** The CLI-flag layer, in config shape. */
+  /** The CLI-flag layer, in config shape. cacheDir and syncInterval are deployment knobs, not
+   *  preferences, so they never reach the config surface. */
   private flags(): ProjectConfig {
-    const { cacheDir: _cacheDir, ...flags } = this.options;
+    const { cacheDir: _cacheDir, syncInterval: _syncInterval, ...flags } = this.options;
     return flags;
   }
 }

@@ -3,9 +3,9 @@
 // These tests pin the three rules of the stack: writes fan down, the deepest layer wins a
 // disagreement, and absence is never a claim (backfill, never delete).
 
-import { test, expect, beforeEach, afterAll } from "vitest";
+import { test, expect, beforeEach, afterAll, vi } from "vitest";
 import nock from "nock";
-import { TaskStack } from "../src/core/service.ts";
+import { TaskStack, startBackgroundSync, type TaskService } from "../src/core/service.ts";
 import { FileProvider } from "../src/core/providers/file.ts";
 import { task, tmp, tmpRepo } from "./helpers.ts";
 import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
@@ -123,4 +123,40 @@ test("an EXPLICIT delete removes the task from every layer (unlike sync's absenc
   await svc.sync(ctx); // and it stays gone — no layer resurrects it
   expect(await svc.get(ctx, "api")).toBeNull();
   cleanup();
+});
+
+test("syncSeen reconciles every project the server has served", async () => {
+  const { svc, mock, ctx, cleanup } = harness();
+  await svc.list(ctx); // the server serves this project once — now it is "seen"
+  mock.remote.set("deep", { task: task({ id: "deep", title: "born below" }) });
+
+  const results = await svc.syncSeen();
+  expect(results.has(ctx.project)).toBe(true); // the seen project was reconciled
+  expect((await svc.get(ctx, "deep"))?.title).toBe("born below"); // pulled up into the top layer
+  cleanup();
+});
+
+test("syncSeen touches nothing until a project has been served", async () => {
+  const { svc, cleanup } = harness();
+  expect((await svc.syncSeen()).size).toBe(0); // no tool call yet → nothing to sync
+  cleanup();
+});
+
+// A timing test: fake timers drive the clock, and the service is a bare counter so ONLY the loop's
+// re-arm-after-completion and stop logic is under test.
+test("the background loop syncs each interval and stops when told", async () => {
+  vi.useFakeTimers();
+  let calls = 0;
+  const fake = { syncSeen: async () => (calls++, new Map()) } as unknown as TaskService;
+  const stop = startBackgroundSync(fake, 5);
+
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(calls).toBe(1);
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(calls).toBe(2); // it re-armed after the first pass
+
+  stop();
+  await vi.advanceTimersByTimeAsync(20000);
+  expect(calls).toBe(2); // stopped: no further ticks
+  vi.useRealTimers();
 });

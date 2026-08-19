@@ -91,6 +91,8 @@ export type ServerOptions = Pick<
 > & {
   /** Where the file layer and the config files live. Defaults to the OS cache dir; never the repo. */
   cacheDir?: string;
+  /** Background-sync cadence in seconds; 0 (the default) turns the loop off. A deployment knob. */
+  syncInterval?: number;
 };
 
 /** A field a task can wear as a `field:value` GitHub label. */
