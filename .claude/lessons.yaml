@@ -173,4 +173,18 @@
     no-state rule survives intact: the text says which way to look, never a figure to act on.
     The reader-side half of this went into the plugin charter — git is not evidence of another
     session's merge.
+- title: A wake spool must broadcast; claim-by-rename let a worker swallow the orchestrator's note
+  kind: fix
+  files: [src/core/channel.ts]
+  version: 0.15.0
+  body: |
+    The spool claimed each note by rename so it delivered exactly once — correct for a work
+    queue, wrong for a doorbell. Every session's server reads the spool, but only the
+    orchestrator has a channel listener behind its doorbell, so a note read by a worker
+    session was rung into a void and destroyed. Watching made it near-certain: before, only
+    servers with --sync-interval drained, every 60s; after, every server drained instantly.
+    Observed with three listeners and one poster: the note went to worker-B, the orchestrator
+    got nothing. Fix: EventLog reads without consuming and remembers what it handed over, so
+    delivery is once PER PROCESS; files are swept by age. Rule: exactly-once is a property of
+    the reader, not of the file, whenever more than one reader exists.
 

@@ -213,9 +213,14 @@ edit rings nothing. Rings inside one tick coalesce, so ten tasks closing at once
 exactly once.
 
 A note travels between processes through a spool keyed on the **repo**, so a worker in a worktree can
-ring an orchestrator watching from the primary checkout — and the spool is **watched**, not polled, so
-it arrives at once and needs no flags. `--sync-interval` adds a background reconcile with GitHub (it
-is what notices a label edited in the web UI), but the channel no longer depends on it.
+ring an orchestrator watching from the primary checkout. The spool is **watched**, not polled, so a
+note arrives at once and needs no flags — and it is a **broadcast**: reading never consumes a note, so
+every session gets its own copy. That matters when only one of them is listening. A session started
+without the channel flag still reads the spool, and if reading took the note, that session would
+silently swallow the one the orchestrator was waiting for.
+
+`--sync-interval` adds a background reconcile with GitHub (it is what notices a label edited in the web
+UI), but the channel no longer depends on it.
 
 > The channel is **additive**. In a session started without the flag — or under `--http` — the events
 > are dropped and every tool keeps working exactly as before. Channels are an Anthropic research

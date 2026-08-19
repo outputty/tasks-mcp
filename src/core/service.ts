@@ -12,7 +12,7 @@ import type { ServerOptions } from "./types.ts";
 import { ConfigProvider, defaultCacheDir, type ConfigSources } from "./providers/config.ts";
 import { buildStack } from "./providers/provider.ts";
 import { eligible, withDefaults } from "./graph.ts";
-import { Doorbell, DEFAULT_NOTE, drainEvents, postEvent, watchEvents } from "./channel.ts";
+import { Doorbell, DEFAULT_NOTE, EventLog, postEvent } from "./channel.ts";
 
 export interface SyncResult {
   pulled: number;
@@ -72,8 +72,10 @@ export class TaskStack implements TaskService {
   // The ids that could be started, as of the last poll — the only state the doorbell needs to tell a
   // real change from a sync pass that moved nothing.
   private readonly lastEligible = new Map<string, string>();
-  // One spool watcher per project served — the cross-process doorbell, started the first time a
-  // project is named and never depending on the sync loop being switched on.
+  // One spool reader per project served — the cross-process doorbell, started the first time a
+  // project is named and never depending on the sync loop being switched on. The log is per PROCESS,
+  // not per file: reading it does not consume, so every other session still gets its own copy.
+  private readonly logs = new Map<string, EventLog>();
   private readonly watchers = new Map<string, () => void>();
 
   constructor(
@@ -104,13 +106,18 @@ export class TaskStack implements TaskService {
    *  behind the spool path shells out to git, so a repeat call would pay for it on every operation. */
   private watch(project: string): void {
     if (this.watchers.has(project)) return;
-    const stop = watchEvents(this.cacheDir(), project, (note) => this.doorbell.ring(note));
-    this.watchers.set(project, stop);
+    const log = new EventLog(this.cacheDir(), project);
+    this.logs.set(project, log);
+    this.watchers.set(
+      project,
+      log.watch((note) => this.doorbell.ring(note)),
+    );
   }
 
   stop(): void {
     for (const close of this.watchers.values()) close();
     this.watchers.clear();
+    this.logs.clear();
   }
 
   async getConfig(ctx: ProjectContext): Promise<ConfigSources> {
@@ -244,7 +251,7 @@ export class TaskStack implements TaskService {
    * startable tasks actually moved. A sync that changed nothing must not wake the session.
    */
   private async poll(project: string): Promise<void> {
-    for (const note of drainEvents(this.cacheDir(), project)) this.doorbell.ring(note);
+    this.deliverSpooled(project);
     const ids = eligible(await this.list({ project })).map((e) => e.task.id);
     const signature = ids.join(",");
     const previous = this.lastEligible.get(project);
@@ -252,6 +259,12 @@ export class TaskStack implements TaskService {
     if (previous === signature) return;
     if (previous === undefined && signature === "") return; // nothing to wake about at startup
     this.doorbell.ring(readyMoved(previous ?? "", ids));
+  }
+
+  /** The watcher is the primary reader of the spool; this backstops an fs.watch event the platform
+   *  dropped. Reading never consumes, so it cannot take a note from another session. */
+  private deliverSpooled(project: string): void {
+    for (const note of this.logs.get(project)?.read() ?? []) this.doorbell.ring(note);
   }
 
   /** The poll, never fatal. One junk field on one task throws out of `eligible`, and the background

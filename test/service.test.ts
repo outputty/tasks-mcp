@@ -7,7 +7,7 @@ import nock from "nock";
 import { TaskStack, DuplicateTaskError } from "../src/core/service.ts";
 import { FileProvider } from "../src/core/providers/file.ts";
 import { ready } from "../src/core/graph.ts";
-import { Doorbell, drainEvents, postEvent } from "../src/core/channel.ts";
+import { Doorbell, EventLog, postEvent } from "../src/core/channel.ts";
 import { task, tmp, tmpRepo } from "./helpers.ts";
 import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
 
@@ -254,14 +254,15 @@ test("a note another process spooled is delivered on the next poll", async () =>
 test("closing a task spools a note for every other process, naming what moved", async () => {
   const { svc, project, cacheDir, cleanup } = harness();
   const ctx = { project };
+  const log = new EventLog(cacheDir, project, 999_999); // read as another session would
   await svc.create(ctx, task({ id: "schema" }));
-  drainEvents(cacheDir, project, 999_999); // the create's own note, consumed
+  log.read(); // the create's own note, taken by this reader
 
   await svc.close(ctx, "schema");
 
   // Drained as ANOTHER session would drain it: our own pid is filtered out of our own reads, and a
   // closure has to travel, or the orchestrator learns of it only on its next background sync.
-  expect(drainEvents(cacheDir, project, 999_999)).toEqual(["task schema closed — re-evaluate"]);
+  expect(log.read()).toEqual(["task schema closed — re-evaluate"]);
   svc.stop();
   cleanup();
 });
@@ -269,12 +270,13 @@ test("closing a task spools a note for every other process, naming what moved", 
 test("an edit that only touches prose spools nothing — a retitled task is not news", async () => {
   const { svc, project, cacheDir, cleanup } = harness();
   const ctx = { project };
+  const log = new EventLog(cacheDir, project, 999_999);
   await svc.create(ctx, task({ id: "schema" }));
-  drainEvents(cacheDir, project, 999_999);
+  log.read();
 
   await svc.update(ctx, "schema", { title: "Design the schema" });
 
-  expect(drainEvents(cacheDir, project, 999_999)).toEqual([]);
+  expect(log.read()).toEqual([]);
   svc.stop();
   cleanup();
 });
@@ -282,15 +284,14 @@ test("an edit that only touches prose spools nothing — a retitled task is not 
 test("a dependency change spools, because it can move what is ready", async () => {
   const { svc, project, cacheDir, cleanup } = harness();
   const ctx = { project };
+  const log = new EventLog(cacheDir, project, 999_999);
   await svc.create(ctx, task({ id: "schema" }));
   await svc.create(ctx, task({ id: "api" }));
-  drainEvents(cacheDir, project, 999_999);
+  log.read();
 
   await svc.update(ctx, "api", { deps: ["schema"] });
 
-  expect(drainEvents(cacheDir, project, 999_999)).toEqual([
-    "task api changed its dependencies — re-evaluate",
-  ]);
+  expect(log.read()).toEqual(["task api changed its dependencies — re-evaluate"]);
   svc.stop();
   cleanup();
 });
