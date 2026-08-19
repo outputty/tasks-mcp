@@ -20,7 +20,7 @@ npx -y @outputty/tasks-mcp blockers --project /abs/repo
 # -> [{ "id": "schema", "blocks": 3, "blocked": "api, ui, deploy", "priority": "normal" }, …]
 
 # the working set
-npx -y @outputty/tasks-mcp ready    --project /abs/repo   # ids that can be worked right now
+npx -y @outputty/tasks-mcp ready    --project /abs/repo   # ids that can be worked now, best first
 npx -y @outputty/tasks-mcp planning --project /abs/repo   # ids planning still owns
 npx -y @outputty/tasks-mcp schedule --project /abs/repo   # the whole plan as dependency layers
 npx -y @outputty/tasks-mcp list     --project /abs/repo   # every task, full records
@@ -38,6 +38,9 @@ npx -y @outputty/tasks-mcp close api --project /abs/repo
 npx -y @outputty/tasks-mcp delete junk --project /abs/repo  # permanent; needs delete-issue permission
 npx -y @outputty/tasks-mcp sync --project /abs/repo       # reconcile every layer, both ways
 
+# ring the channel doorbell so an idle session re-evaluates
+npx -y @outputty/tasks-mcp notify --note "spec gate on channel-emitter" --project /abs/repo
+
 # trails — the task's GitHub issue comment thread (every comment an entry)
 npx -y @outputty/tasks-mcp trail-add api --kind decision --note "GraphQL only" \
   --link types.ts:79 --project /abs/repo   # posts a comment on the issue
@@ -49,6 +52,10 @@ npx -y @outputty/tasks-mcp trail api --project /abs/repo
 `--project` defaults to the current directory. The global flags (`--provider`, `--no-projects`,
 `--board`, `--project-number`, `--cache-dir`) work on every command and mean the same as in `.mcp.json`
 args.
+
+`notify` is the hook-friendly one: any process — a git hook, CI, a worker session — can ring the
+doorbell of a session running elsewhere on the machine, because the note travels through a spool keyed
+on the repo rather than on the checkout path.
 
 `add` options: `--title`, `--deps a,b`, `--scope src/api`, `--tier 1..4`, `--qa skip|inline|subagent`,
 `--priority high|normal|low`, `--brief`, `--contract`. `trail-add` options: `--note` (required),

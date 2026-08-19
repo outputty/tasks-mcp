@@ -288,3 +288,44 @@ test("/health answers with the server info", async () => {
   expect(health.server.version).toBe(pkg.version);
   await cleanup();
 });
+
+// --- the channel ------------------------------------------------------------------------------------
+
+test("the server declares itself a channel, and never opts into permission relay", async () => {
+  const { client, cleanup } = await harness();
+  const capabilities = client.getServerCapabilities() as any;
+  expect(capabilities.experimental["claude/channel"]).toEqual({});
+  // relay would hand tool-approval authority to whoever can reach the channel; there is no human there
+  expect(capabilities.experimental["claude/channel/permission"]).toBeUndefined();
+  expect(client.getInstructions()).toMatch(/doorbell, not a report/);
+  await cleanup();
+});
+
+test("list_ready is ranked: reach multiplied by priority, best first", async () => {
+  const { client, project, cleanup } = await harness();
+  const add = (args: object) =>
+    client.callTool({ name: "add_task", arguments: { project, ...args } });
+  await add({ id: "solo", priority: "high" }); // (0 + 1) x 3 = 3
+  await add({ id: "hub", priority: "low" }); //   (5 + 1) x 1 = 6
+  for (const id of ["w1", "w2", "w3", "w4", "w5"]) await add({ id, deps: "hub" });
+
+  const res = structured(await client.callTool({ name: "list_ready", arguments: { project } }));
+  expect(res.ids).toEqual(["hub", "solo"]);
+  expect(res.tasks.map((t: any) => [t.id, t.blocks, t.score])).toEqual([
+    ["hub", 5, 6],
+    ["solo", 0, 3],
+  ]);
+  await cleanup();
+});
+
+test("notify rings the doorbell with a one-line reason", async () => {
+  const { client, project, cleanup } = await harness();
+  const res = structured(
+    await client.callTool({
+      name: "notify",
+      arguments: { project, note: "spec gate on channel-emitter" },
+    }),
+  );
+  expect(res.note).toBe("spec gate on channel-emitter");
+  await cleanup();
+});

@@ -8,15 +8,19 @@ export {
   type TaskService,
   type SyncResult,
 } from "./service.ts";
+export { Doorbell, postEvent, drainEvents, DEFAULT_NOTE, type RingSink } from "./channel.ts";
 export {
   ConfigProvider,
   ProjectConfigSchema,
   defaultCacheDir,
   projectSlug,
+  repoRoot,
+  repoSlug,
   type ConfigSources,
 } from "./providers/config.ts";
 export {
   ready,
+  eligible,
   planning,
   schedule,
   prereqs,
@@ -28,6 +32,7 @@ export {
   withDefaults,
   idList,
   type Blocker,
+  type Eligible,
 } from "./graph.ts";
 export type {
   Task,

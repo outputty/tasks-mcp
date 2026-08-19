@@ -124,6 +124,44 @@ and the board (found or created). Reads never trigger it; the first write or `sy
 
 ## The graph engine
 
-`ready`, `planning`, `schedule`, `prereqs`, and `blockers` are pure functions of a `Task[]` — no I/O,
-no provider. Reachability (`prereqs`, `blockers`) runs on [graphology](https://graphology.github.io/);
-traversal prunes at done tasks, because a finished task already satisfied its side of the graph.
+`ready`, `planning`, `schedule`, `prereqs`, `blockers`, and `eligible` are pure functions of a
+`Task[]` — no I/O, no provider. Reachability (`prereqs`, `blockers`, `eligible`) runs on
+[graphology](https://graphology.github.io/); traversal prunes at done tasks, because a finished task
+already satisfied its side of the graph.
+
+`eligible` ranks the ready tasks by `(blocks + 1) × priorityWeight` — high 3, normal 2, low 1.
+Priority **multiplies** reach rather than outranking it, so a low task blocking five beats a high task
+blocking none, while priority decides between tasks of comparable reach. The ranking is a default
+order for a caller to start from, never the decision: an orchestrator re-reads its own roadmap before
+it chooses, and the roadmap is not a concept this package has.
+
+## The channel — one doorbell, two hops
+
+The MCP server declares the `claude/channel` capability, so Claude Code registers a notification
+listener and the server can push `notifications/claude/channel` into a live session.
+`claude/channel/permission` is deliberately **not** declared: relay forwards tool-approval prompts to
+whoever is on the other end of a channel, and here that is a spool file, not a human.
+
+Exactly one event exists, and it carries no state. Channel events are delivered on the session's next
+turn and batched, so any count stamped at emit time would be stale by the time it is read; the reader
+calls `list_ready` instead. Two mechanisms carry a ring, because a worker session and an orchestrator
+never share a process:
+
+| Hop           | Mechanism                                                            | Where             |
+| ------------- | -------------------------------------------------------------------- | ----------------- |
+| in-process    | `Doorbell` — coalesces every ring in one tick into a single event    | `core/channel.ts` |
+| cross-process | a spool file per note, claimed by rename so it delivers exactly once | `core/channel.ts` |
+
+`TaskStack.notify` does both: it rings locally _and_ posts to the spool, and a drainer discards notes
+it posted itself so one ring is never delivered twice. The spool keys on `repoSlug` — the primary
+checkout, resolved through `git rev-parse --git-common-dir` — rather than on `projectSlug`, so a note
+raised in a worktree reaches a session watching from the checkout it was cut from.
+
+The background sync loop is what drains the spool and compares the eligible set from pass to pass: the
+channel is dark without `--sync-interval`. Only the **stdio** transport wires the doorbell to a
+notification (`mcp/stdio.ts`), because that is how Claude Code spawns a channel server. Under HTTP the
+ring goes nowhere and every tool still works.
+
+**Dispatch is not modelled here.** `list_ready` answers what the graph allows, and a task being worked
+right now still appears in it. Tracking what is in flight, and capping how much runs at once, belongs
+to whatever starts the work — this package holds the graph, not the schedule.

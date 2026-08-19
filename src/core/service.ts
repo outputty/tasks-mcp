@@ -9,9 +9,10 @@ import { isDeepStrictEqual } from "node:util";
 import type { ProjectConfig, ProjectContext, Task, TrailEntry } from "./types.ts";
 import type { Provider, ProviderState } from "./providers/provider.ts";
 import type { ServerOptions } from "./types.ts";
-import { ConfigProvider, type ConfigSources } from "./providers/config.ts";
+import { ConfigProvider, defaultCacheDir, type ConfigSources } from "./providers/config.ts";
 import { buildStack } from "./providers/provider.ts";
-import { withDefaults } from "./graph.ts";
+import { eligible, withDefaults } from "./graph.ts";
+import { Doorbell, drainEvents, postEvent } from "./channel.ts";
 
 export interface SyncResult {
   pulled: number;
@@ -45,6 +46,8 @@ export interface TaskService {
   appendTrail(ctx: ProjectContext, id: string, entry: TrailEntry): Promise<TrailEntry[]>;
   /** Every layer of the configuration for this project, plus the effective result. */
   getConfig(ctx: ProjectContext): Promise<ConfigSources>;
+  /** Ring the doorbell from anywhere, with a one-line reason. */
+  notify(ctx: ProjectContext, note: string): Promise<void>;
   /** Write preferences centrally: into the global spec, or one repo's override. */
   setConfig(
     ctx: ProjectContext,
@@ -62,12 +65,20 @@ export class TaskStack implements TaskService {
   // Every project this service has been asked about — the set the background loop reconciles. The
   // server has no cwd of its own, so a project is only knowable once a tool call names it.
   private readonly seen = new Set<string>();
+  // The ids that could be started, as of the last poll — the only state the doorbell needs to tell a
+  // real change from a sync pass that moved nothing.
+  private readonly lastEligible = new Map<string, string>();
 
   constructor(
     private readonly options: ServerOptions = {},
     private readonly providers?: Provider[],
     private readonly config: ConfigProvider = new ConfigProvider(options),
+    private readonly doorbell: Doorbell = new Doorbell(),
   ) {}
+
+  private cacheDir(): string {
+    return this.options.cacheDir ?? defaultCacheDir();
+  }
 
   private layers(ctx: ProjectContext): Provider[] {
     this.seen.add(ctx.project);
@@ -145,6 +156,13 @@ export class TaskStack implements TaskService {
     }
   }
 
+  /** Ring here AND post for every OTHER process watching this repo — a worker session and the
+   *  orchestrator never share one, so a note raised in either has to travel to the other. */
+  async notify(ctx: ProjectContext, note: string): Promise<void> {
+    this.doorbell.ring(note);
+    postEvent(this.cacheDir(), ctx.project, note);
+  }
+
   async getTrail(ctx: ProjectContext, id: string): Promise<TrailEntry[]> {
     return (await this.trailLayer(ctx)).getTrail!(ctx, id);
   }
@@ -182,8 +200,27 @@ export class TaskStack implements TaskService {
 
   async syncSeen(): Promise<Map<string, SyncResult>> {
     const out = new Map<string, SyncResult>();
-    for (const project of this.seen) out.set(project, await this.syncQuietly(project));
+    for (const project of this.seen) {
+      out.set(project, await this.syncQuietly(project));
+      await this.poll(project);
+    }
     return out;
+  }
+
+  /**
+   * After one project's sync: deliver anything another process spooled, then ring if the set of
+   * startable tasks actually moved. A sync that changed nothing must not wake the session.
+   */
+  private async poll(project: string): Promise<void> {
+    for (const note of drainEvents(this.cacheDir(), project)) this.doorbell.ring(note);
+    const signature = eligible(await this.list({ project }))
+      .map((e) => e.task.id)
+      .join(",");
+    const previous = this.lastEligible.get(project);
+    this.lastEligible.set(project, signature);
+    if (previous === signature) return;
+    if (previous === undefined && signature === "") return; // nothing to wake about at startup
+    this.doorbell.ring();
   }
 
   /** One project's sync for the background loop: an error is logged to stderr and swallowed, so one
@@ -257,9 +294,10 @@ function sameTask(a: Task, b: Task): boolean {
   return isDeepStrictEqual(withDefaults(a), withDefaults(b));
 }
 
-/** The production service: the file layer on top, the project's configured remote beneath it. */
-export function makeService(options: ServerOptions = {}): TaskService {
-  return new TaskStack(options);
+/** The production service: the file layer on top, the project's configured remote beneath it. The
+ *  doorbell is passed in by whatever can deliver a ring — the stdio entry wires it to the channel. */
+export function makeService(options: ServerOptions = {}, doorbell?: Doorbell): TaskService {
+  return new TaskStack(options, undefined, undefined, doorbell);
 }
 
 /**

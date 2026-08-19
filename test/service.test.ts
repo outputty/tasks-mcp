@@ -7,6 +7,7 @@ import nock from "nock";
 import { TaskStack, DuplicateTaskError } from "../src/core/service.ts";
 import { FileProvider } from "../src/core/providers/file.ts";
 import { ready } from "../src/core/graph.ts";
+import { Doorbell, postEvent } from "../src/core/channel.ts";
 import { task, tmp, tmpRepo } from "./helpers.ts";
 import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
 
@@ -170,5 +171,77 @@ test("sync reports real conflicts when two issues claim one task id", async () =
   });
 
   expect((await svc.sync(ctx)).conflicts).toBe(1); // no longer hardwired 0
+  cleanup();
+});
+
+// --- the background poll: what actually rings the channel -------------------------------------------
+
+/** A doorbell wired to an array, so a test can read what it delivered. */
+function recordingBell(): { bell: Doorbell; rung: string[] } {
+  const bell = new Doorbell();
+  const rung: string[] = [];
+  bell.on((note) => void rung.push(note));
+  return { bell, rung };
+}
+
+/** The harness with a doorbell attached, plus the notes it delivered. */
+function ringingHarness() {
+  installNock(new NockGitHub());
+  const project = tmpRepo();
+  const cache = tmp();
+  const { bell, rung } = recordingBell();
+  const layers = [
+    new FileProvider({ cacheDir: cache.dir }),
+    nockProvider({ projects: false, cacheDir: cache.dir }),
+  ];
+  const svc = new TaskStack({ cacheDir: cache.dir }, layers, undefined, bell);
+  const cleanup = () => {
+    project.cleanup();
+    cache.cleanup();
+  };
+  return { svc, rung, project: project.dir, cacheDir: cache.dir, settle, cleanup };
+}
+
+/** Let the doorbell's coalescing timer fire. */
+const settle = () => new Promise((r) => setTimeout(r, 5));
+
+test("the background poll rings when what can be started changes, and stays quiet when it does not", async () => {
+  const { svc, rung, project, settle, cleanup } = ringingHarness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "schema" }));
+
+  await svc.syncSeen(); // first pass: a startable task appeared
+  await settle();
+  expect(rung).toEqual(["task graph changed — re-evaluate"]);
+
+  await svc.syncSeen(); // nothing moved
+  await settle();
+  expect(rung).toHaveLength(1);
+
+  await svc.create(ctx, task({ id: "parser" }));
+  await svc.syncSeen();
+  await settle();
+  expect(rung).toHaveLength(2);
+  cleanup();
+});
+
+test("a poll that finds nothing startable does not wake the session at startup", async () => {
+  const { svc, rung, project, settle, cleanup } = ringingHarness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "later", spec: "drafting" })); // planning owns it, no worker can start
+  await svc.syncSeen();
+  await settle();
+  expect(rung).toEqual([]);
+  cleanup();
+});
+
+test("a note another process spooled is delivered on the next poll", async () => {
+  const { svc, rung, project, cacheDir, settle, cleanup } = ringingHarness();
+  await svc.list({ project }); // the server only polls projects it has served
+  postEvent(cacheDir, project, "spec gate on channel-emitter", 999_999);
+
+  await svc.syncSeen();
+  await settle();
+  expect(rung).toContain("spec gate on channel-emitter");
   cleanup();
 });
