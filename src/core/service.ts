@@ -36,6 +36,9 @@ export interface TaskService {
   /** Permanently remove a task from every layer (deepest-first). Explicit — not sync's absence rule. */
   delete(ctx: ProjectContext, id: string): Promise<void>;
   sync(ctx: ProjectContext): Promise<SyncResult>;
+  /** Reconcile every project this service has served so far, one at a time; a project's own failure
+   *  is logged and skipped, never thrown. This is what the background loop drives. */
+  syncSeen(): Promise<Map<string, SyncResult>>;
   /** A task's trail: the append-only journal of decisions and actions behind it. */
   getTrail(ctx: ProjectContext, id: string): Promise<TrailEntry[]>;
   /** Append one entry to a task's trail; returns the whole trail. Refuses an unknown task. */
@@ -56,6 +59,9 @@ export class TaskStack implements TaskService {
   // One stack per remote name — layers cache their per-project init (repo, board, index), so handing
   // out fresh instances would redo that remote work on every call.
   private readonly stacks = new Map<string, Provider[]>();
+  // Every project this service has been asked about — the set the background loop reconciles. The
+  // server has no cwd of its own, so a project is only knowable once a tool call names it.
+  private readonly seen = new Set<string>();
 
   constructor(
     private readonly options: ServerOptions = {},
@@ -64,6 +70,7 @@ export class TaskStack implements TaskService {
   ) {}
 
   private layers(ctx: ProjectContext): Provider[] {
+    this.seen.add(ctx.project);
     if (this.providers) return this.providers;
     const remote = this.config.get(ctx.project).provider ?? "github";
     let stack = this.stacks.get(remote);
@@ -173,6 +180,23 @@ export class TaskStack implements TaskService {
     return { pulled: merged.size, pushed, conflicts: conflictCount(pulls) };
   }
 
+  async syncSeen(): Promise<Map<string, SyncResult>> {
+    const out = new Map<string, SyncResult>();
+    for (const project of this.seen) out.set(project, await this.syncQuietly(project));
+    return out;
+  }
+
+  /** One project's sync for the background loop: an error is logged to stderr and swallowed, so one
+   *  project's failure never stops the sweep or kills the loop. Best-effort, like the board sync. */
+  private async syncQuietly(project: string): Promise<SyncResult> {
+    try {
+      return await this.sync({ project });
+    } catch (err) {
+      console.error(`[tasks-mcp] background sync failed for ${project}:`, err);
+      return { pulled: 0, pushed: 0, conflicts: 0 };
+    }
+  }
+
   /** Write one task through every layer, top to bottom. */
   private async fanDown(ctx: ProjectContext, task: Task): Promise<void> {
     for (const layer of await this.all(ctx)) await layer.upsert(ctx, task);
@@ -236,4 +260,28 @@ function sameTask(a: Task, b: Task): boolean {
 /** The production service: the file layer on top, the project's configured remote beneath it. */
 export function makeService(options: ServerOptions = {}): TaskService {
   return new TaskStack(options);
+}
+
+/**
+ * Start the background sync loop: every `seconds`, reconcile every project the server has served.
+ * It re-arms only after each pass completes, so a slow sync never overlaps the next, and the timer is
+ * unref'd so it never keeps the process alive on its own. Returns a stop function. `seconds` must be
+ * > 0 — the caller gates on the flag. E.g. `startBackgroundSync(svc, 60)` syncs every minute.
+ */
+export function startBackgroundSync(service: TaskService, seconds: number): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const loop = (): void => {
+    timer = setTimeout(() => {
+      void service.syncSeen().finally(() => {
+        if (!stopped) loop();
+      });
+    }, seconds * 1000);
+    timer.unref?.();
+  };
+  loop();
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  };
 }

@@ -8,7 +8,7 @@ import { Command } from "commander";
 import { runStdio } from "../src/mcp/stdio.ts";
 import { createHttpServer } from "../src/mcp/http.ts";
 import { SERVER_INFO } from "../src/mcp/server.ts";
-import { makeService } from "../src/core/service.ts";
+import { makeService, startBackgroundSync } from "../src/core/service.ts";
 import type { ServerOptions } from "../src/core/types.ts";
 import type { ProjectContext, TrailEntry, TrailKind } from "../src/core/types.ts";
 import {
@@ -36,6 +36,12 @@ const program = new Command()
   .option("--no-projects", "disable the Projects board sync")
   .option("--board <title>", "board title to find or create (default Tasks)")
   .option("--cache-dir <dir>", "where the file layer keeps its task files")
+  .option(
+    "--sync-interval <seconds>",
+    "background sync cadence in seconds while the MCP server runs (0 = off)",
+    (v) => Number.parseInt(v, 10),
+    0,
+  )
   .option("--project <path>", "target repo for subcommands (default: cwd)");
 
 /** The CLI-set knobs, in ServerOptions shape. `projects` is only carried when actually turned off. */
@@ -47,6 +53,7 @@ function serverOptions(): ServerOptions {
     ...(opts.projects === false ? { projects: false } : {}),
     ...(opts.board ? { board: opts.board } : {}),
     ...(opts.cacheDir ? { cacheDir: opts.cacheDir } : {}),
+    ...(opts.syncInterval ? { syncInterval: opts.syncInterval } : {}),
   };
 }
 
@@ -195,14 +202,17 @@ program
   .description("reconcile every layer of the stack, both ways")
   .action(async () => out(await service().sync(ctx())));
 
-// No subcommand: run the MCP server on the chosen transport.
+// No subcommand: run the MCP server on the chosen transport. One service instance backs both the
+// transport and the background loop, so the loop reconciles exactly the projects the server serves.
 program.action(async () => {
   const opts = program.opts();
-  if (!opts.http) return runStdio(service());
+  const svc = service();
+  if (opts.syncInterval > 0) startBackgroundSync(svc, opts.syncInterval);
+  if (!opts.http) return runStdio(svc);
   console.error(
     `tasks-mcp (http) listening on http://localhost:${opts.port}/mcp  (health: /health)`,
   );
-  createHttpServer(service()).listen(opts.port);
+  createHttpServer(svc).listen(opts.port);
 });
 
 await program.parseAsync(process.argv);
