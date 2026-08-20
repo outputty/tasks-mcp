@@ -1,0 +1,81 @@
+# tasks-mcp — Lessons
+
+> The archive: discoveries, bug fixes, user directions, experiments — and every approach that was
+> considered and dropped, so it is never re-proposed. Never features. Written at the merge step,
+> oldest first. Large: `grep` it by path or title rather than reading it whole.
+
+**The id-label died for the body block; issues went all-GraphQL (0.2.0).** *direction.* Beginning: every managed issue wore an id label, and issue CRUD mixed REST and GraphQL. Problem: the label was a second key to keep consistent, and creating one needed label node-ids before any issue could exist. End: the task id leads the hidden YAML body block (the block IS the management marker), and issues use GraphQL createIssue/updateIssue/ closeIssue/reopenIssue with node-id handles end to end. Cost discovered later: without a label, sync could no longer see hand-opened issues — fixed in 0.3.0 by adoption (import as gh-<number>, stamp the block). Commits 60820a3, 3d8a5b3.
+
+Files: `src/core/providers/github.ts`.
+
+**The committed cache-as-authority lasted two versions (0.4.0).** *experiment.* Beginning (0.2.0, d000f7b): .claude/tasks.cache.yaml was committed to the user's repo as THE authority and the only home of the dep graph - the reasoning was that a backend like Issues cannot store deps, so the repo must. Problem: an authoritative file in the user's repo is a merge-conflict magnet and couples every clone to tracker state. End (0.4.0, 1dac343): deps moved into the issue body block, the cache moved to the OS cache dir and became disposable - sync reconstructs the full task from the issues. The stack rules (0.7.0) then generalized this: the file is just the top layer, and absence is not a claim.
+
+Files: `src/core/providers/file.ts`.
+
+**nock cannot intercept Bun's fetch - the runtime moved to Node (0.5.0).** *discovery.* Beginning: a bun-only server (Bun.YAML, Bun.serve, Bun.hash, Bun.spawnSync). Problem: the chosen test discipline - e2e through the real Octokit with the wire faked - needs nock, and nock can only intercept Node's fetch. End (351b2e8): Node-native portable APIs (yaml, node:crypto, node:child_process, process streams); runs under Node >= 18 AND bun, but `npm test` must run vitest on Node, never `bun test`. The standing rule "runtime-portable, no Bun-only APIs in src/ or bin/" comes from this.
+
+Files: `docs/development.md`, `package.json`.
+
+**Publish trigger pivoted twice before settling on the Release event (0.5.0).** *experiment.* Beginning: publish on GitHub Release (351b2e8) with a stored NPM_TOKEN. Then: OIDC Trusted Publishing replaced the token (b50b486); publish moved to pushed version tags (88d72c9); and moved BACK to the Release event (7e72465) - a tag push proved too easy to fire by accident, and a Release is a deliberate, documented act. End state: pushing code never publishes; only publishing a Release does, guarded by tag==version and version-is-new. CLAUDE.md adds the human rule: ask before releasing, never publish unprompted (73a4275).
+
+Files: `.github/workflows/publish.yml`.
+
+**ts-match is dead; ts-pattern is the maintained standard (0.6.0).** *discovery.* The user asked for "ts-match". That npm package is unmaintained - last publish 2022, ~460 downloads/week - so ts-pattern (~5.4M/week) fills the role, recorded in CLAUDE.md so the substitution is never re-litigated. Pattern: when a requested dependency is abandoned, substitute the maintained standard and write the why beside the rule.
+
+Files: `CLAUDE.md`.
+
+**The intermittent MCP-test hang was two half-open connections (0.6.0).** *bugfix.* Beginning: the dependency test twice timed out at exactly 5s (once locally, once in CI) - an indefinite hang, not slowness. Problem, two paths: the SDK transport held a GET /mcp open as an SSE stream, and server.close waited on a pooled keep-alive socket the client transport did not own. End (in 0956e3e): the stateless JSON server answers non-POST /mcp with 405 + Allow itself, and test cleanup calls closeAllConnections. A test that times out at exactly its limit is hanging, not slow - look for a held socket.
+
+Files: `src/mcp/http.ts`.
+
+**CI toolchain needs Node 24 while the package still runs on 18 (0.6.0).** *discovery.* tsdown loads its TS config via the optional unrun peer on Nodes without native type stripping; unrun needs Promise.withResolvers, which Node 20 (EOL) lacks. CI runs Node 24. The published package's engines stay >= 18 - the toolchain requirement is build-time only. Local Node 26 strips types natively and never shows the problem, which is why CI caught it.
+
+Files: `.github/workflows/ci.yml`, `docs/development.md`.
+
+**Remote handles left the shared model (0.7.0).** *direction.* Beginning: a refs map (task id -> issue/card ids) traveled through the shared cache model. Problem: every layer's private bookkeeping leaked into every other layer's data, and a same-id re-add could duplicate an issue. End (382939c): each layer owns its handles in a private index built from one listing pass; the seam shrank to init/pull/upsert; create-vs-update became the layer's own call. Legacy cache files with a refs key still load; the key is dropped on read.
+
+Files: `src/core/providers/provider.ts`.
+
+**Duplicate task ids resolved last-wins silently; now first-wins, counted (0.8.0).** *bugfix.* Beginning: when two issues claimed one task id (a race, or a hand-written block), the NEWEST silently shadowed the record in both the pull map and the upsert index, and SyncResult.conflicts was hardwired 0. End (in 4c11121): every read and write resolves deterministically to the OLDEST issue (first-wins collate(), owned once), the collision is logged and flagged per-task, and conflicts reports the real count. Nothing is auto-deleted; merging the duplicate stays a human call.
+
+Files: `src/core/providers/github.ts`.
+
+**Two documented caveats dissolved by architecture, not by fixes (0.2.0).** *discovery.* 0fc7566 documented two live caveats: GitHub list-indexing is eventually consistent (a just created issue can be missing from the next list call), and the REST issues endpoint sits on a deprecation clock. Neither was ever "fixed": reads going cache-local (d000f7b) made the consistency lag unobservable, and the all-GraphQL rewrite (60820a3) made the REST clock irrelevant - 1h45m after the caveat was written. A caveat can be a symptom of a design about to change; check whether the next reshape deletes it before scheduling work on it.
+
+Files: `README.md`.
+
+**Configuration left the user's repo for the server (0.8.0).** *direction.* Beginning: a per-project .claude/tasks-mcp.config.yaml inside the user's repo, plus (until 0.4.0) OUTPUTTY_* env vars. Problem: the tracker wrote configuration into repos it was supposed to only track, and env vars hid deployment state. End (user ruling 2026-08-17, in 4c11121): ConfigProvider stores a global spec plus per-repo overrides BESIDE the caches, set through get_config/set_config; env vars became CLI flags (1dac343); nothing is configured by files inside the user's repo. GITHUB_TOKEN/GH_TOKEN stay for credentials.
+
+Files: `src/core/providers/config.ts`.
+
+**Trails moved from a local file to GitHub issue comments (0.10.0).** *direction.* First cut (v0.9.0, PR #21, PUBLISHED to npm): a per-task local .trails/<id>.yaml, append-only, never synced — chosen so decision prose stayed LOCAL, with a TEXT-APPEND write to preserve hand-authored block scalars (the reason the original tasks.js refused to write trails). User reworked it right after, shipped as v0.10.0 (2026-08-17): back trails with GitHub ISSUE COMMENTS, and MERGE trails into the task provider — the layer that owns the issue owns its comments. So TrailStore and the local file are gone; the Provider seam gained optional getTrail/appendTrail; GitHubProvider does addComment + the comments connection. EVERY comment is an entry (people's included); kind/link ride a hidden <!-- outputty:trail --> marker on outputty's own writes. Consequence: trails now need a GitHub-backed project and reads hit the network. Do NOT re-propose a local .trails store or a trailsDir knob — that design was considered and dropped.
+
+Files: `src/core/providers/github.ts`, `src/core/service.ts`, `src/core/providers/provider.ts`.
+
+**A round-trip probe through your own process proves nothing about the channel (0.15.0).** *discovery.* An orchestrator confirmed the channel was "alive in both directions" by calling notify and watching its own note echo back. It was a false positive: notify rings the local doorbell AND spools for other processes, so a note raised in the session that receives it never leaves the process. The cross-process leg was untested by that probe and, at the time, dead — drainEvents was reachable only from the background sync loop, off by default. Test a cross-process path with two real processes or not at all; the probe now lives in the suite as the watchEvents tests, and the doc says the spool is watched, not polled.
+
+Files: `src/core/service.ts`, `src/core/channel.ts`.
+
+**A wake path behind an opt-in flag is a wake path that will be off (0.15.0).** *fix.* The channel's cross-process half ran only inside startBackgroundSync, gated on --sync-interval (default 0). The plugin documented the workaround ("the channel is dark without it") instead of the bug, and this repo's own .mcp.json never got the flag. Fix: watchEvents puts an fs.watch on the spool so delivery needs no configuration, with the sync drain kept behind it as a backstop for the events fs.watch coalesces or misses. Rule the fix encodes: if a feature only works when someone remembers a flag, the flag is the bug.
+
+Files: `src/core/channel.ts`, `src/core/service.ts`, `.mcp.json`.
+
+**A doorbell that never says what moved gets rationalised away (0.15.0).** *direction.* Every ring read "task graph changed — re-evaluate", and Doorbell.flush replaced a burst with "N changes — re-evaluate", discarding the texts exactly when there was most to say. An orchestrator answered three such rings by checking git log origin/main WITHOUT fetching, got its session-start head back, and concluded nothing had merged — overriding a status: done it had already seen. Two tasks stayed undispatched. Rings now name the movement (task <id> closed, ready now: <ids>) and a burst joins them, first three named plus a count. The no-state rule survives intact: the text says which way to look, never a figure to act on. The reader-side half of this went into the plugin charter — git is not evidence of another session's merge.
+
+Files: `src/core/channel.ts`.
+
+**A wake spool must broadcast; claim-by-rename let a worker swallow the orchestrator's note (0.15.0).** *fix.* The spool claimed each note by rename so it delivered exactly once — correct for a work queue, wrong for a doorbell. Every session's server reads the spool, but only the orchestrator has a channel listener behind its doorbell, so a note read by a worker session was rung into a void and destroyed. Watching made it near-certain: before, only servers with --sync-interval drained, every 60s; after, every server drained instantly. Observed with three listeners and one poster: the note went to worker-B, the orchestrator got nothing. Fix: EventLog reads without consuming and remembers what it handed over, so delivery is once PER PROCESS; files are swept by age. Rule: exactly-once is a property of the reader, not of the file, whenever more than one reader exists.
+
+Files: `src/core/channel.ts`.
+
+**In-flight belongs in the graph, not in the dispatcher's memory (0.15.0).** *direction.* list_ready answered what the GRAPH allows, so a task being built still appeared in it, and the charter told the orchestrator to hold the in-flight set in its head and subtract it. That set does not survive a compaction. Two heavier fixes were considered and dropped: an atomic claim/lease with pid liveness (real, but it only pays for itself if WORKERS PULL -- with an orchestrator dispatching there is no race to arbitrate) and a separate `started` flag (smaller, but two fields describing one lifecycle and no board mapping). End state: status gained a third value, in_progress. ready() already read `status === "open"`, so it excluded it with no change at all. On GitHub the issue stays OPEN with a status:in_progress label -- GitHub has no issue state for "someone is on it" -- and the board card moves to In Progress, so a human dragging a card round-trips. It clears itself: close sets done, and spec:replan releases it back to open so an abandoned build cannot strand a task.
+
+Files: `src/core/types.ts`, `src/core/graph.ts`, `src/core/providers/github.ts`.
+
+**Both a visible spec and the machine block; the visible half is regenerated, never read (0.11.0).** *direction.* Beginning: `renderBody` put the whole record — brief, contract, scope, deps — inside the hidden `<!-- outputty:task -->` comment. GitHub renders HTML comments invisibly, so an issue `add_task` created showed a **blank body** in the browser; `get_task` and BUILD read it fine, and a human browsing the repo saw nothing. The user's ruling (2026-08-17) was **both**, and two properties make that safe rather than a second source of truth: the visible spec is **derived on every write and never parsed back**, so it cannot drift; and it is **sentineled** (`<!-- outputty:spec -->`), so `parseBody` strips it and regeneration neither duplicates it nor clobbers genuinely human prose below it. Consequence to keep saying out loud: the region is MCP-owned, so a hand-edit *inside* the sentinels is overwritten on the next write — durable human notes go below it, or into the trail.
+
+Files: `src/core/providers/github.ts`, `test/github.test.ts`.
+
+**Sub-issues over a project per roadmap item; and roadmap = WHY, not WHAT (0.16.0).** *direction.* The ask was a GitHub Project per roadmap item with its tasks nested inside. Feasible — a repo links many projects, `createProjectV2` takes a `repositoryId`, an issue can sit on several boards — but **dropped on cost**: one board per item is at least one extra paged read per item per sync, against a file layer whose whole point is that reads are local. Measured the alternative live against `outputty/tasks-mcp`: adding `parent` and `subIssuesSummary` to the issues query the provider already pages left `rateLimit.cost` at 1 and `nodeCount` at 2100 — membership for free, plus GitHub's own hierarchy and progress bar. So a task's `target` **is** its issue's parent. A single-select `Target` field with a grouped view on the one Tasks board remains the cheap way to get the per-item board picture if it is ever wanted; per-target boards are not built. Two smaller calls fell out: a target is a `Task` wearing `type: target` rather than a second record type (the roadmap row IS the task shape, so `schedule`/`prereqs`/`blockers` work one altitude up unchanged), and `type` rides the body block **as well as** its label, because with `labels: false` a target would round-trip as a plain task and be dispatched. This also **revises the 2026-08-11 ruling "product=why, roadmap=what, tasks=how"**: what and status are now derived from the graph, so `roadmap.md` keeps only the half nothing else holds — why each target is worth building — and links to its issue. Do NOT re-propose a project per roadmap item, a separate `Roadmap` record type, or a `target:` label as the storage.
+
+Files: `src/core/types.ts`, `src/core/graph.ts`, `src/core/service.ts`, `src/core/providers/github.ts`, `src/mcp/server.ts`, `bin/cli.ts`, `.claude/roadmap.md`, `.claude/architecture.md`.

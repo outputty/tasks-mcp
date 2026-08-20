@@ -36,6 +36,7 @@ import type {
 } from "../types.ts";
 import {
   LABEL_FIELD_NAMES,
+  NODE_TYPES,
   STATUSES,
   TIERS,
   QA_LEVELS,
@@ -102,13 +103,25 @@ interface GhIssue {
   body: string | null;
   state: "OPEN" | "CLOSED";
   labels?: { nodes: Array<{ name: string }> };
+  /** The sub-issue edge: the issue this one hangs under, which is how `target` is stored. */
+  parent?: { id: string } | null;
 }
 
 const META_OPEN = "<!-- outputty:task";
 const META_CLOSE = "-->";
 // Fields carried in the body block, in a stable order. `id` leads; title/status live outside the
 // block; the label-worn fields live on the issue as labels.
-const META_KEYS = ["deps", "scope", "brief", "contract", "attempts", "discovered_from"] as const;
+// `type` rides here AS WELL as on its label: with `labels: false` the label is never written, and a
+// target that round-tripped as a plain task would be offered to `ready` and dispatched as a build.
+const META_KEYS = [
+  "type",
+  "deps",
+  "scope",
+  "brief",
+  "contract",
+  "attempts",
+  "discovered_from",
+] as const;
 // The VISIBLE spec region markers. The body shows a human-readable render of the task between them,
 // regenerated on every write; the hidden machine block above stays the source of truth. Sentinels are
 // HTML comments (invisible on GitHub) so parseBody can strip the region and keep real human prose.
@@ -117,6 +130,7 @@ const SPEC_CLOSE = "<!-- /outputty:spec -->";
 
 // The label-worn fields (LABEL_FIELD_NAMES is the one source), each with its label color.
 const LABEL_FIELDS: Record<LabelFieldName, string> = {
+  type: "006b75",
   kind: "bfd4f2",
   tier: "1d76db",
   qa: "5319e7",
@@ -149,21 +163,25 @@ const labelField = (name: string): LabelFieldName | null => {
     : null;
 };
 
-/** The labels a task wears — one `field:value` per configured label-worn field that is set — or
+/**
+ * Whether one field is worth a label on this record. `status` and `type` each have a value that
+ * nearly every issue shares — `open` is the issue's own state, and everything that is not a target is
+ * a task — so labelling those would put a redundant label on every issue in the repo. Only the value
+ * GitHub cannot otherwise show gets one: `status:in_progress`, and `type:target`.
+ */
+function wearsLabel(task: Task, field: LabelFieldName): boolean {
+  if (task[field] === undefined) return false;
+  if (field === "status") return task.status === "in_progress";
+  if (field === "type") return task.type === "target";
+  return true;
+}
+
+/** The labels a task wears — one `field:value` per configured label-worn field that earns one — or
  *  null when the label sync is configured off (meaning: do not touch labels at all). */
 function labelsFor(task: Task, config: ProjectConfig): string[] | null {
   if (config.labels === false) return null;
   const fields = config.labelFields ?? LABEL_FIELD_NAMES;
-  const out: string[] = [];
-  for (const field of fields) {
-    if (task[field] === undefined) continue;
-    // `open` and `done` are the issue's OWN open/closed state — labelling them would put a redundant
-    // label on every issue in the repo. Only `in_progress` needs a label, because GitHub has no issue
-    // state for it.
-    if (field === "status" && task.status !== "in_progress") continue;
-    out.push(`${field}:${task[field]}`);
-  }
-  return out;
+  return fields.filter((field) => wearsLabel(task, field)).map((f) => `${f}:${task[f]}`);
 }
 
 /** A label's value parsed for its field — hand-typed junk (`tier:x`) is ignored, not crashed on.
@@ -174,6 +192,7 @@ function parseLabelValue(field: LabelFieldName, value: string): unknown {
     .with("tier", () =>
       (TIERS as readonly number[]).includes(Number(value)) ? Number(value) : undefined,
     )
+    .with("type", () => inSet(NODE_TYPES))
     .with("qa", () => inSet(QA_LEVELS))
     .with("status", () => inSet(STATUSES))
     .with("spec", () => inSet(SPEC_STATES))
@@ -386,6 +405,8 @@ interface ListedIssue {
   task: Task;
   issueId: string;
   managed: boolean;
+  /** The issue this one hangs under, if any — resolved to a task id by `collate`. */
+  parentIssueId: string | null;
 }
 
 function listedIssue(issue: GhIssue): ListedIssue {
@@ -397,7 +418,12 @@ function listedIssue(issue: GhIssue): ListedIssue {
         title: issue.title || "",
         status: taskStatus(issue.state),
       });
-  return { task, issueId: issue.id, managed: mid !== null };
+  return {
+    task,
+    issueId: issue.id,
+    managed: mid !== null,
+    parentIssueId: issue.parent?.id ?? null,
+  };
 }
 
 /** Push back when the sides disagree, the card is missing, or the issue needs adopting — the push
@@ -429,20 +455,32 @@ function providerState(
   listed: ListedIssue,
   card: BoardCard | undefined,
   boardOn: boolean,
+  owner: Map<string, string>,
 ): ProviderState {
   const status = resolveStatus(listed, card);
-  // The task is rebuilt whole from the body (deps included), with status reconciled.
+  // `target` is read from the sub-issue edge, never from the body — the edge is its one home, which
+  // is what makes re-parenting an issue in the GitHub UI flow back here.
+  const target = listed.parentIssueId ? owner.get(listed.parentIssueId) : undefined;
+  // The task is rebuilt whole from the body (deps included), with status and target reconciled.
   return {
-    task: { ...listed.task, status },
+    task: { ...listed.task, status, ...(target ? { target } : {}) },
     reconcile: needsReconcile(listed, card, status, boardOn),
   };
 }
 
-/** Where one task already sits in GitHub: its issue node id, and its board card when known. */
+/** Where one task already sits in GitHub: its issue node id, its board card, and the issue it hangs
+ *  under — the three handles a write may have to move. */
 interface IssueHandle {
   issueId: string;
   projectItem?: string;
+  parentIssueId?: string;
 }
+
+const handleFor = (listed: ListedIssue, card: BoardCard | undefined): IssueHandle => ({
+  issueId: listed.issueId,
+  ...(card ? { projectItem: card.itemId } : {}),
+  ...(listed.parentIssueId ? { parentIssueId: listed.parentIssueId } : {}),
+});
 
 /** One issue joined with its board card — pull and the index are both derived from this scan. */
 interface Scanned {
@@ -457,6 +495,7 @@ function collate(
   scan: Scanned[],
   boardOn: boolean,
 ): { states: Map<string, ProviderState>; index: Map<string, IssueHandle> } {
+  const owner = issueOwners(scan);
   const states = new Map<string, ProviderState>();
   const index = new Map<string, IssueHandle>();
   for (const { listed, card } of scan) {
@@ -465,13 +504,18 @@ function collate(
       existing.conflict = true; // a newer issue also claims this id; the oldest stays the record
       continue;
     }
-    states.set(listed.task.id, providerState(listed, card, boardOn));
-    index.set(
-      listed.task.id,
-      card ? { issueId: listed.issueId, projectItem: card.itemId } : { issueId: listed.issueId },
-    );
+    states.set(listed.task.id, providerState(listed, card, boardOn, owner));
+    index.set(listed.task.id, handleFor(listed, card));
   }
   return { states, index };
+}
+
+/** Issue node id → the task id that issue carries. Built before the states so a child's parent
+ *  resolves whatever order the listing came back in. */
+function issueOwners(scan: Scanned[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const { listed } of scan) out.set(listed.issueId, listed.task.id);
+  return out;
 }
 
 /** The label node ids on an issue that are NOT ours — kept as-is on every update. */
@@ -535,7 +579,69 @@ export class GitHubProvider implements Provider {
     const labelIds = wanted === null ? undefined : await this.ensureLabels(state, wanted);
     const issueId = await this.writeIssue(state, known?.issueId, task, labelIds);
     const projectItem = await this.withBoard(state, task, issueId, known?.projectItem);
-    index.set(task.id, projectItem ? { issueId, projectItem } : { issueId });
+    const parentIssueId = await this.withParent(index, task, issueId, known?.parentIssueId);
+    index.set(task.id, {
+      issueId,
+      ...(projectItem ? { projectItem } : {}),
+      ...(parentIssueId ? { parentIssueId } : {}),
+    });
+  }
+
+  // -------------------------------------------------------------------------------------------------
+  // The sub-issue edge — where `target` is stored. GitHub renders the hierarchy and its progress
+  // natively, and `parent` rides the listing query for free, so membership costs no extra round trip.
+
+  /**
+   * Attach, move, or detach this issue under its target's issue. Best-effort like the board: GitHub
+   * caps a parent at 100 sub-issues and refuses one whose owner differs, and neither is worth failing
+   * the task write over — the issue is the record, the edge is the mirror.
+   */
+  private async withParent(
+    index: Map<string, IssueHandle>,
+    task: Task,
+    issueId: string,
+    current: string | undefined,
+  ): Promise<string | undefined> {
+    const wanted = this.parentIssue(index, task);
+    if (wanted === current) return current;
+    try {
+      return await this.setParent(issueId, wanted, current);
+    } catch (err) {
+      console.error(`tasks-mcp: sub-issue edge skipped for ${task.id}: ${(err as Error).message}`);
+      return current;
+    }
+  }
+
+  /** The issue behind a task's target — or undefined when it has none yet, which the next sync
+   *  repairs (the service pushes targets ahead of the tasks that name them). */
+  private parentIssue(index: Map<string, IssueHandle>, task: Task): string | undefined {
+    if (!task.target) return undefined;
+    const handle = index.get(task.target);
+    if (handle) return handle.issueId;
+    console.error(
+      `tasks-mcp: target ${task.target} of ${task.id} has no issue yet — the edge lands on the next sync`,
+    );
+    return undefined;
+  }
+
+  /** One mutation either way: `replaceParent` makes a move atomic, so there is no detached moment. */
+  private async setParent(
+    issueId: string,
+    wanted: string | undefined,
+    current: string | undefined,
+  ): Promise<string | undefined> {
+    if (!wanted) {
+      await this.octokit.graphql(
+        `mutation($p:ID!,$s:ID!){ removeSubIssue(input:{issueId:$p,subIssueId:$s}){ issue{ id } } }`,
+        { p: current, s: issueId },
+      );
+      return undefined;
+    }
+    await this.octokit.graphql(
+      `mutation($p:ID!,$s:ID!){ addSubIssue(input:{issueId:$p,subIssueId:$s,replaceParent:true}){ issue{ id } } }`,
+      { p: wanted, s: issueId },
+    );
+    return wanted;
   }
 
   /** The node ids for these label names, creating any label the repo does not have yet. */
@@ -881,7 +987,7 @@ export class GitHubProvider implements Provider {
 
   private async issuePage(repo: RepoRef, after: string | null): Promise<Page<GhIssue>> {
     const res: { repository: { issues: Page<GhIssue> } } = await this.octokit.graphql(
-      `query($o:String!,$n:String!,$c:String){ repository(owner:$o,name:$n){ issues(first:100,after:$c,states:[OPEN,CLOSED],orderBy:{field:CREATED_AT,direction:ASC}){ pageInfo{ hasNextPage endCursor } nodes{ id number title body state labels(first:20){ nodes{ name } } } } } }`,
+      `query($o:String!,$n:String!,$c:String){ repository(owner:$o,name:$n){ issues(first:100,after:$c,states:[OPEN,CLOSED],orderBy:{field:CREATED_AT,direction:ASC}){ pageInfo{ hasNextPage endCursor } nodes{ id number title body state labels(first:20){ nodes{ name } } parent{ id } } } } }`,
       { o: repo.owner, n: repo.repo, c: after },
     );
     return res.repository.issues;

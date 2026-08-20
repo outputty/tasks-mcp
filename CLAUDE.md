@@ -204,7 +204,22 @@ When an item finishes:
 
 1. **Relay** the child's handover and verdict, quoted.
 2. **Merge only on a passed master QA** — no QA, or a failed or salvaged one, brings the findings instead.
-3. **Close the pane** (and any empty workspace it left), update the roadmap row, and take the next item.
+3. **Fast-forward your own checkout**, every time, before anything else you do with git:
+
+   ```bash
+   git fetch origin --prune && git merge --ff-only origin/main
+   ```
+
+   Nothing does this for you. Every child merges into `origin/main` from its own worktree, so your `main`
+   falls one commit further behind on each item, and the gap grows silently for as long as you keep
+   dispatching. A stale checkout is not a cosmetic problem: it is what makes `git log origin/main` answer
+   "nothing merged" when three things have, and it is why a worktree cut from the local `main` arrives
+   missing files that shipped weeks ago. If the fast-forward is REFUSED you have commits of your own on
+   `main` — stop and tell the user; never merge around it.
+4. **Close the pane** (and any empty workspace it left), then take the next item. The target's progress
+   updates itself — you only touch `roadmap.md` if the *why* changed, and you `close_task` the target
+   itself when it has genuinely shipped (a target can ship with work deliberately deferred, which is
+   why nothing closes it for you).
 
 ### The channel — what wakes you, and what you must count
 
@@ -215,28 +230,53 @@ works; it just never gets woken:
 claude --dangerously-load-development-channels server:tasks
 ```
 
-The server then rings **one** event, whenever the task graph moves:
+The server then rings **one kind** of event, whenever the task graph moves. The text names which way to
+look:
 
 ```text
-<channel source="tasks">task graph changed — re-evaluate</channel>
+<channel source="tasks">task rollback-fail-path closed — re-evaluate</channel>
+<channel source="tasks">task deploy picked up — re-evaluate</channel>
+<channel source="tasks">ready now: docs; 1 left the ready set — re-evaluate</channel>
 ```
 
-It is a **doorbell, not a report**. It carries no state, because a channel event arrives on your next turn
-and any count inside it would already be stale by the time you read it. Answer it the same way every time:
+It is a **doorbell, not a report**. Nothing in it is a figure you act on — a channel event arrives on your
+next turn, so any count inside it is already stale by the time you read it. Answer it the same way every
+time:
 
-1. `sync` `{ project }`, then `list_ready` `{ project }` — the rows come back **ranked**, best first, by
-   how much each task unblocks combined with its priority.
-2. **Read the whole roadmap.** The rank is a starting order; the roadmap decides.
-3. Dispatch what fits, then go idle. Do not poll.
+1. `sync` `{ project }`, then `roadmap` `{ project }` — every target with its **derived** progress and
+   the tasks under it that could start now, in dependency order.
+2. `list_ready` `{ project }` — the rows come back **ranked**, best first, by how much each task unblocks
+   combined with its priority, and each names the `target` it serves.
+3. **Read `roadmap.md` for the why.** The rank is a starting order; which target matters now is a
+   judgement the graph cannot make for you.
+4. Dispatch what fits, then go idle. Do not poll.
 
-**⚠ `list_ready` does not know what you already started.** It answers what the *graph* allows, so a task a
-worker is building right now still appears in it. Counting is yours:
+**The task graph is the authority on what finished — git is not.** A task at `status: done`, or a PR the
+GitHub API reports merged, is the fact of the matter. Your local refs are not: nothing fetches them for
+you, so `git log origin/main` and `git branch --merged` answer with the repo as it stood when your session
+started, and a child that merged an hour ago is invisible in them. Fetch before you look
+(`git fetch origin --prune`), or do not look. And when git disagrees with a `status: done` you have
+already seen, **git is the stale one** — never talk yourself out of a doorbell on a check you did not
+fetch for. A ring you answered with "nothing changed" is the one failure that costs a whole queue: the
+work is finished, the follow-ups are ready, and nobody dispatches them.
 
-- **Hold the in-flight set yourself** — task id, pane name, branch — and subtract it before you
-  choose. Dispatching a task twice is the failure this prevents.
-- **Never run more than six worker sessions at once.** Past six the machine dies. A seventh pane is
-  not a judgement call; wait for one to finish.
-- A place frees when you close a pane, which you already do on merge, replan, or idle.
+**`list_ready` already excludes what is being built.** A worker's first act is `start_task`, which moves
+the task to `in_progress` and out of the list, so the list is safe to dispatch straight from — the
+in-flight set lives in the graph, not in your head, and survives a compaction. It clears itself: closing
+the task releases it, and so does `spec: replan`, so an abandoned build puts its task back in the queue
+rather than stranding it.
+
+Two things are still yours:
+
+- **Never run more than six worker sessions at once.** Past six the machine dies. The graph will happily
+  offer you a seventh ready task; the cap is not its job. A place frees when you close a pane, which you
+  already do on merge, replan, or idle.
+- **Find the pane behind an event with `herdr agent list`** — every live agent comes back with its `name`
+  and `cwd`, and both carry the task id, because you chose the name and cut the worktree after it. A ring
+  saying `task <id> closed` plus one `herdr agent list` gives you the pane to go read. Never from memory.
+
+**A task stuck at `in_progress` with no pane behind it is a crashed worker.** `list_tasks` shows it;
+`edit_task` back to `status: open` returns it to the queue.
 
 A child session rings your doorbell for anything the graph does not say — a gate reached, a build
 abandoned. It works from inside a worktree, because the note is addressed to the repo, not to a checkout:
@@ -287,16 +327,29 @@ never on `agent start`. Dispatch must never steal the user's cursor.
 
 ### Reading the roadmap
 
-The roadmap is a living document, not a queue. Before you evaluate an idea or close work, read the whole
-roadmap, not the row in front of you. Report what moved:
+**The roadmap is two things now, and you need both.** `roadmap` `{ project }` says where every target
+STANDS — progress derived from the tasks under it, so it is never stale and never yours to maintain.
+`roadmap.md` says WHY each target is worth building — the half nothing derives. Read the tool for the
+state, the file for the judgement.
+
+Before you evaluate an idea or close work, read the whole file, not the row in front of you. Report what
+moved:
 
 - a row now easy, because shipped work built the mechanism it waited on;
-- a row now pointless, whose premise a shipped change deleted — say so and close it;
-- a row whose reasoning is now false, though the row still makes sense — fix the reasoning;
-- an idea already recorded elsewhere — point the new one at that row, not a second;
+- a row now pointless, whose premise a shipped change deleted — say so and close its target;
+- a row whose **why** is now false, though the target still makes sense — fix the why;
+- an idea already recorded elsewhere — point the new one at that target, not a second;
 - a reshuffled order, because the cost of something moved.
 
 "Nothing changed" is a fine answer only when you reached it by looking.
+
+**Never hand-write a status, a percentage or a dependency into `roadmap.md`.** The moment you do, there
+are two answers to the same question and one of them is wrong. A row is a target, a link to its issue,
+and a paragraph.
+
+**A task belongs to a target.** File it with `add_task { target }`, so the graph can answer which roadmap
+item a piece of work serves. Work that serves no target is allowed — a stray bug does not need a roadmap
+row — but a build you are dispatching from the roadmap should never be an orphan.
 
 ## Two stages, joined only by the task queue
 
@@ -304,7 +357,7 @@ Planning is synchronous. Building is asynchronous. Neither stage waits on the ot
 
 ```text
 PLANNING  human in the loop, one item          BUILD  no human, woken by the channel
-  research · grill · requirements                 <channel> ─► sync ─► list_ready (ranked)
+  research · grill · requirements                 <channel> ─► sync ─► roadmap ─► list_ready
   target program · task graph                       ready, and a free slot ─► dispatch
     └─► spec: settled ──────────────────────────►   nothing ready          ─► idle
                                                     requirements gap       ─► spec: replan
@@ -324,7 +377,7 @@ Product memory is **five prose Markdown docs in `.claude/`, read whole.** Read t
 | Doc | Holds |
 | --- | --- |
 | `product.md` | **why**: the pitch + the vocabulary. **Every session reads this first.** |
-| `roadmap.md` | **what we're building**: one entry per target, status-badged, each with a mini-spec. Never a task tracker. |
+| `roadmap.md` | **why** each target is worth building: a paragraph and a link to its issue. Never a status, a dependency, or a task list — the graph derives all three. |
 | `architecture.md` | **what exists**: the target surface, the machinery, the seams, and the feature index. |
 | the `tasks` MCP server | **how**: the task graph, synced to GitHub Issues. Not a file — call its tools (below). |
 | `lessons.md` | discoveries, bug fixes, user directions, experiments. Never features. |
@@ -335,12 +388,13 @@ Product memory is **five prose Markdown docs in `.claude/`, read whole.** Read t
 `architecture.md` whole when you plan, build, or review. For one past pivot, `grep .claude/lessons.md`
 by the file path or the title instead of reading all of it.
 
-**Tasks live in the `tasks` MCP server, not product memory.** Its tools (`add_task`, `edit_task`,
-`amend_task`, `close_task`, `delete_task`, `list_tasks`, `list_ready`, `list_planning`, `schedule`,
-`prereqs`, `blockers`, `get_task`, `get_trail`, `append_trail`, `sync`, `notify`, `get_config`,
-`set_config`) each take `{ project }`; the server's own tools/list is authoritative.
+**Tasks AND targets live in the `tasks` MCP server, not product memory.** Its tools (`add_task`,
+`add_target`, `roadmap`, `edit_task`, `amend_task`, `start_task`, `close_task`, `delete_task`,
+`list_tasks`, `list_ready`, `list_planning`, `schedule`, `prereqs`, `blockers`, `get_task`,
+`get_trail`, `append_trail`, `sync`, `notify`, `get_config`, `set_config`) each take `{ project }`;
+the server's own tools/list is authoritative.
 
-**Call `sync` `{ project }` before you fetch any task list** — `list_ready`, `list_planning`,
+**Call `sync` `{ project }` before you fetch any task list** — `roadmap`, `list_ready`, `list_planning`,
 `schedule`, `list_tasks`, `get_task`. The read hits a local cache that is only as fresh as the last sync, so
 a fetch without it can act on stale issues. A background sync may also run (the server's
 `--sync-interval`), but sync first anyway: it guarantees the latest before you decide work.
@@ -348,7 +402,8 @@ a fetch without it can act on stale issues. A background sync may also run (the 
 | You want | Do this |
 | --- | --- |
 | the North Star + vocabulary | `Read .claude/product.md` |
-| where every target stands | `Read .claude/roadmap.md` |
+| why a target is worth building | `Read .claude/roadmap.md` |
+| where every target STANDS | call the `tasks` MCP tool `roadmap` with `{ project }` — derived progress per target, never a file |
 | the target program, the machinery, the seams | `Read .claude/architecture.md` |
 | has this file burned us before | `grep -n '<path>' .claude/lessons.md`, then read the entries around the hits |
 | a worked example to reuse | `Read .claude/examples.md` |
@@ -359,6 +414,7 @@ a fetch without it can act on stale issues. A background sync may also run (the 
 | what is ready to build, ranked | call the `tasks` MCP tool `list_ready` with `{ project }` — it lists what the graph allows, including tasks already being worked |
 | to wake an idle orchestrator | call the `tasks` MCP tool `notify` with `{ project, note }` |
 | what planning still owns | call the `tasks` MCP tool `list_planning` with `{ project }` |
+| to file a new target | call the `tasks` MCP tool `add_target` with `{ project, id, title, brief }` — the brief is the WHY |
 
 **An external fact has no ledger.** Route it to where its reader works.
 

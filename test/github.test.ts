@@ -231,3 +231,70 @@ test("closing wins over a stale in-progress label — GitHub owns done", async (
   const pulled = await provider.pull(ctx);
   expect(pulled.get("api")?.task.status).toBe("done");
 });
+
+// ---------------------------------------------------------------------------------------------------
+// Targets and the sub-issue edge — a task's `target` IS its issue's parent, so the hierarchy a human
+// sees on GitHub and the one the graph reasons over are the same object.
+
+test("a target wears type:target; a plain task wears no type label at all", async () => {
+  const { gh, provider, ctx } = setup();
+  await provider.upsert(ctx, task({ id: "roadmap-row", type: "target" }));
+  await provider.upsert(ctx, task({ id: "a" }));
+  expect(gh.issues[0].labels).toContain("type:target");
+  expect(gh.issues[1].labels ?? []).not.toContain("type:task");
+});
+
+test("a task naming a target becomes a sub-issue of the target's issue", async () => {
+  const { gh, provider, ctx } = setup();
+  await provider.upsert(ctx, task({ id: "roadmap-row", type: "target" }));
+  await provider.upsert(ctx, task({ id: "a", target: "roadmap-row" }));
+  const parent = gh.issues.find((i) => i.title === "roadmap-row")!;
+  expect(gh.issues.find((i) => i.title === "a")!.parent).toBe(parent.id);
+});
+
+test("the edge round-trips: pull reads `target` back off the parent, not the body", async () => {
+  const { gh, provider, ctx } = setup();
+  await provider.upsert(ctx, task({ id: "roadmap-row", type: "target" }));
+  await provider.upsert(ctx, task({ id: "a", target: "roadmap-row" }));
+  expect(gh.issues.find((i) => i.title === "a")!.body).not.toContain("target:"); // the edge is its home
+  const pulled = await provider.pull(ctx);
+  expect(pulled.get("a")!.task.target).toBe("roadmap-row");
+  expect(pulled.get("roadmap-row")!.task.type).toBe("target");
+});
+
+test("re-parenting in the GitHub UI flows back on the next pull", async () => {
+  const { gh, provider, ctx } = setup();
+  await provider.upsert(ctx, task({ id: "one", type: "target" }));
+  await provider.upsert(ctx, task({ id: "two", type: "target" }));
+  await provider.upsert(ctx, task({ id: "a", target: "one" }));
+  // A human drags the issue under the other target.
+  gh.issues.find((i) => i.title === "a")!.parent = gh.issues.find((i) => i.title === "two")!.id;
+  expect((await provider.pull(ctx)).get("a")!.task.target).toBe("two");
+});
+
+test("moving a task to another target moves the edge; clearing it detaches", async () => {
+  const { gh, provider, ctx } = setup();
+  await provider.upsert(ctx, task({ id: "one", type: "target" }));
+  await provider.upsert(ctx, task({ id: "two", type: "target" }));
+  await provider.upsert(ctx, task({ id: "a", target: "one" }));
+  await provider.upsert(ctx, task({ id: "a", target: "two" }));
+  const child = () => gh.issues.find((i) => i.title === "a")!;
+  expect(child().parent).toBe(gh.issues.find((i) => i.title === "two")!.id);
+  await provider.upsert(ctx, task({ id: "a" })); // target cleared
+  expect(child().parent).toBeNull();
+});
+
+test("a target whose issue does not exist yet never fails the write — the edge waits for a sync", async () => {
+  const { gh, provider, ctx } = setup();
+  await provider.upsert(ctx, task({ id: "a", target: "not-synced-yet" }));
+  expect(gh.issues).toHaveLength(1); // the task still lands
+  expect(gh.issues[0].parent).toBeUndefined();
+});
+
+test("with labels off, type survives in the body block — a target must never come back a task", async () => {
+  const { gh, provider, ctx } = setup({ projects: false, labels: false });
+  await provider.upsert(ctx, task({ id: "roadmap-row", type: "target" }));
+  expect(gh.issues[0].labels ?? []).toHaveLength(0);
+  expect(gh.issues[0].body).toContain("type: target");
+  expect((await provider.pull(ctx)).get("roadmap-row")!.task.type).toBe("target");
+});

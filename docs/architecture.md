@@ -132,8 +132,28 @@ already satisfied its side of the graph.
 `eligible` ranks the ready tasks by `(blocks + 1) × priorityWeight` — high 3, normal 2, low 1.
 Priority **multiplies** reach rather than outranking it, so a low task blocking five beats a high task
 blocking none, while priority decides between tasks of comparable reach. The ranking is a default
-order for a caller to start from, never the decision: an orchestrator re-reads its own roadmap before
-it chooses, and the roadmap is not a concept this package has.
+order for a caller to start from, never the decision: an orchestrator reads the roadmap before it
+chooses.
+
+## The roadmap altitude
+
+The graph holds two kinds of record. A **task** is a unit of work; a **target** is a roadmap item that
+groups the tasks serving it. One field distinguishes them (`type`), one joins them (`target`), and
+because a target is an ordinary node every existing graph function works one altitude up unchanged —
+`prereqs` on a target is "what must ship before this", `blockers` ranks targets by reach. `ready`
+excludes targets, so nothing dispatches a roadmap row as if it were a build, and `roadmap` returns
+every target with progress **derived** from its tasks.
+
+On GitHub a task's `target` **is** its issue's parent (`addSubIssue` with `replaceParent`, so a move is
+one mutation). The edge is the field's only home — it is not written into the body block — so
+re-parenting an issue in the web UI flows back on the next sync, and reading membership is free:
+`parent` rides the issue listing the provider already pages through. `type` is the exception that does
+ride the block as well as its label, because with `labels: false` a target would round-trip as a plain
+task and be dispatched.
+
+Like the board, the edge is **best-effort**: GitHub caps a parent at 100 sub-issues and refuses one
+whose repository owner differs, and neither is worth failing the issue write over. `sync` pushes
+targets ahead of the tasks naming them, so a first sync attaches the edge in one pass.
 
 ## The channel — one doorbell, two hops
 

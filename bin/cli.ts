@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // The package entry, on commander. With no subcommand it runs the MCP server — stdio by default (for
 // `.mcp.json` -> `bunx @outputty/tasks-mcp`), or `--http` for the standalone HTTP server. The
-// subcommands drive the same core directly, no MCP involved: `add`, `edit`, `delete`, `list`, `ready`,
-// `planning`, `schedule`, `prereqs`, `blockers`, `get`, `start`, `close`, `trail`, `trail-add`, `sync`,
-// `notify`.
+// subcommands drive the same core directly, no MCP involved: `add`, `add-target`, `edit`, `delete`,
+// `list`, `ready`, `roadmap`, `planning`, `schedule`, `prereqs`, `blockers`, `get`, `start`, `close`,
+// `trail`, `trail-add`, `sync`, `notify`.
 
 import { Command } from "commander";
 import { runStdio } from "../src/mcp/stdio.ts";
@@ -19,6 +19,7 @@ import {
   schedule,
   prereqs,
   blockers,
+  roadmap,
   buildTask,
   buildPatch,
   priorityOf,
@@ -74,6 +75,21 @@ program
   .action(async () => out(eligible(await service().list(ctx())).map((e) => e.task.id)));
 
 program
+  .command("roadmap")
+  .description("where every target stands: derived progress and what is ready under each")
+  .action(async () =>
+    out(
+      roadmap(await service().list(ctx())).map((row) => ({
+        id: row.target.id,
+        summary: row.target.title,
+        status: row.target.status,
+        progress: row.progress,
+        ready: row.ready,
+      })),
+    ),
+  );
+
+program
   .command("planning")
   .description("the tasks the planning stage owns")
   .action(async () => out(planning(await service().list(ctx())).map((t) => t.id)));
@@ -127,9 +143,23 @@ program
   .option("--stage <label>", "narrative label on a staged deliverable")
   .option("--brief <text>", "the build brief")
   .option("--contract <text>", "the done-condition")
+  .option("--target <id>", "the roadmap target this task serves")
   .action(async (id: string, opts: Record<string, unknown>) => {
     // The SAME builder the MCP surface uses: comma strings normalize, tier/qa/priority validate.
     out(await service().create(ctx(), buildTask(id, opts)));
+  });
+
+program
+  .command("add-target")
+  .description("create a roadmap target — the row a set of tasks serves; never built itself")
+  .argument("<id>", "stable unique id")
+  .option("--title <text>", "the target, nameable in one sentence")
+  .option("--brief <text>", "the WHY: what makes this worth building, and now")
+  .option("--deps <ids>", "comma-separated targets that must ship first")
+  .option("--priority <level>", "high | normal | low")
+  .option("--spec <state>", "drafting | settled | replan")
+  .action(async (id: string, opts: Record<string, unknown>) => {
+    out(await service().create(ctx(), buildTask(id, { ...opts, type: "target" })));
   });
 
 program
@@ -146,6 +176,8 @@ program
   .option("--stage <label>", "narrative label on a staged deliverable")
   .option("--brief <text>", "the build brief (problem + expected solution)")
   .option("--contract <text>", "the done-condition (what to account for)")
+  .option("--target <id>", "move this under a different roadmap target")
+  .option("--type <kind>", "task | target")
   .action(async (id: string, opts: Record<string, unknown>) => {
     const patch = buildPatch(id, opts); // same builder the MCP edit_task uses
     if (!Object.keys(patch).length) throw new Error("edit needs at least one field to change");
