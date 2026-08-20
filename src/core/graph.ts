@@ -10,8 +10,16 @@ import { DirectedGraph } from "graphology";
 import { topologicalGenerations } from "graphology-dag";
 import { bfsFromNode } from "graphology-traversal";
 import { match, P } from "ts-pattern";
-import type { Task, QaLevel, Priority, NodeType, Status } from "./types.ts";
-import { SPEC_STATES, TIERS, QA_LEVELS, PRIORITIES, NODE_TYPES } from "./types.ts";
+import type { Task, TaskPatch, QaLevel, Priority, NodeType, Status } from "./types.ts";
+import {
+  SPEC_STATES,
+  TIERS,
+  QA_LEVELS,
+  PRIORITIES,
+  NODE_TYPES,
+  DEFAULTS,
+  LABEL_FIELD_NAMES,
+} from "./types.ts";
 
 /** Ids of the tasks that are already finished. */
 export function doneIds(tasks: Task[]): Set<string> {
@@ -29,12 +37,12 @@ export function specSettled(task: Task): boolean {
       `unknown spec state '${task.spec}' on task ${task.id} (states: ${SPEC_STATES.join(", ")})`,
     );
   }
-  return task.spec === "settled";
+  return task.spec === DEFAULTS.spec;
 }
 
 /** A record's validated type, defaulting to `task` — the shape everything had before targets. */
 export function typeOf(task: Task): NodeType {
-  const type = task.type ?? "task";
+  const type = task.type ?? DEFAULTS.type;
   if (!(NODE_TYPES as readonly string[]).includes(type)) {
     throw new Error(`unknown type '${type}' on task ${task.id} (types: ${NODE_TYPES.join(", ")})`);
   }
@@ -68,7 +76,7 @@ export function planning(tasks: Task[]): Task[] {
 
 /** A task's validated tier, defaulting to 3 (the build baseline). */
 export function tierOf(task: Task): number {
-  const tier = task.tier ?? 3;
+  const tier = task.tier ?? DEFAULTS.tier;
   if (!TIERS.includes(tier as (typeof TIERS)[number])) {
     throw new Error(`unknown tier ${tier} on task ${task.id} (tiers: 1, 2, 3, 4)`);
   }
@@ -77,7 +85,7 @@ export function tierOf(task: Task): number {
 
 /** A task's validated QA level, defaulting to `subagent` (nothing downgrades unless PLAN says so). */
 export function qaOf(task: Task): QaLevel {
-  const qa = task.qa ?? "subagent";
+  const qa = task.qa ?? DEFAULTS.qa;
   if (!(QA_LEVELS as readonly string[]).includes(qa))
     throw new Error(`unknown qa '${qa}' on task ${task.id} (qa: ${QA_LEVELS.join(", ")})`);
   return qa;
@@ -85,7 +93,7 @@ export function qaOf(task: Task): QaLevel {
 
 /** A task's validated priority, defaulting to `normal`. */
 export function priorityOf(task: Task): Priority {
-  const priority = task.priority ?? "normal";
+  const priority = task.priority ?? DEFAULTS.priority;
   if (!(PRIORITIES as readonly string[]).includes(priority))
     throw new Error(
       `unknown priority '${priority}' on task ${task.id} (priorities: ${PRIORITIES.join(", ")})`,
@@ -95,6 +103,14 @@ export function priorityOf(task: Task): Priority {
 
 /** Most-important-first rank, for sorting. */
 export const priorityRank = (task: Task): number => PRIORITIES.indexOf(priorityOf(task));
+
+// high 3, normal 2, low 1 — the multiplier a priority contributes at EITHER altitude.
+const weightOf = (priority: Priority): number => PRIORITIES.length - PRIORITIES.indexOf(priority);
+const priorityWeight = (task: Task): number => weightOf(priorityOf(task));
+// What an unremarkable roadmap row weighs. Dividing by it keeps a normal-priority target that blocks
+// nothing at exactly 1, so a task under an ordinary target ranks where it did before the roadmap
+// entered the ranking, and only a target that is genuinely more (or less) than ordinary moves its work.
+const ORDINARY = weightOf(DEFAULTS.priority);
 
 /** Loose list input (MCP args or CLI flags): a string array, a comma string, or nothing. */
 export const asArray = (value: unknown): string[] =>
@@ -108,16 +124,42 @@ export const asArray = (value: unknown): string[] =>
     )
     .otherwise(() => []);
 
-// The optional task fields a loose input may carry through verbatim.
-const OPTIONAL_FIELDS = [
+/**
+ * The optional task fields a loose input may carry through verbatim — and, because every one of them
+ * is optional, exactly the set an edit may CLEAR. `id`, `title` and `status` are absent by design:
+ * a task always has all three, so there is nothing to clear. `deps`/`scope`/`tags` are lists that
+ * empty to `[]` rather than vanishing, and are handled on their own.
+ */
+export const OPTIONAL_FIELDS = [
   "type",
   "target",
+  "kind",
   "brief",
   "contract",
   "tier",
   "qa",
   "priority",
   "spec",
+  "stage",
+  "discovered_from",
+] as const;
+
+/** Every field an edit may clear: the optionals, plus the lists (clearing a list empties it). */
+export const CLEARABLE_FIELDS = [...OPTIONAL_FIELDS, "deps", "scope", "tags"] as const;
+
+export type ClearableField = (typeof CLEARABLE_FIELDS)[number];
+
+/**
+ * What a TARGET may not carry. A target is a roadmap row: it is never offered by `ready`, never
+ * dispatched, never built and never reviewed, so every field describing HOW to build something is a
+ * category error on one. Keeping them off is what stops a parent issue drifting into a second, worse
+ * task — the failure mode that fills a roadmap with placeholder rows.
+ */
+export const BUILD_ONLY_FIELDS = [
+  "scope",
+  "contract",
+  "tier",
+  "qa",
   "stage",
   "discovered_from",
 ] as const;
@@ -134,6 +176,7 @@ export function buildTask(id: string, input: Record<string, unknown>): Task {
     deps: asArray(input.deps),
     scope: asArray(input.scope),
   };
+  if (input.tags !== undefined) task.tags = assertTags(asArray(input.tags));
   for (const key of OPTIONAL_FIELDS) {
     if (input[key] !== undefined) (task as unknown as Record<string, unknown>)[key] = input[key];
   }
@@ -144,21 +187,112 @@ export function buildTask(id: string, input: Record<string, unknown>): Task {
   return task;
 }
 
-/**
- * A partial update for `edit_task` (and the CLI `edit`): only the fields actually supplied, deps/scope
- * normalized, the label fields validated. `title` stays out of the patch when absent so a blank never
- * clobbers the existing title. Every field a task can carry is editable except `id` (the stable key).
- */
-export function buildPatch(id: string, input: Record<string, unknown>): Partial<Task> {
-  const patch: Partial<Task> = {};
-  if (typeof input.title === "string") patch.title = input.title;
+/** Whether a tag is shaped like one of OUR labels (`tier:1`). Such a tag would be read back as that
+ *  field on the next pull — its junk value ignored — and silently vanish, so it is refused instead. */
+function shadowsField(tag: string): boolean {
+  const at = tag.indexOf(":");
+  return at !== -1 && (LABEL_FIELD_NAMES as readonly string[]).includes(tag.slice(0, at));
+}
+
+/** Tags, validated: a tag is a PLAIN GitHub label, never a `field:value` one outputty owns. */
+export function assertTags(tags: string[]): string[] {
+  const shadowed = tags.filter(shadowsField);
+  if (shadowed.length === 0) return tags;
+  throw new Error(
+    `tag ${shadowed.join(", ")} shadows a task field — a tag is a plain label, set the field itself instead`,
+  );
+}
+
+/** deps/scope/tags from a loose input: normalized when supplied, left absent when not. */
+function listFields(input: Record<string, unknown>): TaskPatch {
+  const patch: TaskPatch = {};
   if (input.deps !== undefined) patch.deps = asArray(input.deps);
   if (input.scope !== undefined) patch.scope = asArray(input.scope);
+  if (input.tags !== undefined) patch.tags = assertTags(asArray(input.tags));
+  return patch;
+}
+
+/** The fields an edit asked to CLEAR, validated against the clearable set. A typo is thrown on rather
+ *  than skipped: silently leaving a label on the issue is the exact failure `clear` exists to fix. */
+function clearedFields(input: unknown): ClearableField[] {
+  const names = asArray(input);
+  const unknown = names.filter((n) => !(CLEARABLE_FIELDS as readonly string[]).includes(n));
+  if (unknown.length === 0) return names as ClearableField[];
+  throw new Error(`cannot clear ${unknown.join(", ")} (clearable: ${CLEARABLE_FIELDS.join(", ")})`);
+}
+
+/** What clearing one field writes. A LIST clears to empty — an issue wearing no tags is a fact worth
+ *  recording — while a scalar clears to null, which `update` turns into a deleted key. */
+const cleared = (field: ClearableField): unknown =>
+  (["deps", "scope", "tags"] as readonly string[]).includes(field) ? [] : null;
+
+/**
+ * A partial update for `edit_task` (and the CLI `edit`): only the fields actually supplied, the lists
+ * normalized, the label fields validated, and anything named in `clear` set to null so the write
+ * REMOVES it. `title` stays out of the patch when absent so a blank never clobbers the existing
+ * title. Every field a task can carry is editable except `id` (the stable key).
+ */
+export function buildPatch(id: string, input: Record<string, unknown>): TaskPatch {
+  const patch = listFields(input);
+  if (typeof input.title === "string") patch.title = input.title;
   for (const key of OPTIONAL_FIELDS) {
     if (input[key] !== undefined) (patch as Record<string, unknown>)[key] = input[key];
   }
   validateLabelFields({ ...patch, id } as Task);
+  for (const field of clearedFields(input.clear)) {
+    (patch as Record<string, unknown>)[field] = cleared(field);
+  }
   return patch;
+}
+
+/** A value that is genuinely absent. An empty list is not a claim either. */
+const unset = (value: unknown): boolean =>
+  value === undefined || value === null || (Array.isArray(value) && value.length === 0);
+
+/**
+ * What a target may CARRY. A target wearing build fields is a task in a roadmap hat: it would be
+ * tiered, staged and QA'd like work, while `ready` never offers it and nothing ever builds it.
+ * Checked on the MERGED record, so promoting a task that still has a scope fails exactly the way
+ * filing such a target does.
+ */
+export function assertTargetFields(task: Task): void {
+  if (!isTarget(task)) return;
+  if (task.target) {
+    throw new Error(
+      `target ${task.id} cannot serve target ${task.target} — the roadmap is one altitude`,
+    );
+  }
+  const worn = BUILD_ONLY_FIELDS.filter((field) => !unset(task[field]));
+  if (worn.length === 0) return;
+  throw new Error(
+    `target ${task.id} cannot carry ${worn.join(", ")} — a target is never built (clear them first, or file it as a task)`,
+  );
+}
+
+/**
+ * Whether an edit could have INTRODUCED a target-shape problem: it touched a build field, the record's
+ * type, or its parent. A status-only change — closing a target, starting a task — never can, and must
+ * never be refused because someone hand-labelled the issue `tier:2` in the GitHub web UI last week.
+ * `sync` adopts such a label (it records what GitHub says), so without this the UI action would make
+ * the target uncloseable.
+ */
+export const touchesTargetShape = (patch: Record<string, unknown>): boolean =>
+  [...BUILD_ONLY_FIELDS, "type", "target"].some((field) => field in patch);
+
+/**
+ * What a target must SAY before it exists. A roadmap row is a name and a paragraph of why it is worth
+ * building, now; without the why it is a placeholder, and a roadmap of placeholders ranks nothing.
+ * Enforced when a target is CREATED or promoted — never on a later edit, so a row filed before this
+ * rule can still be closed.
+ */
+export function assertTargetWhy(task: Task): void {
+  if (!isTarget(task)) return;
+  if (!task.title?.trim()) {
+    throw new Error(`target ${task.id} needs a title — name the target in one sentence`);
+  }
+  if (!task.brief?.trim()) {
+    throw new Error(`target ${task.id} needs a brief — the WHY it is worth building, and now`);
+  }
 }
 
 /** Throw on an out-of-range tier/qa/priority actually present on a patch (each validator defaults an
@@ -287,30 +421,83 @@ function byImpact(a: Blocker, b: Blocker): number {
 /** One task that could start right now, with the weight that ranks it. */
 export interface Eligible {
   task: Task;
-  /** How many open tasks transitively wait on this one. */
+  /** How many open TASKS transitively wait on this one. Targets are counted at their own altitude. */
   blocks: number;
-  /** (blocks + 1) x priority weight. */
+  /** (blocks + 1) x the task's priority weight x the roadmap weight of the target it serves. */
   score: number;
+  /** How the roadmap ranks it. Absent when the task serves no target. */
+  roadmap?: Standing;
 }
 
-// high 3, normal 2, low 1. Priority MULTIPLIES reach rather than outranking it: a low task blocking
-// five beats a high task blocking none, while priority decides between tasks of comparable reach.
-const priorityWeight = (task: Task): number => PRIORITIES.length - priorityRank(task);
+/**
+ * A task's ROADMAP standing — everything about the target it serves that bears on what to build next.
+ * Without this a task under a shelved roadmap row competes on equal footing with one under the row
+ * that gates the next release, because the graph only ever saw the task's own priority.
+ */
+export interface Standing {
+  /** The target this task serves. */
+  target: string;
+  /** The target's own urgency. */
+  priority: Priority;
+  /** Open targets that transitively wait on this target — reach at the roadmap altitude. */
+  blocks: number;
+  /** The target's roadmap dependencies have NOT all shipped: the plan says this comes later. */
+  waiting: boolean;
+  /** priority x reach, normalized so an ordinary target weighs exactly 1. */
+  weight: number;
+}
+
+/** How many reached records match — reach, counted at ONE altitude rather than mixing the two. */
+const countReached = (reached: Map<string, Task>, keep: (t: Task) => boolean): number =>
+  [...reached.values()].filter(keep).length;
 
 /**
  * The ready tasks, ranked — the DEFAULT order, not the decision. The orchestrator starts from this
- * and re-reads the roadmap before it picks. Highest score first, then most blocked, then id.
+ * and re-reads the roadmap before it picks. Score MULTIPLIES three things rather than letting any one
+ * override the rest: the task's own reach, its own urgency, and the standing of the roadmap row it
+ * serves. A task whose target still waits on an unshipped target sorts below every task whose row is
+ * clear, because that is a categorical fact about the plan, not a matter of degree.
  */
 export function eligible(tasks: Task[]): Eligible[] {
   const graph = buildGraph(tasks);
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const done = doneIds(tasks);
   const ranked = ready(tasks).map((task) => {
-    const blocks = openReach(graph, task.id, "out").size;
-    return { task, blocks, score: (blocks + 1) * priorityWeight(task) };
+    const blocks = countReached(openReach(graph, task.id, "out"), (t) => !isTarget(t));
+    const standing = standingOf(graph, byId, done, task);
+    const score = (blocks + 1) * priorityWeight(task) * (standing?.weight ?? 1);
+    return { task, blocks, score, ...(standing ? { roadmap: standing } : {}) };
   });
   return ranked.sort(byScore);
 }
 
+/**
+ * A task's roadmap standing, or null when it serves no target — a stray bug competes on its own
+ * merits and is never penalised for having no roadmap row.
+ */
+function standingOf(
+  graph: TaskGraph,
+  byId: Map<string, Task>,
+  done: Set<string>,
+  task: Task,
+): Standing | null {
+  const target = task.target ? byId.get(task.target) : undefined;
+  if (!target || !isTarget(target)) return null;
+  const blocks = countReached(openReach(graph, target.id, "out"), isTarget);
+  return {
+    target: target.id,
+    priority: priorityOf(target),
+    blocks,
+    waiting: target.deps.some((dep) => !done.has(dep)),
+    weight: (priorityWeight(target) / ORDINARY) * (blocks + 1),
+  };
+}
+
+/** Whether the ROADMAP says this comes later: the row it serves still waits on an unshipped target. */
+const waiting = (entry: Eligible): boolean => entry.roadmap?.waiting === true;
+
 function byScore(a: Eligible, b: Eligible): number {
+  if (waiting(a) !== waiting(b)) return waiting(a) ? 1 : -1;
   if (a.score !== b.score) return b.score - a.score;
   if (a.blocks !== b.blocks) return b.blocks - a.blocks;
   return a.task.id < b.task.id ? -1 : 1;
@@ -352,20 +539,30 @@ export interface RoadmapEntry {
   progress: Progress;
   /** Ids of this target's tasks that are ready to dispatch. */
   ready: string[];
+  /** Targets that must ship before this one and have NOT — the roadmap's own blockers. Non-empty
+   *  means every task under this row is ranked below work whose row is clear. */
+  waitingOn: string[];
+  /** Open targets that transitively wait on this one: what a slip here delays downstream. */
+  blocks: string[];
 }
 
 /**
- * The whole roadmap, dependency-ordered: every target with its derived progress and its startable
- * tasks. This is what replaces reading a hand-maintained status column — nothing here is authored.
+ * The whole roadmap, dependency-ordered: every target with its derived progress, its startable tasks,
+ * and where it sits in the roadmap's own dependency graph. Nothing here is authored — a hand-kept
+ * status column beside a graph that already knows the answer is the thing this replaces.
  */
 export function roadmap(tasks: Task[]): RoadmapEntry[] {
   const startable = new Set(ready(tasks).map((t) => t.id));
+  const graph = buildGraph(tasks);
+  const done = doneIds(tasks);
   return targetOrder(targets(tasks)).map((target) => ({
     target,
     progress: progressOf(tasks, target.id),
     ready: tasksOf(tasks, target.id)
       .filter((t) => startable.has(t.id))
       .map((t) => t.id),
+    waitingOn: target.deps.filter((dep) => !done.has(dep)),
+    blocks: [...openReach(graph, target.id, "out").values()].filter(isTarget).map((t) => t.id),
   }));
 }
 

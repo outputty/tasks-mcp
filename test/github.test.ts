@@ -96,13 +96,55 @@ test("delete removes the issue and its board card; an unknown id is a no-op", as
   expect(gh.issues).toHaveLength(0);
 });
 
-test("an update keeps foreign labels and replaces only the field labels", async () => {
+test("an update keeps a label it has never pulled, and replaces only the field labels", async () => {
   const { gh, provider, ctx } = setup();
   await provider.upsert(ctx, task({ id: "t-1", tier: 2 }));
   gh.labels.set("bug", "L_BUG");
   gh.issues[0].labels = ["bug", "tier:2"]; // a human added `bug` in the UI
-  await provider.upsert(ctx, task({ id: "t-1", tier: 3 }));
-  expect(gh.issues[0].labels).toEqual(["bug", "tier:3"]);
+  await provider.upsert(ctx, task({ id: "t-1", tier: 1 })); // a task that has never carried tags
+  expect(gh.issues[0].labels).toEqual(["bug", "tier:1"]);
+});
+
+test("a field set to its DEFAULT wears no label — absence already means exactly that", async () => {
+  const { gh, provider, ctx } = setup();
+  await provider.upsert(
+    ctx,
+    task({ id: "t-1", tier: 3, qa: "subagent", priority: "normal", spec: "settled", type: "task" }),
+  );
+  expect(gh.issues[0].labels).toEqual([]); // five defaults, nothing a reader could not assume
+  await provider.upsert(ctx, task({ id: "t-1", tier: 1, spec: "drafting" }));
+  expect(gh.issues[0].labels).toEqual(["tier:1", "spec:drafting"]); // only what is NOT the default
+});
+
+test("a pull FLAGS an issue wearing a label that says nothing, so one sync cleans it", async () => {
+  const { gh, provider, ctx } = setup();
+  await provider.upsert(ctx, task({ id: "t-1", tier: 1 }));
+  gh.labels.set("tier:3", "L_T3");
+  gh.labels.set("frontend", "L_FE");
+
+  gh.issues[0].labels = ["tier:1", "frontend"]; // current: a real value and a tag
+  expect((await provider.pull(ctx)).get("t-1")!.reconcile).toBe(false);
+
+  gh.issues[0].labels = ["tier:3"]; // a default an older version wrote — worth a rewrite
+  expect((await provider.pull(ctx)).get("t-1")!.reconcile).toBe(true);
+
+  gh.labels.set("tier:banana", "L_TB");
+  gh.issues[0].labels = ["tier:banana"]; // junk the parser drops is stale for the same reason
+  expect((await provider.pull(ctx)).get("t-1")!.reconcile).toBe(true);
+});
+
+test("tags are adopted from an issue's bare labels, and a write then makes them exact", async () => {
+  const { gh, provider, ctx } = setup();
+  await provider.upsert(ctx, task({ id: "t-1", tier: 1 }));
+  gh.labels.set("security", "L_SEC");
+  gh.issues[0].labels = ["tier:1", "security"]; // a human labelled it in the web UI
+  const pulled = (await provider.pull(ctx)).get("t-1")!.task;
+  expect(pulled.tags).toEqual(["security"]); // adopted: a UI edit flows back like any other
+
+  await provider.upsert(ctx, { ...pulled, tags: ["security", "frontend"] });
+  expect(gh.issues[0].labels).toEqual(["tier:1", "security", "frontend"]);
+  await provider.upsert(ctx, { ...pulled, tags: [] });
+  expect(gh.issues[0].labels).toEqual(["tier:1"]); // an explicit empty list removes them
 });
 
 test("labels flow back on pull, and win over a legacy body block", async () => {

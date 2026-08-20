@@ -6,7 +6,7 @@ import fs from "node:fs";
 import nock from "nock";
 import { TaskStack, DuplicateTaskError } from "../src/core/service.ts";
 import { FileProvider } from "../src/core/providers/file.ts";
-import { ready, roadmap } from "../src/core/graph.ts";
+import { ready, roadmap, tierOf } from "../src/core/graph.ts";
 import { Doorbell, EventLog, postEvent } from "../src/core/channel.ts";
 import { task, tmp, tmpRepo } from "./helpers.ts";
 import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
@@ -366,7 +366,7 @@ test("a task may only name a target the stack actually holds", async () => {
 test("closing a task whose target vanished still works — the guard is for MOVES only", async () => {
   const { svc, project, cacheDir, cleanup } = harness();
   const ctx = { project };
-  await svc.create(ctx, task({ id: "r", type: "target" }));
+  await svc.create(ctx, task({ id: "r", type: "target", title: "Row", brief: "why" }));
   await svc.create(ctx, task({ id: "a", target: "r" }));
   // The target disappears out from under the task — removed by hand, say. Re-validating an untouched
   // target here would strand the work: you could no longer close it.
@@ -378,7 +378,7 @@ test("closing a task whose target vanished still works — the guard is for MOVE
 test("deleting a target that still holds tasks is refused, naming them", async () => {
   const { svc, project, cleanup } = harness();
   const ctx = { project };
-  await svc.create(ctx, task({ id: "r", type: "target" }));
+  await svc.create(ctx, task({ id: "r", type: "target", title: "Row", brief: "why" }));
   await svc.create(ctx, task({ id: "a", target: "r" }));
   await expect(svc.delete(ctx, "r")).rejects.toThrow(/still holds a/);
   cleanup();
@@ -400,7 +400,7 @@ test("sync pushes targets before the tasks that name them, so the edge lands in 
 test("a target is never ready, and its progress is derived from its tasks", async () => {
   const { svc, project, cleanup } = harness();
   const ctx = { project };
-  await svc.create(ctx, task({ id: "r", type: "target" }));
+  await svc.create(ctx, task({ id: "r", type: "target", title: "Row", brief: "why" }));
   await svc.create(ctx, task({ id: "a", target: "r" }));
   await svc.create(ctx, task({ id: "b", target: "r" }));
   await svc.close(ctx, "a");
@@ -411,5 +411,54 @@ test("a target is never ready, and its progress is derived from its tasks", asyn
     in_progress: 0,
     done: 1,
   });
+  cleanup();
+});
+
+test("a stored default converges away in ONE sync — the migration off default labels", async () => {
+  const { svc, gh, project, cleanup } = harness();
+  const ctx = { project };
+  // A task as an older version stored it: the default written out explicitly, and labelled.
+  await svc.create(ctx, task({ id: "legacy", title: "Legacy", tier: 3, qa: "subagent" }));
+  expect(gh.issues[0].labels).toEqual([]); // the write already declines to label a default
+
+  // Simulate the pre-upgrade issue: the labels an older version had put there. Both layers agree on
+  // the task itself, so nothing would push — the STALE LABEL is what makes the pull ask for a write.
+  gh.labels.set("tier:3", "L_T3");
+  gh.issues[0].labels = ["tier:3"];
+  const first = await svc.sync(ctx);
+  expect(first.pushed).toBe(1);
+  expect(gh.issues[0].labels).toEqual([]); // one sync cleans it, with no edit from anyone
+
+  const second = await svc.sync(ctx);
+  expect(second.pushed).toBe(0); // and it settles: nothing stale left to rewrite
+  const converged = (await svc.get(ctx, "legacy"))!;
+  expect(converged.tier).toBeUndefined(); // deepest wins: the local copy drops the field too
+  expect(tierOf(converged)).toBe(3); // and absence still reads as 3, so nothing was lost
+  cleanup();
+});
+
+test("clearing a field removes it from the record, not just from the labels", async () => {
+  const { svc, project, cleanup } = harness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "a", title: "A", stage: "prototype", kind: "feature" }));
+  const cleared = await svc.update(ctx, "a", { stage: null, kind: null });
+  expect(cleared.stage).toBeUndefined();
+  expect(cleared.kind).toBeUndefined();
+  expect("stage" in cleared).toBe(false); // deleted, not set to undefined — sync compares deeply
+  cleanup();
+});
+
+test("closing a target still works when someone hand-labelled its issue with a build field", async () => {
+  const { svc, project, cleanup } = harness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "r", type: "target", title: "Row", brief: "why" }));
+  // What `sync` would adopt from a `tier:2` label added in the GitHub web UI: sync is tolerant, so
+  // the field lands on the record. Closing the target must not be what refuses it.
+  await svc.update(ctx, "r", { status: "open" }); // a status-only edit, the shape untouched
+  const closed = await svc.update(ctx, "r", { status: "done" });
+  expect(closed.status).toBe("done");
+
+  // An edit that actually TOUCHES the shape is still refused, which is the guard's job.
+  await expect(svc.update(ctx, "r", { tier: 2 })).rejects.toThrow(/cannot carry tier/);
   cleanup();
 });

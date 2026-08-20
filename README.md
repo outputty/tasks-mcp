@@ -112,34 +112,45 @@ working directory of its own. Reads are answered from the local file layer and n
 network; the first GitHub-touching call (a write, or `sync`) resolves repo, credentials, labels, and
 the board once.
 
-| Tool            | Answers                                                         | Writes |
-| --------------- | --------------------------------------------------------------- | ------ |
-| `prereqs`       | what must be done before this task can start, in build order    | —      |
-| `roadmap`       | where every target stands: derived progress, and what is ready  | —      |
-| `blockers`      | which tasks hold up the most work, ranked                       | —      |
-| `list_tasks`    | every task, full records — the whole graph                      | —      |
-| `list_ready`    | which tasks can be worked right now, ranked best first          | —      |
-| `list_planning` | which tasks planning still owns (drafting / replan)             | —      |
-| `schedule`      | the whole open plan as dependency layers; errors on a cycle     | —      |
-| `get_task`      | one task's full record                                          | —      |
-| `add_task`      | create a task (file + issue + labels + board card)              | ✎      |
-| `add_target`    | create a roadmap target — the row a set of tasks serves         | ✎      |
-| `amend_task`    | widen an open task's scope, or set its brief                    | ✎      |
-| `edit_task`     | edit any field of a task (only the fields you pass change)      | ✎      |
-| `start_task`    | mark a task in progress — it leaves `list_ready` while built    | ✎      |
-| `close_task`    | mark done (closes the issue, moves the card)                    | ✎      |
-| `delete_task`   | permanently delete a task + its issue (needs delete permission) | ✎      |
-| `get_trail`     | a task's trail: its issue comment thread, oldest first          | —      |
-| `append_trail`  | append one entry to a task's trail (posts an issue comment)     | ✎      |
-| `sync`          | reconcile every layer both ways; adopt hand-opened issues       | ✎      |
-| `notify`        | ring the channel doorbell with a one-line reason                | ✎      |
+| Tool            | Answers                                                                 | Writes |
+| --------------- | ----------------------------------------------------------------------- | ------ |
+| `prereqs`       | what must be done before this task can start, in build order            | —      |
+| `roadmap`       | where every target stands: progress, what it waits on, what waits on it | —      |
+| `blockers`      | which tasks hold up the most work, ranked                               | —      |
+| `list_tasks`    | every task, full records — the whole graph                              | —      |
+| `list_ready`    | which tasks can be worked now, ranked by task AND roadmap row           | —      |
+| `list_planning` | which tasks planning still owns (drafting / replan)                     | —      |
+| `schedule`      | the whole open plan as dependency layers; errors on a cycle             | —      |
+| `get_task`      | one task's full record                                                  | —      |
+| `add_task`      | create a task (file + issue + labels + board card)                      | ✎      |
+| `add_target`    | create a roadmap target — a name and a why, no build fields             | ✎      |
+| `amend_task`    | widen an open task's scope, or set its brief                            | ✎      |
+| `edit_task`     | edit any field, set `tags`, or `clear` a field outright                 | ✎      |
+| `start_task`    | mark a task in progress — it leaves `list_ready` while built            | ✎      |
+| `close_task`    | mark done (closes the issue, moves the card)                            | ✎      |
+| `delete_task`   | permanently delete a task + its issue (needs delete permission)         | ✎      |
+| `get_trail`     | a task's trail: its issue comment thread, oldest first                  | —      |
+| `append_trail`  | append one entry to a task's trail (posts an issue comment)             | ✎      |
+| `sync`          | reconcile every layer both ways; adopt hand-opened issues               | ✎      |
+| `notify`        | ring the channel doorbell with a one-line reason                        | ✎      |
 
-A task carries: `id`, `title`, `status` (open/in_progress/done), `deps`, `scope`, `target`, the
-execution-modifying properties `tier` (1–4), `qa` (skip/inline/subagent), `priority`
+A task carries: `id`, `title`, `status` (open/in_progress/done), `deps`, `scope`, `target`, `tags`,
+the execution-modifying properties `tier` (1–4), `qa` (skip/inline/subagent), `priority`
 (high/normal/low), `spec`, `stage`, `kind`, and `brief`/`contract` prose. On GitHub, the scalar
 properties are worn as **`field:value` labels** (`tier:2`, `priority:high`, `status:in_progress`, …)
 — visible, filterable, and editable in the GitHub UI; edit a label there and `sync` pulls the change
-back. The issue **body renders a concise summary** — the brief (the
+back. `tags` are plain labels (`security`, `frontend`) carried verbatim beside them, adopted from the
+issue on every pull.
+
+**A label is only written when it says something.** Absence already means the default — `tier` reads
+3, `qa` reads subagent, `priority` reads normal, an absent `spec` counts as settled — so a `tier:3`
+label would sit on nearly every issue in the repo carrying no information, and none is written. Only
+the value GitHub cannot otherwise show earns one. That makes setting a field back to its default the
+natural way to drop its label; to remove a field outright, name it in `edit_task`'s `clear`. Labels an
+older version already wrote are cleaned by a plain `sync` — a pull flags an issue wearing one, so the
+migration needs no edit from anyone.
+
+The issue **body renders a concise summary** — the brief (the
 problem and expected solution), then **What to account for** (the contract) — for the web UI,
 regenerated on every write, with the machine-readable record kept in a hidden block above it. See
 [docs/architecture.md](docs/architecture.md) for the full mapping.
@@ -148,6 +159,13 @@ regenerated on every write, with the machine-readable record kept in a hidden bl
 
 A **target** is a roadmap item: it groups the tasks that serve it, it is never dispatched, and its
 progress is **derived** from those tasks rather than maintained by anyone.
+
+A target is a **name and a paragraph**, both required — the brief is the _why this is worth building,
+and now_, never an implementation spec. If the why cannot be written, it is not a target yet. It
+carries no build fields (`scope`, `contract`, `tier`, `qa`, `stage`, `discovered_from`): nothing ever
+builds a target, so those would describe work that does not exist. And it cannot serve another target
+— the roadmap is one altitude. What it _does_ carry is `deps` — the targets that must **ship** first
+— and `priority`, and both rank every task underneath it.
 
 ```js
 // tool: add_target  { "project": "/abs/repo", "id": "memory-is-derived",
@@ -159,10 +177,11 @@ progress is **derived** from those tasks rather than maintained by anyone.
 {
   "targets": [
     { "id": "roadmap-in-graph", "summary": "The roadmap becomes a second altitude in the graph",
-      "status": "open", "deps": [],
+      "status": "open", "deps": [], "waitingOn": [], "blocks": ["memory-is-derived"],
       "progress": { "total": 0, "open": 0, "in_progress": 0, "done": 0 }, "ready": [] },
     { "id": "memory-is-derived", "summary": "Product memory stops duplicating the graph",
       "status": "open", "deps": ["roadmap-in-graph"],
+      "waitingOn": ["roadmap-in-graph"], "blocks": [],
       "progress": { "total": 1, "open": 1, "in_progress": 0, "done": 0 },
       "ready": ["plugin-roadmap-is-why"] }
   ]
@@ -229,17 +248,25 @@ that fired because two tasks finished:
 ```
 
 The reader answers it by asking for the truth. `list_ready` is **ranked**, best first, by
-`(blocks + 1) x priority weight` — so reach and urgency combine instead of one overriding the other:
+`(blocks + 1) x the task's priority x the standing of the roadmap target it serves` — so reach and
+urgency combine at **both altitudes** instead of any one overriding the rest:
 
 ```jsonc
 // tool: list_ready     { "project": "/abs/repo" }
 { "ids": ["hub", "solo"],
   "tasks": [ { "id": "hub",  "blocks": 5, "score": 6, "priority": "low",  … },
-             { "id": "solo", "blocks": 0, "score": 3, "priority": "high", … } ] }
+             { "id": "solo", "blocks": 0, "score": 3, "priority": "high",
+               "roadmap": { "target": "ship-v2", "priority": "high", "blocks": 1,
+                            "waiting": false, "weight": 3 } } ] }
 ```
 
 A low task blocking five outranks a lone high task; priority decides between tasks of comparable
-reach. The order is a **starting point, not a decision** — the caller weighs its own roadmap on top.
+reach. On top of that, a task inherits the standing of its **roadmap row**: an urgent target, or one
+other targets wait on, lifts everything under it, and an ordinary target weighs exactly 1 — so a
+task with no target is never penalised for having none. One thing is categorical rather than a
+matter of degree: a task whose target still **waits on an unshipped target** sorts below every task
+whose roadmap row is clear. The order is a **starting point, not a decision** — the caller weighs its
+own roadmap on top.
 
 > A worker calls `start_task` as it picks a task up, which moves it to `in_progress` and out of
 > `list_ready`. So the in-flight set lives in the **graph**, not in the dispatcher's memory, and the

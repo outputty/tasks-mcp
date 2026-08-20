@@ -44,6 +44,7 @@ A task's full record round-trips through its issue, split across three homes:
 | ------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
 | `id`, `deps`, `scope`, `brief`, `contract`, `attempts`, `discovered_from` | a hidden YAML block leading the issue body (`id` first — the stable key) |
 | `kind`, `tier`, `qa`, `spec`, `stage`, `priority`                         | **labels**, one `field:value` each (`tier:2`, `priority:high`, …)        |
+| `tags`                                                                    | **plain labels**, verbatim (`security`, `frontend`) — adopted on pull    |
 | `title` / `status`                                                        | issue title / open ↔ closed                                              |
 
 An issue is "managed" iff its body carries the block. Below the hidden block, the body renders a
@@ -55,10 +56,27 @@ across updates.
 
 **Labels are first-class.** They make the execution properties visible and filterable in the GitHub
 UI, and they are writable there too: change `tier:2` to `tier:1` on the issue and the next `sync`
-pulls it into the task. Missing labels are created on demand (color-coded per field); labels the
-tracker does not manage (`bug`, `help wanted`, …) are never touched; a hand-typed junk value
-(`tier:banana`) is ignored rather than crashed on. Labels win over a legacy body block that still
-carries those fields.
+pulls it into the task. Missing labels are created on demand (color-coded per field); a hand-typed
+junk value (`tier:banana`) is ignored rather than crashed on. Labels win over a legacy body block
+that still carries those fields.
+
+**A label is written only when it says something.** Absence already means the default — `tier` reads
+3, `qa` reads subagent, `priority` reads normal, an absent `spec` counts as settled, an issue with no
+`type` is a task — so writing `tier:3` would put a label carrying no information on nearly every
+issue in the repo. Only the value GitHub cannot otherwise show earns one: `tier:1`, `priority:high`,
+`spec:drafting`, `status:in_progress`, `type:target`. `status` is narrower still, since GitHub's own
+issue state already shows open and closed. Two consequences: setting a field back to its default
+drops its label, and removing a field outright is what `edit_task`'s `clear` is for.
+
+Labels an older version wrote are cleaned by a plain `sync`. Both layers agree on the task itself, so
+nothing would push — a pull therefore flags an issue wearing a default-valued (or junk) label for a
+rewrite. One sync cleans it; the next pushes nothing.
+
+**A plain label is a tag.** Anything that is not one of ours (`security`, `frontend`, `help wanted`)
+is adopted into the task's `tags` on every pull, so a label added in the web UI flows back like any
+other edit. A write then makes the issue wear exactly the tags the task carries. A task that has
+never been pulled has no `tags` at all, and a write leaves its labels untouched — nothing a write has
+not seen can be dropped by one.
 
 ## The kanban board (GitHub Projects v2)
 

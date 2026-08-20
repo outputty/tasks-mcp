@@ -356,8 +356,8 @@ test("roadmap reports derived progress per target, in dependency order", async (
   const { client, project, cleanup } = await harness();
   const call = (name: string, args: Record<string, unknown>) =>
     client.callTool({ name, arguments: { project, ...args } });
-  await call("add_target", { id: "first", title: "First" });
-  await call("add_target", { id: "second", title: "Second", deps: ["first"] });
+  await call("add_target", { id: "first", title: "First", brief: "why first" });
+  await call("add_target", { id: "second", title: "Second", brief: "why second", deps: ["first"] });
   await call("add_task", { id: "a", target: "first" });
   await call("add_task", { id: "b", target: "first" });
   await call("close_task", { id: "a" });
@@ -385,10 +385,89 @@ test("edit_task moves a task between targets", async () => {
   const { client, project, cleanup } = await harness();
   const call = (name: string, args: Record<string, unknown>) =>
     client.callTool({ name, arguments: { project, ...args } });
-  await call("add_target", { id: "one" });
-  await call("add_target", { id: "two" });
+  await call("add_target", { id: "one", title: "One", brief: "why one" });
+  await call("add_target", { id: "two", title: "Two", brief: "why two" });
   await call("add_task", { id: "a", target: "one" });
   const moved = structured(await call("edit_task", { id: "a", target: "two" }));
   expect(moved.task.target).toBe("two");
+  await cleanup();
+});
+
+test("edit_task clears a field, and the label comes OFF the issue", async () => {
+  const { client, gh, project, cleanup } = await harness();
+  const call = (name: string, args: Record<string, unknown>) =>
+    client.callTool({ name, arguments: { project, ...args } });
+  await call("add_task", { id: "a", title: "A", spec: "drafting", stage: "prototype" });
+  expect(gh.issues[0].labels).toEqual(["spec:drafting", "stage:prototype"]);
+
+  const cleared = structured(await call("edit_task", { id: "a", clear: ["spec", "stage"] }));
+  expect(cleared.task.spec).toBeUndefined(); // the field is GONE, not set to something else
+  expect(cleared.task.stage).toBeUndefined();
+  expect(gh.issues[0].labels).toEqual([]);
+  await cleanup();
+});
+
+test("setting a field back to its default drops the label too — absence already means it", async () => {
+  const { client, gh, project, cleanup } = await harness();
+  const call = (name: string, args: Record<string, unknown>) =>
+    client.callTool({ name, arguments: { project, ...args } });
+  await call("add_task", { id: "a", title: "A", tier: 1 });
+  expect(gh.issues[0].labels).toEqual(["tier:1"]);
+  await call("edit_task", { id: "a", tier: 3 });
+  expect(gh.issues[0].labels).toEqual([]);
+  await cleanup();
+});
+
+test("edit_task sets tags as plain GitHub labels, alongside the field labels", async () => {
+  const { client, gh, project, cleanup } = await harness();
+  const call = (name: string, args: Record<string, unknown>) =>
+    client.callTool({ name, arguments: { project, ...args } });
+  await call("add_task", { id: "a", title: "A", priority: "high" });
+  await call("edit_task", { id: "a", tags: "security,frontend" });
+  expect(gh.issues[0].labels).toEqual(["priority:high", "security", "frontend"]);
+
+  const res = await call("edit_task", { id: "a", tags: "tier:9" });
+  expect((res as { isError?: boolean }).isError).toBe(true);
+  expect(JSON.stringify(res.content)).toContain("shadows a task field");
+  await cleanup();
+});
+
+test("add_target refuses a row with no WHY — a placeholder parent never reaches the roadmap", async () => {
+  const { client, project, cleanup } = await harness();
+  const res = await client.callTool({
+    name: "add_target",
+    arguments: { project, id: "someday", title: "Someday" },
+  });
+  expect((res as { isError?: boolean }).isError).toBe(true);
+  await cleanup();
+});
+
+test("promoting a task to a target refuses the build fields it still carries", async () => {
+  const { client, project, cleanup } = await harness();
+  const call = (name: string, args: Record<string, unknown>) =>
+    client.callTool({ name, arguments: { project, ...args } });
+  await call("add_task", { id: "a", title: "A", scope: "src/", tier: 2 });
+  const refused = await call("edit_task", { id: "a", type: "target" });
+  expect((refused as { isError?: boolean }).isError).toBe(true);
+  expect(JSON.stringify(refused.content)).toContain("cannot carry scope, tier");
+
+  await call("edit_task", { id: "a", brief: "the why", clear: ["scope", "tier"] });
+  const promoted = structured(await call("edit_task", { id: "a", type: "target" }));
+  expect(promoted.task.type).toBe("target");
+  await cleanup();
+});
+
+test("list_ready ranks by the ROADMAP row, not the task alone", async () => {
+  const { client, project, cleanup } = await harness();
+  const call = (name: string, args: Record<string, unknown>) =>
+    client.callTool({ name, arguments: { project, ...args } });
+  await call("add_target", { id: "urgent", title: "Urgent", brief: "why", priority: "high" });
+  await call("add_target", { id: "someday", title: "Someday", brief: "why", priority: "low" });
+  await call("add_task", { id: "a", title: "A", target: "someday" });
+  await call("add_task", { id: "b", title: "B", target: "urgent" });
+
+  const ready = structured(await call("list_ready", {}));
+  expect(ready.ids).toEqual(["b", "a"]); // identical tasks; only their roadmap rows differ
+  expect(ready.tasks[0].roadmap).toMatchObject({ target: "urgent", priority: "high" });
   await cleanup();
 });

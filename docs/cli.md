@@ -67,9 +67,16 @@ doorbell of a session running elsewhere on the machine, because the note travels
 on the repo rather than on the checkout path.
 
 `add` options: `--title`, `--deps a,b`, `--scope src/api`, `--tier 1..4`, `--qa skip|inline|subagent`,
-`--priority high|normal|low`, `--brief`, `--contract`, `--target <id>`. `add-target` options:
-`--title`, `--brief` (the WHY), `--deps a,b`, `--priority`, `--spec`. `trail-add` options: `--note`
-(required), `--kind decision|action|note`, `--link`.
+`--priority high|normal|low`, `--brief`, `--contract`, `--kind`, `--tags a,b`, `--target <id>`.
+
+`edit` takes all of those plus `--type task|target` and `--clear <fields>` — the way a field, and so
+its label, comes OFF an issue (`edit api --clear spec,stage`).
+
+`add-target` options: `--title` and `--brief` (the WHY), **both required**, then `--deps a,b` (the
+targets that must SHIP first), `--priority`, `--spec`, `--kind`, `--tags`. A target takes no build
+fields — nothing ever builds one.
+
+`trail-add` options: `--note` (required), `--kind decision|action|note`, `--link`.
 
 ## The library
 
