@@ -132,11 +132,12 @@ the board once.
 | `sync`          | reconcile every layer both ways; adopt hand-opened issues       | ✎      |
 | `notify`        | ring the channel doorbell with a one-line reason                | ✎      |
 
-A task carries: `id`, `title`, `status`, `deps`, `scope`, the execution-modifying properties `tier`
-(1–4), `qa` (skip/inline/subagent), `priority` (high/normal/low), `spec`, `stage`, `kind`, and
-`brief`/`contract` prose. On GitHub, the scalar properties are worn as **`field:value` labels**
-(`tier:2`, `priority:high`, …) — visible, filterable, and editable in the GitHub UI; edit a label
-there and `sync` pulls the change back. The issue **body renders a concise summary** — the brief (the
+A task carries: `id`, `title`, `status` (open/in_progress/done), `deps`, `scope`, the
+execution-modifying properties `tier` (1–4), `qa` (skip/inline/subagent), `priority`
+(high/normal/low), `spec`, `stage`, `kind`, and `brief`/`contract` prose. On GitHub, the scalar
+properties are worn as **`field:value` labels** (`tier:2`, `priority:high`, `status:in_progress`, …)
+— visible, filterable, and editable in the GitHub UI; edit a label there and `sync` pulls the change
+back. The issue **body renders a concise summary** — the brief (the
 problem and expected solution), then **What to account for** (the contract) — for the web UI,
 regenerated on every write, with the machine-readable record kept in a hidden block above it. See
 [docs/architecture.md](docs/architecture.md) for the full mapping.
