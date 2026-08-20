@@ -187,4 +187,20 @@
     got nothing. Fix: EventLog reads without consuming and remembers what it handed over, so
     delivery is once PER PROCESS; files are swept by age. Rule: exactly-once is a property of
     the reader, not of the file, whenever more than one reader exists.
+- title: In-flight belongs in the graph, not in the dispatcher's memory
+  kind: direction
+  files: [src/core/types.ts, src/core/graph.ts, src/core/providers/github.ts]
+  version: 0.15.0
+  body: |
+    list_ready answered what the GRAPH allows, so a task being built still appeared in it, and
+    the charter told the orchestrator to hold the in-flight set in its head and subtract it.
+    That set does not survive a compaction. Two heavier fixes were considered and dropped: an
+    atomic claim/lease with pid liveness (real, but it only pays for itself if WORKERS PULL --
+    with an orchestrator dispatching there is no race to arbitrate) and a separate `started`
+    flag (smaller, but two fields describing one lifecycle and no board mapping). End state:
+    status gained a third value, in_progress. ready() already read `status === "open"`, so it
+    excluded it with no change at all. On GitHub the issue stays OPEN with a status:in_progress
+    label -- GitHub has no issue state for "someone is on it" -- and the board card moves to In
+    Progress, so a human dragging a card round-trips. It clears itself: close sets done, and
+    spec:replan releases it back to open so an abandoned build cannot strand a task.
 

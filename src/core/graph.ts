@@ -248,7 +248,7 @@ export function blockers(tasks: Task[]): Blocker[] {
   const graph = buildGraph(tasks);
   const out: Blocker[] = [];
   for (const task of tasks) {
-    if (task.status !== "open") continue;
+    if (task.status === "done") continue; // a task being worked still blocks everything behind it
     const blocks = [...openReach(graph, task.id, "out").values()];
     if (blocks.length > 0) out.push({ task, blocks, unblockedBy: prereqsOn(graph, task.id) });
   }

@@ -23,7 +23,7 @@
 
 import { spawnSync } from "node:child_process";
 import { Octokit } from "octokit";
-import { match } from "ts-pattern";
+import { match, P } from "ts-pattern";
 import { parse, stringify } from "yaml";
 import type {
   LabelFieldName,
@@ -36,6 +36,7 @@ import type {
 } from "../types.ts";
 import {
   LABEL_FIELD_NAMES,
+  STATUSES,
   TIERS,
   QA_LEVELS,
   SPEC_STATES,
@@ -122,6 +123,22 @@ const LABEL_FIELDS: Record<LabelFieldName, string> = {
   spec: "fbca04",
   stage: "0e8a16",
   priority: "b60205",
+  status: "d93f0b",
+};
+
+// The board's Status columns, matched case-insensitively, first hit wins. One source for both
+// directions: `setCardStatus` writes to the first column that exists, `collectCard` reads one back.
+const COLUMNS: Record<Task["status"], string[]> = {
+  done: ["done", "closed"],
+  in_progress: ["in progress", "in-progress", "doing"],
+  open: ["todo", "to do", "backlog"],
+};
+const columnStatus = (name: string): Task["status"] | null => {
+  const lower = name.toLowerCase();
+  for (const [status, names] of Object.entries(COLUMNS)) {
+    if (names.includes(lower)) return status as Task["status"];
+  }
+  return null;
 };
 const labelField = (name: string): LabelFieldName | null => {
   const at = name.indexOf(":");
@@ -139,7 +156,12 @@ function labelsFor(task: Task, config: ProjectConfig): string[] | null {
   const fields = config.labelFields ?? LABEL_FIELD_NAMES;
   const out: string[] = [];
   for (const field of fields) {
-    if (task[field] !== undefined) out.push(`${field}:${task[field]}`);
+    if (task[field] === undefined) continue;
+    // `open` and `done` are the issue's OWN open/closed state — labelling them would put a redundant
+    // label on every issue in the repo. Only `in_progress` needs a label, because GitHub has no issue
+    // state for it.
+    if (field === "status" && task.status !== "in_progress") continue;
+    out.push(`${field}:${task[field]}`);
   }
   return out;
 }
@@ -153,6 +175,7 @@ function parseLabelValue(field: LabelFieldName, value: string): unknown {
       (TIERS as readonly number[]).includes(Number(value)) ? Number(value) : undefined,
     )
     .with("qa", () => inSet(QA_LEVELS))
+    .with("status", () => inSet(STATUSES))
     .with("spec", () => inSet(SPEC_STATES))
     .with("priority", () => inSet(PRIORITIES))
     .otherwise(() => value); // kind and stage are free text
@@ -247,13 +270,21 @@ function managedId(issue: GhIssue): string | null {
  *  title/status from the issue itself. */
 function issueToTask(issue: GhIssue): Task {
   const { meta } = parseBody(issue.body);
+  const labelled = labelFields(issue);
   return withDefaults({
     ...meta,
-    ...labelFields(issue),
+    ...labelled,
     id: String(meta.id),
     title: issue.title || "",
-    status: taskStatus(issue.state),
+    status: issueStatus(issue, labelled),
   } as Partial<Task> & { id: string });
+}
+
+/** An issue's status. Closed is authoritative for `done` — GitHub owns that bit. An OPEN issue is
+ *  `in_progress` only if it wears the label, since GitHub has no issue state for "someone is on it". */
+function issueStatus(issue: GhIssue, labelled: Partial<Task>): Task["status"] {
+  if (taskStatus(issue.state) === "done") return "done";
+  return labelled.status === "in_progress" ? "in_progress" : "open";
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -312,10 +343,11 @@ interface BoardMeta {
   options: Map<string, string>; // lower-cased option name -> option id
 }
 
-/** One board card: its item node id, and whether its Status column reads as a Done column. */
+/** One board card: its item node id, and the task status its Status column reads as (null when the
+ *  column is one outputty does not recognise — a custom column is left alone). */
 interface BoardCard {
   itemId: string;
-  done: boolean;
+  status: Task["status"] | null;
 }
 
 /** What init's one repository query returns: the ids it needs, the repo's linked boards, its labels. */
@@ -343,10 +375,9 @@ interface BoardItem {
 function collectCard(out: Map<string, BoardCard>, item: BoardItem): void {
   const issueId = item.content?.id;
   if (!issueId) return;
-  const name = (item.fieldValueByName?.name ?? "").toLowerCase();
   out.set(issueId, {
     itemId: item.id,
-    done: name === "done" || name === "closed",
+    status: columnStatus(item.fieldValueByName?.name ?? ""),
   });
 }
 
@@ -374,12 +405,23 @@ function listedIssue(issue: GhIssue): ListedIssue {
 function needsReconcile(
   listed: ListedIssue,
   card: BoardCard | undefined,
-  done: boolean,
+  status: Task["status"],
   boardOn: boolean,
 ): boolean {
   if (!listed.managed) return true;
-  if ((listed.task.status === "done") !== done) return true;
-  return boardOn && (!card || card.done !== done);
+  if (listed.task.status !== status) return true;
+  return boardOn && (!card || card.status !== status);
+}
+
+/**
+ * One task's status from the two places GitHub records it. The issue wins for `done` (closing is
+ * unambiguous); otherwise the board wins, so dragging a card into "In Progress" in the GitHub UI
+ * flows back on the next sync, which is the whole point of mirroring onto a board.
+ */
+function resolveStatus(listed: ListedIssue, card: BoardCard | undefined): Task["status"] {
+  if (listed.task.status === "done" || card?.status === "done") return "done";
+  if (card?.status) return card.status;
+  return listed.task.status;
 }
 
 /** Reconcile one issue with its board card into the state pull reports to the service. */
@@ -388,12 +430,11 @@ function providerState(
   card: BoardCard | undefined,
   boardOn: boolean,
 ): ProviderState {
-  // Done if the issue is closed OR the card sits in a Done column.
-  const done = listed.task.status === "done" || card?.done === true;
+  const status = resolveStatus(listed, card);
   // The task is rebuilt whole from the body (deps included), with status reconciled.
   return {
-    task: { ...listed.task, status: done ? "done" : "open" },
-    reconcile: needsReconcile(listed, card, done, boardOn),
+    task: { ...listed.task, status },
+    reconcile: needsReconcile(listed, card, status, boardOn),
   };
 }
 
@@ -809,10 +850,14 @@ export class GitHubProvider implements Provider {
     await this.setIssueState(issueId, task.status);
   }
 
+  /** An in-progress task is an OPEN issue wearing the label — the reopen keeps it open either way. */
   private async setIssueState(issueId: string, status: Task["status"]): Promise<void> {
     const mutation = match(status)
       .with("done", () => `mutation($id:ID!){ closeIssue(input:{issueId:$id}){ issue{ id } } }`)
-      .with("open", () => `mutation($id:ID!){ reopenIssue(input:{issueId:$id}){ issue{ id } } }`)
+      .with(
+        P.union("open", "in_progress"),
+        () => `mutation($id:ID!){ reopenIssue(input:{issueId:$id}){ issue{ id } } }`,
+      )
       .exhaustive();
     await this.octokit.graphql(mutation, { id: issueId });
   }
@@ -891,11 +936,7 @@ export class GitHubProvider implements Provider {
     status: Task["status"],
   ): Promise<void> {
     if (!board.statusFieldId) return;
-    const wanted = match(status)
-      .with("done", () => ["done", "closed"])
-      .with("open", () => ["todo", "to do", "backlog"])
-      .exhaustive();
-    const optionId = wanted.map((w) => board.options.get(w)).find(Boolean);
+    const optionId = COLUMNS[status].map((w) => board.options.get(w)).find(Boolean);
     if (!optionId) return;
     await this.octokit.graphql(
       `mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){ updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){ projectV2Item{ id } } }`,

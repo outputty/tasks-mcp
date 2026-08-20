@@ -180,6 +180,13 @@ news. Only the **stdio** transport wires the doorbell to a notification (`mcp/st
 is how Claude Code spawns a channel server. Under HTTP the ring goes nowhere and every tool still
 works.
 
-**Dispatch is not modelled here.** `list_ready` answers what the graph allows, and a task being worked
-right now still appears in it. Tracking what is in flight, and capping how much runs at once, belongs
-to whatever starts the work — this package holds the graph, not the schedule.
+**The in-flight set is in the graph, not in the dispatcher.** A worker calls `start_task` as it picks
+a task up: `status` moves to `in_progress`, `ready` matches only `open`, and the task stops being
+offered. On GitHub the issue stays **open** and wears a `status:in_progress` label — GitHub has no
+issue state for "someone is on it" — while the board card moves to its In Progress column, so dragging
+a card there in the web UI flows back on the next sync. The marker clears itself: closing sets `done`,
+and `spec: replan` returns the task to `open`, so a build that abandons cannot strand it.
+
+An in-progress task is still **scheduled** and still counts as a **blocker** — it is being worked, not
+finished, so everything behind it still waits on it. What remains the caller's is only **how many** may
+run at once — this package holds the graph, not the schedule.

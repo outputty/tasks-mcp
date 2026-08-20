@@ -2,7 +2,8 @@
 // The package entry, on commander. With no subcommand it runs the MCP server — stdio by default (for
 // `.mcp.json` -> `bunx @outputty/tasks-mcp`), or `--http` for the standalone HTTP server. The
 // subcommands drive the same core directly, no MCP involved: `add`, `edit`, `delete`, `list`, `ready`,
-// `planning`, `schedule`, `prereqs`, `blockers`, `get`, `close`, `trail`, `trail-add`, `sync`, `notify`.
+// `planning`, `schedule`, `prereqs`, `blockers`, `get`, `start`, `close`, `trail`, `trail-add`, `sync`,
+// `notify`.
 
 import { Command } from "commander";
 import { runStdio } from "../src/mcp/stdio.ts";
@@ -150,6 +151,12 @@ program
     if (!Object.keys(patch).length) throw new Error("edit needs at least one field to change");
     out(await service().update(ctx(), id, patch));
   });
+
+program
+  .command("start")
+  .description("mark a task in progress, so it leaves the ready list while a worker builds it")
+  .argument("<id>", "the task id")
+  .action(async (id: string) => out(await service().start(ctx(), id)));
 
 program
   .command("close")

@@ -124,6 +124,7 @@ the board once.
 | `add_task`      | create a task (file + issue + labels + board card)              | ✎      |
 | `amend_task`    | widen an open task's scope, or set its brief                    | ✎      |
 | `edit_task`     | edit any field of a task (only the fields you pass change)      | ✎      |
+| `start_task`    | mark a task in progress — it leaves `list_ready` while built    | ✎      |
 | `close_task`    | mark done (closes the issue, moves the card)                    | ✎      |
 | `delete_task`   | permanently delete a task + its issue (needs delete permission) | ✎      |
 | `get_trail`     | a task's trail: its issue comment thread, oldest first          | —      |
@@ -202,11 +203,13 @@ The reader answers it by asking for the truth. `list_ready` is **ranked**, best 
 A low task blocking five outranks a lone high task; priority decides between tasks of comparable
 reach. The order is a **starting point, not a decision** — the caller weighs its own roadmap on top.
 
-> `list_ready` reports what the **graph** allows. A task already being worked still appears, because
-> nothing here tracks dispatch. Whoever starts work owns that: what is in flight, and how much of it
-> may run at once.
+> A worker calls `start_task` as it picks a task up, which moves it to `in_progress` and out of
+> `list_ready`. So the in-flight set lives in the **graph**, not in the dispatcher's memory, and the
+> list is safe to dispatch straight from. It clears itself: closing sets `done`, and sending a task
+> back to `spec: replan` returns it to `open`, so an abandoned build cannot strand a task. **How
+> many** may run at once is still the caller's call — this package holds the graph, not the schedule.
 
-Three things ring the doorbell: a **graph mutation** (a task added, closed, reopened, respecced, its
+Three things ring the doorbell: a **graph mutation** (a task added, picked up, closed, respecced, its
 deps changed, or deleted), a **background sync** that changed what can be started, and an explicit
 `notify` — the hook for anything the graph does not say, like a planning gate reached. A prose-only
 edit rings nothing. Rings inside one tick coalesce, so ten tasks closing at once wake the session

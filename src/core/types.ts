@@ -4,15 +4,25 @@
 
 // The value domains, each stated ONCE — the types, the validators, the zod schemas, and the GitHub
 // label parser all derive from these arrays.
+export const STATUSES = ["open", "in_progress", "done"] as const;
 export const SPEC_STATES = ["drafting", "settled", "replan"] as const;
 export const QA_LEVELS = ["skip", "inline", "subagent"] as const;
 export const PRIORITIES = ["high", "normal", "low"] as const;
 export const TIERS = [1, 2, 3, 4] as const;
-export const LABEL_FIELD_NAMES = ["kind", "tier", "qa", "spec", "stage", "priority"] as const;
+export const LABEL_FIELD_NAMES = [
+  "kind",
+  "tier",
+  "qa",
+  "spec",
+  "stage",
+  "priority",
+  "status",
+] as const;
 // The kinds of thing a trail entry records — a decision made, an action taken, or a bare note. Stated
 // once here; the type, the zod enum, and the store's validator all derive from it.
 export const TRAIL_KINDS = ["decision", "action", "note"] as const;
 
+export type Status = (typeof STATUSES)[number];
 export type SpecState = (typeof SPEC_STATES)[number];
 export type QaLevel = (typeof QA_LEVELS)[number];
 export type Priority = (typeof PRIORITIES)[number];
@@ -46,7 +56,12 @@ export interface Task {
   /** Stable key, unique within a project. Survives title edits. */
   id: string;
   title: string;
-  status: "open" | "done";
+  /**
+   * Lifecycle. `in_progress` is what a worker sets when it picks the task up: `ready` matches only
+   * `open`, so a task being built stops being offered and nobody dispatches it twice. It clears
+   * itself — closing sets `done`, and a replan puts the task back to `open`.
+   */
+  status: Status;
   /** Ids this task waits on. */
   deps: string[];
   /** Folders the task may edit (not a file list). */
