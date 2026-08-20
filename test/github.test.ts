@@ -201,3 +201,33 @@ test("two issues claiming one id: the oldest is the record, the pull flags a con
   expect(gh.issues[0].title).toBe("renamed"); // updates resolve to the oldest…
   expect(gh.issues[1].title).toBe("an impostor"); // …the newer duplicate is never touched
 });
+
+test("an in-progress task keeps its issue OPEN and wears the label GitHub has no state for", async () => {
+  const { gh, provider, ctx } = setup();
+  await provider.upsert(ctx, task({ id: "api", status: "in_progress" }));
+  expect(gh.issues[0].state).toBe("OPEN");
+  expect(gh.issues[0].labels).toContain("status:in_progress");
+});
+
+test("open and done wear no status label — the issue's own state already says it", async () => {
+  const { gh, provider, ctx } = setup();
+  await provider.upsert(ctx, task({ id: "api" }));
+  expect(gh.issues[0].labels ?? []).not.toContain("status:open");
+  await provider.upsert(ctx, task({ id: "api", status: "done" }));
+  expect(gh.issues[0].labels ?? []).not.toContain("status:done");
+});
+
+test("in_progress round-trips back out of the label on pull", async () => {
+  const { provider, ctx } = setup();
+  await provider.upsert(ctx, task({ id: "api", status: "in_progress" }));
+  const pulled = await provider.pull(ctx);
+  expect(pulled.get("api")?.task.status).toBe("in_progress");
+});
+
+test("closing wins over a stale in-progress label — GitHub owns done", async () => {
+  const { gh, provider, ctx } = setup();
+  await provider.upsert(ctx, task({ id: "api", status: "in_progress" }));
+  gh.issues[0].state = "CLOSED"; // closed by hand in the GitHub UI, label left behind
+  const pulled = await provider.pull(ctx);
+  expect(pulled.get("api")?.task.status).toBe("done");
+});

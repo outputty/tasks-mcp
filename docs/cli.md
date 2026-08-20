@@ -34,6 +34,7 @@ npx -y @outputty/tasks-mcp config --project /abs/repo
 npx -y @outputty/tasks-mcp add api --title "Build the API" --deps schema --tier 2 \
   --priority high --project /abs/repo
 npx -y @outputty/tasks-mcp edit api --title "Build the API v2" --tier 1 --project /abs/repo
+npx -y @outputty/tasks-mcp start api --project /abs/repo  # in progress: leaves the ready list
 npx -y @outputty/tasks-mcp close api --project /abs/repo
 npx -y @outputty/tasks-mcp delete junk --project /abs/repo  # permanent; needs delete-issue permission
 npx -y @outputty/tasks-mcp sync --project /abs/repo       # reconcile every layer, both ways

@@ -295,3 +295,54 @@ test("a dependency change spools, because it can move what is ready", async () =
   svc.stop();
   cleanup();
 });
+
+test("a task a worker started leaves the ready list, and comes back when it closes", async () => {
+  const { svc, project, cleanup } = harness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "schema" }));
+  await svc.create(ctx, task({ id: "docs" }));
+  expect(
+    ready(await svc.list(ctx))
+      .map((t) => t.id)
+      .sort(),
+  ).toEqual(["docs", "schema"]);
+
+  await svc.start(ctx, "schema");
+
+  // This is what makes list_ready safe to dispatch straight from: the in-flight set lives in the
+  // graph, not in the dispatcher's memory.
+  expect(ready(await svc.list(ctx)).map((t) => t.id)).toEqual(["docs"]);
+  await svc.close(ctx, "schema");
+  expect((await svc.get(ctx, "schema"))?.status).toBe("done");
+  svc.stop();
+  cleanup();
+});
+
+test("a replan releases a started task back to the queue", async () => {
+  const { svc, project, cleanup } = harness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "schema" }));
+  await svc.start(ctx, "schema");
+
+  // A build that abandons on unclear requirements must not leave the task marked in progress and
+  // invisible to everyone — the replan puts it back.
+  await svc.update(ctx, "schema", { spec: "replan" });
+
+  expect((await svc.get(ctx, "schema"))?.status).toBe("open");
+  svc.stop();
+  cleanup();
+});
+
+test("starting a task announces it, so a second dispatcher sees the graph move", async () => {
+  const { svc, project, cacheDir, cleanup } = harness();
+  const ctx = { project };
+  const log = new EventLog(cacheDir, project, 999_999);
+  await svc.create(ctx, task({ id: "schema" }));
+  log.read();
+
+  await svc.start(ctx, "schema");
+
+  expect(log.read()).toEqual(["task schema picked up — re-evaluate"]);
+  svc.stop();
+  cleanup();
+});

@@ -6,6 +6,7 @@
 // hand. Layer errors bubble; there is no fallback to decide at this altitude.
 
 import { isDeepStrictEqual } from "node:util";
+import { match } from "ts-pattern";
 import type { ProjectConfig, ProjectContext, Task, TrailEntry } from "./types.ts";
 import type { Provider, ProviderState } from "./providers/provider.ts";
 import type { ServerOptions } from "./types.ts";
@@ -34,6 +35,9 @@ export interface TaskService {
   create(ctx: ProjectContext, task: Task): Promise<Task>;
   update(ctx: ProjectContext, id: string, patch: Partial<Task>): Promise<Task>;
   close(ctx: ProjectContext, id: string): Promise<void>;
+  /** Mark a task in progress — a worker picking it up. It leaves `ready`, so nothing dispatches it
+   *  twice; closing or replanning clears it again. */
+  start(ctx: ProjectContext, id: string): Promise<Task>;
   /** Permanently remove a task from every layer (deepest-first). Explicit — not sync's absence rule. */
   delete(ctx: ProjectContext, id: string): Promise<void>;
   sync(ctx: ProjectContext): Promise<SyncResult>;
@@ -167,7 +171,7 @@ export class TaskStack implements TaskService {
   async update(ctx: ProjectContext, id: string, patch: Partial<Task>): Promise<Task> {
     const current = await this.get(ctx, id);
     if (!current) throw new Error(`no task ${id}`);
-    const merged = withDefaults({ ...current, ...patch, id });
+    const merged = released(withDefaults({ ...current, ...patch, id }));
     await this.fanDown(ctx, merged);
     const moved = movement(current, merged);
     if (moved) this.announce(ctx, `task ${id} ${moved} — re-evaluate`);
@@ -176,6 +180,10 @@ export class TaskStack implements TaskService {
 
   async close(ctx: ProjectContext, id: string): Promise<void> {
     await this.update(ctx, id, { status: "done" });
+  }
+
+  async start(ctx: ProjectContext, id: string): Promise<Task> {
+    return this.update(ctx, id, { status: "in_progress" });
   }
 
   /** Delete a task everywhere. Deepest-first, so a remote that refuses (e.g. no delete-issue
@@ -312,6 +320,24 @@ export class TaskStack implements TaskService {
   }
 }
 
+/** How a status change reads in a ring — what a reader needs to know from the doorbell alone. */
+const statusMove = (status: Task["status"]): string =>
+  match(status)
+    .with("done", () => "closed")
+    .with("in_progress", () => "picked up")
+    .with("open", () => "back in the queue")
+    .exhaustive();
+
+/**
+ * A task sent back for replanning is not being worked any more, so it returns to the queue. Without
+ * this an abandoned build would leave the task marked in progress — invisible to `list_ready` and
+ * waiting for a human to notice.
+ */
+function released(task: Task): Task {
+  if (task.spec !== "replan" || task.status !== "in_progress") return task;
+  return { ...task, status: "open" };
+}
+
 /** A task's spec, defaulted — absent has always meant settled. */
 const specOf = (task: Task): string => task.spec ?? "settled";
 
@@ -321,7 +347,7 @@ const specOf = (task: Task): string => task.spec ?? "settled";
  * one is.
  */
 function movement(before: Task, after: Task): string | null {
-  if (before.status !== after.status) return after.status === "done" ? "closed" : "reopened";
+  if (before.status !== after.status) return statusMove(after.status);
   if (specOf(before) !== specOf(after)) return `moved to spec ${specOf(after)}`;
   if (!isDeepStrictEqual(before.deps, after.deps)) return "changed its dependencies";
   return null;
