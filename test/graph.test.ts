@@ -10,8 +10,14 @@ import {
   qaOf,
   priorityOf,
   specSettled,
+  typeOf,
+  isTarget,
+  tasksOf,
+  progressOf,
+  roadmap,
 } from "../src/core/graph.ts";
 import { task } from "./helpers.ts";
+import type { Task } from "../src/core/types.ts";
 
 test("ready: open task with all deps done is ready", () => {
   const tasks = [task({ id: "a", status: "done" }), task({ id: "b", deps: ["a"] })];
@@ -167,4 +173,75 @@ test("eligible: only ready tasks rank — drafting, replan, blocked and done are
     task({ id: "waiting", deps: ["drafting"] }),
   ];
   expect(eligible(tasks).map((e) => e.task.id)).toEqual(["ok"]);
+});
+
+// ---------------------------------------------------------------------------------------------------
+// Targets — the roadmap altitude. A target groups tasks, is never dispatched, and its progress is
+// derived rather than authored.
+
+const target = (over: Partial<Task> & { id: string }): Task => task({ ...over, type: "target" });
+
+test("typeOf: absent means task, and a junk value is refused rather than silently dispatched", () => {
+  expect(typeOf(task({ id: "a" }))).toBe("task");
+  expect(isTarget(target({ id: "r" }))).toBe(true);
+  // A value hand-typed into a body block, past the label parser that would have dropped it.
+  expect(() => typeOf({ ...task({ id: "a" }), type: "epic" } as unknown as Task)).toThrow(
+    /unknown type/,
+  );
+});
+
+test("ready never offers a target, however settled and unblocked it is", () => {
+  const tasks = [target({ id: "roadmap-row" }), task({ id: "a", target: "roadmap-row" })];
+  expect(ready(tasks).map((t) => t.id)).toEqual(["a"]);
+  expect(eligible(tasks).map((e) => e.task.id)).toEqual(["a"]);
+});
+
+test("planning still owns a target whose spec is drafting — that is exactly its stage", () => {
+  const tasks = [target({ id: "r", spec: "drafting" })];
+  expect(planning(tasks).map((t) => t.id)).toEqual(["r"]);
+  expect(ready(tasks)).toEqual([]);
+});
+
+test("tasksOf: the tasks naming a target, never the target itself", () => {
+  const tasks = [
+    target({ id: "r" }),
+    task({ id: "a", target: "r" }),
+    task({ id: "b", target: "r" }),
+    task({ id: "c" }),
+  ];
+  expect(tasksOf(tasks, "r").map((t) => t.id)).toEqual(["a", "b"]);
+});
+
+test("progress is DERIVED from the tasks pointing at a target, never authored", () => {
+  const tasks = [
+    target({ id: "r" }),
+    task({ id: "a", target: "r", status: "done" }),
+    task({ id: "b", target: "r", status: "in_progress" }),
+    task({ id: "c", target: "r" }),
+  ];
+  expect(progressOf(tasks, "r")).toEqual({ total: 3, open: 1, in_progress: 1, done: 1 });
+});
+
+test("roadmap: dependency-ordered targets, each with its progress and its startable tasks", () => {
+  const tasks = [
+    target({ id: "second", deps: ["first"] }),
+    target({ id: "first" }),
+    task({ id: "a", target: "first", status: "done" }),
+    task({ id: "b", target: "first" }),
+    task({ id: "c", target: "second", deps: ["b"] }), // blocked: b is still open
+  ];
+  const rows = roadmap(tasks);
+  expect(rows.map((r) => r.target.id)).toEqual(["first", "second"]);
+  expect(rows[0].progress).toEqual({ total: 2, open: 1, in_progress: 0, done: 1 });
+  expect(rows[0].ready).toEqual(["b"]);
+  expect(rows[1].ready).toEqual([]); // c waits on b
+});
+
+test("roadmap: a cycle among targets still renders — order is a display, not a schedule", () => {
+  const tasks = [target({ id: "x", deps: ["y"] }), target({ id: "y", deps: ["x"] })];
+  expect(
+    roadmap(tasks)
+      .map((r) => r.target.id)
+      .sort(),
+  ).toEqual(["x", "y"]);
 });

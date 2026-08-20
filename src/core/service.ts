@@ -12,7 +12,7 @@ import type { Provider, ProviderState } from "./providers/provider.ts";
 import type { ServerOptions } from "./types.ts";
 import { ConfigProvider, defaultCacheDir, type ConfigSources } from "./providers/config.ts";
 import { buildStack } from "./providers/provider.ts";
-import { eligible, withDefaults } from "./graph.ts";
+import { eligible, idList, isTarget, tasksOf, withDefaults } from "./graph.ts";
 import { Doorbell, DEFAULT_NOTE, EventLog, postEvent } from "./channel.ts";
 
 export interface SyncResult {
@@ -161,17 +161,22 @@ export class TaskStack implements TaskService {
   }
 
   async create(ctx: ProjectContext, task: Task): Promise<Task> {
-    const top = await this.top(ctx);
-    if ((await top.pull(ctx)).has(task.id)) throw new DuplicateTaskError(task.id);
+    const known = await (await this.top(ctx)).pull(ctx);
+    if (known.has(task.id)) throw new DuplicateTaskError(task.id);
+    assertTarget(known, task);
     await this.fanDown(ctx, task);
     this.announce(ctx, `task ${task.id} added — re-evaluate`);
     return task;
   }
 
   async update(ctx: ProjectContext, id: string, patch: Partial<Task>): Promise<Task> {
-    const current = await this.get(ctx, id);
+    const known = await (await this.top(ctx)).pull(ctx);
+    const current = known.get(id)?.task;
     if (!current) throw new Error(`no task ${id}`);
     const merged = released(withDefaults({ ...current, ...patch, id }));
+    // Only when the edit MOVES the task: re-validating an untouched target would refuse to close a
+    // task whose roadmap row someone deleted, which is not this guard's business.
+    if (patch.target !== undefined) assertTarget(known, merged);
     await this.fanDown(ctx, merged);
     const moved = movement(current, merged);
     if (moved) this.announce(ctx, `task ${id} ${moved} — re-evaluate`);
@@ -189,6 +194,10 @@ export class TaskStack implements TaskService {
   /** Delete a task everywhere. Deepest-first, so a remote that refuses (e.g. no delete-issue
    *  permission) throws before the local cache is touched — no half-deleted state to sync back. */
   async delete(ctx: ProjectContext, id: string): Promise<void> {
+    const held = tasksOf(await this.list(ctx), id);
+    if (held.length > 0) {
+      throw new Error(`target ${id} still holds ${idList(held)} — retarget or delete those first`);
+    }
     const layers = await this.all(ctx);
     for (const layer of [...layers].reverse()) {
       if (layer.delete) await layer.delete(ctx, id);
@@ -311,13 +320,35 @@ export class TaskStack implements TaskService {
   ): Promise<number> {
     let pushed = 0;
     for (const [layer, states] of pulls) {
-      const need = [...merged.values()].filter((task) => needsPush(states.get(task.id), task));
+      const need = [...merged.values()]
+        .filter((task) => needsPush(states.get(task.id), task))
+        .sort(targetsFirst);
       if (need.length === 0) continue;
       await pushAll(layer, ctx, need);
       if (layer !== top) pushed += need.length;
     }
     return pushed;
   }
+}
+
+/**
+ * Targets ahead of the tasks that name them. A layer that stores membership as a parent link — the
+ * GitHub sub-issue edge — needs the target's own issue to exist before a child can point at it, so a
+ * first sync that pushes both must push the targets first. Sort is stable, so nothing else moves.
+ */
+const targetsFirst = (a: Task, b: Task): number => Number(isTarget(b)) - Number(isTarget(a));
+
+/**
+ * A task may only name a target the stack actually holds. A typo would file work under a roadmap row
+ * nobody can find and the sub-issue edge would silently never land. This guards the AUTHORING surface
+ * (add_task / edit_task) only — `sync` stays tolerant, because it records what GitHub already says.
+ */
+function assertTarget(known: Map<string, ProviderState>, task: Task): void {
+  if (!task.target) return;
+  if (task.target === task.id) throw new Error(`task ${task.id} cannot target itself`);
+  const target = known.get(task.target)?.task;
+  if (!target) throw new Error(`no target ${task.target}`);
+  if (!isTarget(target)) throw new Error(`${task.target} is a task, not a target`);
 }
 
 /** How a status change reads in a ring — what a reader needs to know from the doorbell alone. */

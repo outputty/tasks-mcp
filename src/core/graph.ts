@@ -10,8 +10,8 @@ import { DirectedGraph } from "graphology";
 import { topologicalGenerations } from "graphology-dag";
 import { bfsFromNode } from "graphology-traversal";
 import { match, P } from "ts-pattern";
-import type { Task, QaLevel, Priority } from "./types.ts";
-import { SPEC_STATES, TIERS, QA_LEVELS, PRIORITIES } from "./types.ts";
+import type { Task, QaLevel, Priority, NodeType, Status } from "./types.ts";
+import { SPEC_STATES, TIERS, QA_LEVELS, PRIORITIES, NODE_TYPES } from "./types.ts";
 
 /** Ids of the tasks that are already finished. */
 export function doneIds(tasks: Task[]): Set<string> {
@@ -32,17 +32,35 @@ export function specSettled(task: Task): boolean {
   return task.spec === "settled";
 }
 
-/** Tasks that can be worked right now: open, settled, with every dependency done. */
+/** A record's validated type, defaulting to `task` — the shape everything had before targets. */
+export function typeOf(task: Task): NodeType {
+  const type = task.type ?? "task";
+  if (!(NODE_TYPES as readonly string[]).includes(type)) {
+    throw new Error(`unknown type '${type}' on task ${task.id} (types: ${NODE_TYPES.join(", ")})`);
+  }
+  return type;
+}
+
+/** A roadmap item: it groups the tasks that serve it and is never dispatched. */
+export const isTarget = (task: Task): boolean => typeOf(task) === "target";
+
+/**
+ * Tasks that can be worked right now: open, settled, with every dependency done — and NOT a target.
+ * A target is a roadmap row, not a unit of work; offering one would have an orchestrator dispatch a
+ * whole roadmap item as if it were a single build.
+ */
 export function ready(tasks: Task[]): Task[] {
   const done = doneIds(tasks);
   return tasks.filter(
-    (t) => t.status === "open" && specSettled(t) && t.deps.every((dep) => done.has(dep)),
+    (t) =>
+      t.status === "open" && !isTarget(t) && specSettled(t) && t.deps.every((dep) => done.has(dep)),
   );
 }
 
 /**
- * The tasks the planning stage owns: never specced, or sent back by a build. This is the mirror of
- * `ready`, and the two are disjoint by construction.
+ * The tasks the planning stage owns: never specced, or sent back by a build. Disjoint from `ready` by
+ * construction. Targets belong here too — a roadmap row whose spec is still drafting is exactly what
+ * planning owns — so this is a mirror of `ready` only across the non-target records.
  */
 export function planning(tasks: Task[]): Task[] {
   return tasks.filter((t) => t.status === "open" && !specSettled(t));
@@ -92,6 +110,8 @@ export const asArray = (value: unknown): string[] =>
 
 // The optional task fields a loose input may carry through verbatim.
 const OPTIONAL_FIELDS = [
+  "type",
+  "target",
   "brief",
   "contract",
   "tier",
@@ -120,6 +140,7 @@ export function buildTask(id: string, input: Record<string, unknown>): Task {
   tierOf(task);
   qaOf(task);
   priorityOf(task);
+  typeOf(task);
   return task;
 }
 
@@ -146,6 +167,7 @@ function validateLabelFields(task: Partial<Task> & { id: string }): void {
   if (task.tier !== undefined) tierOf(task as Task);
   if (task.qa !== undefined) qaOf(task as Task);
   if (task.priority !== undefined) priorityOf(task as Task);
+  if (task.type !== undefined) typeOf(task as Task);
 }
 
 /** The whole plan as ordered layers, in dependency order. Throws on a dependency cycle. */
@@ -292,6 +314,72 @@ function byScore(a: Eligible, b: Eligible): number {
   if (a.score !== b.score) return b.score - a.score;
   if (a.blocks !== b.blocks) return b.blocks - a.blocks;
   return a.task.id < b.task.id ? -1 : 1;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// The roadmap — the second altitude. A target groups the tasks that serve it; the graph derives where
+// each one stands rather than anyone maintaining a status by hand.
+
+/** The roadmap: every target node, in the order given. */
+export const targets = (tasks: Task[]): Task[] => tasks.filter(isTarget);
+
+/** The tasks serving one target. A target never counts as one of its own tasks. */
+export const tasksOf = (tasks: Task[], id: string): Task[] =>
+  tasks.filter((t) => t.target === id && !isTarget(t));
+
+/** How one target's tasks stand. `total` is the tasks pointing at it, not a promise of completeness. */
+export interface Progress {
+  total: number;
+  open: number;
+  in_progress: number;
+  done: number;
+}
+
+export function progressOf(tasks: Task[], id: string): Progress {
+  const mine = tasksOf(tasks, id);
+  const count = (status: Status): number => mine.filter((t) => t.status === status).length;
+  return {
+    total: mine.length,
+    open: count("open"),
+    in_progress: count("in_progress"),
+    done: count("done"),
+  };
+}
+
+/** One roadmap row as the graph knows it: the target, how its tasks stand, and what could start now. */
+export interface RoadmapEntry {
+  target: Task;
+  progress: Progress;
+  /** Ids of this target's tasks that are ready to dispatch. */
+  ready: string[];
+}
+
+/**
+ * The whole roadmap, dependency-ordered: every target with its derived progress and its startable
+ * tasks. This is what replaces reading a hand-maintained status column — nothing here is authored.
+ */
+export function roadmap(tasks: Task[]): RoadmapEntry[] {
+  const startable = new Set(ready(tasks).map((t) => t.id));
+  return targetOrder(targets(tasks)).map((target) => ({
+    target,
+    progress: progressOf(tasks, target.id),
+    ready: tasksOf(tasks, target.id)
+      .filter((t) => startable.has(t.id))
+      .map((t) => t.id),
+  }));
+}
+
+/** Targets in dependency order. A cycle among targets is a DISPLAY problem, not a scheduling one, so
+ *  an unorderable set falls back to the order given — `schedule` owns the cycle error contract. */
+function targetOrder(all: Task[]): Task[] {
+  const graph = buildGraph(all);
+  try {
+    return topologicalGenerations(graph)
+      .flat()
+      .map((node) => graph.getNodeAttribute(node, "task"));
+  } catch {
+    return all;
+  }
 }
 
 /** Fill the structural defaults a backend may omit, so the graph functions never see undefined. */

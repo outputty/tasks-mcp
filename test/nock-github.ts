@@ -15,6 +15,7 @@ export interface FakeIssue {
   body: string;
   state: "OPEN" | "CLOSED";
   labels?: string[]; // label NAMES
+  parent?: string | null; // the node id of the issue this one hangs under (the sub-issue edge)
 }
 
 export class NockGitHub {
@@ -41,6 +42,8 @@ export class NockGitHub {
   // match wins, and some needles ("on Issue", "repository(") are substrings of other queries' text.
   private readonly routes: Array<[string, (vars: Record<string, any>) => unknown]> = [
     ["createLabel", (v) => this.createLabel(v)],
+    ["addSubIssue", (v) => this.setParent(v, String(v.p))],
+    ["removeSubIssue", (v) => this.setParent(v, null)],
     ["addComment", (v) => this.addComment(v)],
     ["deleteIssue", (v) => this.deleteIssue(v)],
     ["deleteProjectV2Item", (v) => this.deleteItem(v)],
@@ -69,6 +72,13 @@ export class NockGitHub {
     const route = this.routes.find(([needle]) => q.includes(needle));
     if (!route) throw new Error(`unexpected graphql: ${q.replace(/\s+/g, " ").slice(0, 90)}`);
     return route[1](vars);
+  }
+
+  /** The sub-issue edge. `addSubIssue` carries replaceParent, so a move needs no detach first. */
+  private setParent(vars: Record<string, any>, parent: string | null): unknown {
+    const child = this.issues.find((x) => x.id === vars.s);
+    if (child) child.parent = parent;
+    return { [parent === null ? "removeSubIssue" : "addSubIssue"]: { issue: { id: vars.p } } };
   }
 
   private createLabel(vars: Record<string, any>): unknown {
@@ -212,6 +222,7 @@ export class NockGitHub {
           nodes: this.issues.map((i) => ({
             ...i,
             labels: { nodes: (i.labels ?? []).map((name) => ({ name })) },
+            parent: i.parent ? { id: i.parent } : null,
           })),
         },
       },

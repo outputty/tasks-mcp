@@ -6,7 +6,7 @@ import fs from "node:fs";
 import nock from "nock";
 import { TaskStack, DuplicateTaskError } from "../src/core/service.ts";
 import { FileProvider } from "../src/core/providers/file.ts";
-import { ready } from "../src/core/graph.ts";
+import { ready, roadmap } from "../src/core/graph.ts";
 import { Doorbell, EventLog, postEvent } from "../src/core/channel.ts";
 import { task, tmp, tmpRepo } from "./helpers.ts";
 import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
@@ -344,5 +344,72 @@ test("starting a task announces it, so a second dispatcher sees the graph move",
 
   expect(log.read()).toEqual(["task schema picked up — re-evaluate"]);
   svc.stop();
+  cleanup();
+});
+
+// ---------------------------------------------------------------------------------------------------
+// Targets — the authoring guards, and the ordering the sub-issue edge needs.
+
+test("a task may only name a target the stack actually holds", async () => {
+  const { svc, project, cleanup } = harness();
+  const ctx = { project };
+  await expect(svc.create(ctx, task({ id: "a", target: "typo" }))).rejects.toThrow(
+    /no target typo/,
+  );
+  await svc.create(ctx, task({ id: "plain" }));
+  await expect(svc.create(ctx, task({ id: "b", target: "plain" }))).rejects.toThrow(
+    /is a task, not a target/,
+  );
+  cleanup();
+});
+
+test("closing a task whose target vanished still works — the guard is for MOVES only", async () => {
+  const { svc, project, cacheDir, cleanup } = harness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "r", type: "target" }));
+  await svc.create(ctx, task({ id: "a", target: "r" }));
+  // The target disappears out from under the task — removed by hand, say. Re-validating an untouched
+  // target here would strand the work: you could no longer close it.
+  await new FileProvider({ cacheDir }).delete(ctx, "r");
+  await expect(svc.close(ctx, "a")).resolves.toBeUndefined();
+  cleanup();
+});
+
+test("deleting a target that still holds tasks is refused, naming them", async () => {
+  const { svc, project, cleanup } = harness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "r", type: "target" }));
+  await svc.create(ctx, task({ id: "a", target: "r" }));
+  await expect(svc.delete(ctx, "r")).rejects.toThrow(/still holds a/);
+  cleanup();
+});
+
+test("sync pushes targets before the tasks that name them, so the edge lands in one pass", async () => {
+  const { svc, gh, project, cacheDir, cleanup } = harness();
+  const ctx = { project };
+  // Seed the FILE layer only, child first — GitHub has neither, so one sync must create both and
+  // still attach the edge. Without target-first ordering the parent issue would not exist yet.
+  const file = new FileProvider({ cacheDir });
+  await file.upsertMany(ctx, [task({ id: "a", target: "r" }), task({ id: "r", type: "target" })]);
+  await svc.sync(ctx);
+  const parent = gh.issues.find((i) => i.title === "r")!;
+  expect(gh.issues.find((i) => i.title === "a")!.parent).toBe(parent.id);
+  cleanup();
+});
+
+test("a target is never ready, and its progress is derived from its tasks", async () => {
+  const { svc, project, cleanup } = harness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "r", type: "target" }));
+  await svc.create(ctx, task({ id: "a", target: "r" }));
+  await svc.create(ctx, task({ id: "b", target: "r" }));
+  await svc.close(ctx, "a");
+  expect(ready(await svc.list(ctx)).map((t) => t.id)).toEqual(["b"]);
+  expect(roadmap(await svc.list(ctx))[0].progress).toEqual({
+    total: 2,
+    open: 1,
+    in_progress: 0,
+    done: 1,
+  });
   cleanup();
 });

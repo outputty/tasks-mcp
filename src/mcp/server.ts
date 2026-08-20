@@ -9,7 +9,7 @@ import { z } from "zod";
 import pkg from "../../package.json";
 import type { TaskService } from "../core/service.ts";
 import type { ProjectContext, Task } from "../core/types.ts";
-import { QA_LEVELS, SPEC_STATES, PRIORITIES, TRAIL_KINDS } from "../core/types.ts";
+import { QA_LEVELS, SPEC_STATES, PRIORITIES, TRAIL_KINDS, NODE_TYPES } from "../core/types.ts";
 import { ProjectConfigSchema } from "../core/providers/config.ts";
 import {
   eligible,
@@ -17,6 +17,7 @@ import {
   schedule,
   prereqs,
   blockers,
+  roadmap,
   buildTask,
   buildPatch,
   asArray,
@@ -78,6 +79,7 @@ const ROW = {
   tier: z.number(),
   qa: z.string(),
   priority: z.string(),
+  target: z.string().optional(),
 };
 const indexRow = (task: Task) => ({
   id: task.id,
@@ -87,6 +89,7 @@ const indexRow = (task: Task) => ({
   tier: tierOf(task),
   qa: qaOf(task),
   priority: priorityOf(task),
+  ...(task.target ? { target: task.target } : {}),
 });
 
 // A ready row is an index row plus its rank: how many open tasks wait on it, and the combined score.
@@ -140,6 +143,50 @@ export function createMcpServer(service: TaskService): McpServer {
       return result({
         ids: ranked.map((e) => e.task.id),
         tasks: ranked.map(readyRow),
+      });
+    },
+  );
+
+  server.registerTool(
+    "roadmap",
+    {
+      description:
+        "Where every roadmap target stands: its tasks counted by status and the ones ready to " +
+        "dispatch, in dependency order. Nothing here is hand-maintained — progress is DERIVED from " +
+        "the tasks pointing at each target, so it cannot go stale. Read this before choosing work; " +
+        "list_ready ranks tasks, this says which target they serve.",
+      inputSchema: { project: PROJECT, branch: BRANCH },
+      outputSchema: {
+        targets: z.array(
+          z.object({
+            id: z.string(),
+            summary: z.string(),
+            status: z.string(),
+            deps: z.array(z.string()),
+            priority: z.string(),
+            progress: z.object({
+              total: z.number(),
+              open: z.number(),
+              in_progress: z.number(),
+              done: z.number(),
+            }),
+            ready: z.array(z.string()),
+          }),
+        ),
+      },
+    },
+    async (args) => {
+      const rows = roadmap(await service.list(ctxOf(args)));
+      return result({
+        targets: rows.map((row) => ({
+          id: row.target.id,
+          summary: row.target.title,
+          status: row.target.status,
+          deps: row.target.deps,
+          priority: priorityOf(row.target),
+          progress: row.progress,
+          ready: row.ready,
+        })),
       });
     },
   );
@@ -242,12 +289,42 @@ export function createMcpServer(service: TaskService): McpServer {
         priority: z.enum(PRIORITIES).optional().describe("How urgent (default normal)."),
         spec: z.enum(SPEC_STATES).optional().describe("Planning lifecycle."),
         stage: z.string().optional().describe("Narrative label on a staged deliverable."),
+        target: z
+          .string()
+          .optional()
+          .describe("The roadmap target this serves (add_target creates one). Must already exist."),
         discovered_from: z.string().optional().describe("Parent task, when split out mid-build."),
       },
       outputSchema: { task: z.unknown() },
     },
     async (args) => {
       const task = buildTask(args.id, args); // normalizes and validates before the write
+      return result({ task: await service.create(ctxOf(args), task) });
+    },
+  );
+
+  server.registerTool(
+    "add_target",
+    {
+      description:
+        "Create a roadmap TARGET — the row a set of tasks serves. A target is never offered by " +
+        "list_ready and is never built: it groups work and its progress is derived from the tasks " +
+        "that name it (add_task/edit_task `target`). On GitHub it is an issue whose sub-issues are " +
+        "those tasks. Its brief is the WHY — why this is worth building — not an implementation spec.",
+      inputSchema: {
+        project: PROJECT,
+        branch: BRANCH,
+        id: z.string().describe("Stable unique id, e.g. `targets-in-the-graph`."),
+        title: z.string().optional().describe("The target, nameable in one sentence."),
+        brief: z.string().optional().describe("The WHY: what makes this worth building, and now."),
+        deps: LIST.optional().describe("Targets that must ship before this one."),
+        priority: z.enum(PRIORITIES).optional().describe("How urgent (default normal)."),
+        spec: z.enum(SPEC_STATES).optional().describe("Planning lifecycle."),
+      },
+      outputSchema: { task: z.unknown() },
+    },
+    async (args) => {
+      const task = buildTask(args.id, { ...args, type: "target" });
       return result({ task: await service.create(ctxOf(args), task) });
     },
   );
@@ -308,6 +385,11 @@ export function createMcpServer(service: TaskService): McpServer {
         priority: z.enum(PRIORITIES).optional().describe("How urgent."),
         spec: z.enum(SPEC_STATES).optional().describe("Planning lifecycle."),
         stage: z.string().optional().describe("Narrative label on a staged deliverable."),
+        target: z
+          .string()
+          .optional()
+          .describe("Move this under a different roadmap target (re-parents its issue)."),
+        type: z.enum(NODE_TYPES).optional().describe("task | target. Promote or demote a record."),
       },
       outputSchema: { task: z.unknown() },
     },

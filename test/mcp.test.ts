@@ -78,26 +78,29 @@ test("initialize reports the package's own name and version", async () => {
   await cleanup();
 });
 
+// The surface tools/list must advertise. Kept beside the test so adding a tool is a one-line change.
+const TOOL_NAMES = [
+  "list_tasks",
+  "list_ready",
+  "list_planning",
+  "schedule",
+  "get_task",
+  "add_task",
+  "amend_task",
+  "edit_task",
+  "close_task",
+  "delete_task",
+  "get_trail",
+  "append_trail",
+  "sync",
+  "add_target",
+  "roadmap",
+];
+
 test("tools/list advertises the whole surface, each requiring project", async () => {
   const { client, cleanup } = await harness();
   const { tools } = await client.listTools();
-  expect(tools.map((t) => t.name)).toEqual(
-    expect.arrayContaining([
-      "list_tasks",
-      "list_ready",
-      "list_planning",
-      "schedule",
-      "get_task",
-      "add_task",
-      "amend_task",
-      "edit_task",
-      "close_task",
-      "delete_task",
-      "get_trail",
-      "append_trail",
-      "sync",
-    ]),
-  );
+  expect(tools.map((t) => t.name)).toEqual(expect.arrayContaining(TOOL_NAMES));
   for (const t of tools) expect(t.inputSchema.required).toContain("project");
   await cleanup();
 });
@@ -327,5 +330,65 @@ test("notify rings the doorbell with a one-line reason", async () => {
     }),
   );
   expect(res.note).toBe("spec gate on channel-emitter");
+  await cleanup();
+});
+
+// ---------------------------------------------------------------------------------------------------
+// The roadmap altitude, over the real protocol.
+
+test("add_target files a roadmap row that list_ready never offers", async () => {
+  const { client, project, cleanup } = await harness();
+  await client.callTool({
+    name: "add_target",
+    arguments: { project, id: "roadmap-in-graph", title: "Targets in the graph", brief: "the why" },
+  });
+  await client.callTool({
+    name: "add_task",
+    arguments: { project, id: "sub-issues", title: "The edge", target: "roadmap-in-graph" },
+  });
+  const ready = structured(await client.callTool({ name: "list_ready", arguments: { project } }));
+  expect(ready.ids).toEqual(["sub-issues"]); // the target itself is not work
+  expect(ready.tasks[0].target).toBe("roadmap-in-graph"); // every ready row names its target
+  await cleanup();
+});
+
+test("roadmap reports derived progress per target, in dependency order", async () => {
+  const { client, project, cleanup } = await harness();
+  const call = (name: string, args: Record<string, unknown>) =>
+    client.callTool({ name, arguments: { project, ...args } });
+  await call("add_target", { id: "first", title: "First" });
+  await call("add_target", { id: "second", title: "Second", deps: ["first"] });
+  await call("add_task", { id: "a", target: "first" });
+  await call("add_task", { id: "b", target: "first" });
+  await call("close_task", { id: "a" });
+
+  const { targets } = structured(await call("roadmap", {}));
+  expect(targets.map((t: { id: string }) => t.id)).toEqual(["first", "second"]);
+  expect(targets[0].progress).toEqual({ total: 2, open: 1, in_progress: 0, done: 1 });
+  expect(targets[0].ready).toEqual(["b"]);
+  expect(targets[1].progress.total).toBe(0);
+  await cleanup();
+});
+
+test("add_task refuses a target that does not exist, rather than orphaning the work", async () => {
+  const { client, project, cleanup } = await harness();
+  const res = await client.callTool({
+    name: "add_task",
+    arguments: { project, id: "a", target: "no-such-row" },
+  });
+  expect((res as { isError?: boolean }).isError).toBe(true);
+  expect(JSON.stringify(res.content)).toContain("no target no-such-row");
+  await cleanup();
+});
+
+test("edit_task moves a task between targets", async () => {
+  const { client, project, cleanup } = await harness();
+  const call = (name: string, args: Record<string, unknown>) =>
+    client.callTool({ name, arguments: { project, ...args } });
+  await call("add_target", { id: "one" });
+  await call("add_target", { id: "two" });
+  await call("add_task", { id: "a", target: "one" });
+  const moved = structured(await call("edit_task", { id: "a", target: "two" }));
+  expect(moved.task.target).toBe("two");
   await cleanup();
 });

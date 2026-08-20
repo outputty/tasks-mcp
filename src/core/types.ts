@@ -9,7 +9,11 @@ export const SPEC_STATES = ["drafting", "settled", "replan"] as const;
 export const QA_LEVELS = ["skip", "inline", "subagent"] as const;
 export const PRIORITIES = ["high", "normal", "low"] as const;
 export const TIERS = [1, 2, 3, 4] as const;
+// What a record IS. A `target` is a roadmap item: it groups tasks and is never dispatched. Distinct
+// from `kind`, which is the user's own free-text classifier (feature, bug, chore).
+export const NODE_TYPES = ["task", "target"] as const;
 export const LABEL_FIELD_NAMES = [
+  "type",
   "kind",
   "tier",
   "qa",
@@ -23,6 +27,7 @@ export const LABEL_FIELD_NAMES = [
 export const TRAIL_KINDS = ["decision", "action", "note"] as const;
 
 export type Status = (typeof STATUSES)[number];
+export type NodeType = (typeof NODE_TYPES)[number];
 export type SpecState = (typeof SPEC_STATES)[number];
 export type QaLevel = (typeof QA_LEVELS)[number];
 export type Priority = (typeof PRIORITIES)[number];
@@ -56,6 +61,17 @@ export interface Task {
   /** Stable key, unique within a project. Survives title edits. */
   id: string;
   title: string;
+  /**
+   * What this record is. A `target` is a roadmap item — it groups the tasks that serve it and is
+   * NEVER offered by `ready`, so nothing dispatches a roadmap row as if it were buildable. Absent
+   * means `task`.
+   */
+  type?: NodeType;
+  /**
+   * The target this record serves. On GitHub this IS the sub-issue edge (the target's issue is the
+   * parent), so re-parenting an issue in the web UI flows back on the next sync.
+   */
+  target?: string;
   /**
    * Lifecycle. `in_progress` is what a worker sets when it picks the task up: `ready` matches only
    * `open`, so a task being built stops being offered and nobody dispatches it twice. It clears
