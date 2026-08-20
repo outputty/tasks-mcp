@@ -340,3 +340,64 @@ test("with labels off, type survives in the body block — a target must never c
   expect(gh.issues[0].body).toContain("type: target");
   expect((await provider.pull(ctx)).get("roadmap-row")!.task.type).toBe("target");
 });
+
+// ---------------------------------------------------------------------------------------------------
+// `-->` inside the hidden block. A mermaid arrow IS the HTML comment terminator, and the flow asks for
+// diagrams inline in a brief, so this is the shape a real task arrives in.
+
+const MERMAID_BRIEF = [
+  "The sync path forks.",
+  "",
+  "```mermaid",
+  "flowchart TD",
+  "  pull --> merge",
+  "  merge --> push",
+  "```",
+  "",
+  "Both branches must converge.",
+].join("\n");
+
+test("a brief with an inline mermaid diagram round-trips whole, arrows and all", async () => {
+  const { gh, provider, ctx } = setup();
+  await provider.upsert(ctx, task({ id: "diagram", title: "D", brief: MERMAID_BRIEF }));
+
+  // The hidden block must not contain a raw `-->`, or GitHub closes the comment at the first arrow
+  // and renders the rest of the YAML as visible garbage.
+  const block = gh.issues[0].body!.slice(0, gh.issues[0].body!.indexOf("\n-->"));
+  expect(block).not.toContain("-->");
+  expect(block).toContain("--&gt;");
+
+  const pulled = (await provider.pull(ctx)).get("diagram")!.task;
+  expect(pulled.brief).toBe(MERMAID_BRIEF); // the whole diagram, not truncated at the first arrow
+});
+
+test("a body written BEFORE the escaping still reads back whole, not cut at the first arrow", async () => {
+  const { gh, provider, ctx } = setup();
+  // Exactly what an older version wrote: the arrow raw inside the block.
+  const yaml = `id: legacy-diagram\nbrief: |-\n${MERMAID_BRIEF.split("\n")
+    .map((l) => `  ${l}`)
+    .join("\n")}`;
+  gh.issues.push({
+    id: "I_70",
+    number: 70,
+    title: "legacy",
+    body: `<!-- outputty:task\n${yaml}\n-->\n\nhuman prose below`,
+    state: "OPEN",
+    labels: [],
+  });
+  const pulled = (await provider.pull(ctx)).get("legacy-diagram")!.task;
+  expect(pulled.brief).toBe(MERMAID_BRIEF); // recovered: the terminator is a line of its own
+});
+
+test("a hand-written one-line block is still found", async () => {
+  const { gh, provider, ctx } = setup();
+  gh.issues.push({
+    id: "I_71",
+    number: 71,
+    title: "one-liner",
+    body: "<!-- outputty:task id: hand-written -->",
+    state: "OPEN",
+    labels: [],
+  });
+  expect((await provider.pull(ctx)).get("hand-written")!.task.id).toBe("hand-written");
+});

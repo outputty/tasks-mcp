@@ -241,6 +241,11 @@ not mistaken for human prose; prose a human writes *below* the region is still p
   their task is written (a plain `sync` won't rewrite an unchanged task — see roadmap #7).
 - Labels win over a legacy block that still carries scalar fields (pre-v0.8 issues).
 - The block IS the management marker — there is no marker label anymore.
+- **`-->` inside the block is escaped to `--&gt;`.** It terminates an HTML comment by spec, and a
+  mermaid arrow is exactly that — so a brief with an inline diagram used to close the block early,
+  spill YAML into the visible body, and read back truncated mid-diagram with the YAML still parsing,
+  so nothing ever errored. `parseBody` also matches the terminator as a `-->` ALONE on its line, which
+  recovers a body written before the escaping instead of cutting it at the first arrow.
 
 ### field:value labels
 

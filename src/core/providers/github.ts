@@ -243,6 +243,33 @@ function renderSpec(task: Task): string {
   return `${SPEC_OPEN}\n${lines.join("\n\n")}\n${SPEC_CLOSE}`;
 }
 
+// `-->` ENDS an HTML comment — that is the HTML spec, not a parser choice here — and a mermaid arrow
+// IS `-->`. A brief carrying an inline diagram (which the flow asks for) would otherwise close the
+// hidden block at its first arrow: the rest of the YAML renders as visible garbage on GitHub, and the
+// next pull reads a brief truncated mid-diagram, with the YAML still valid so nothing ever errors.
+// So the block's text is escaped on the way in and restored on the way out. `--&gt;` is the natural
+// HTML escaping and stays readable to anyone looking at the raw body; the one corner is that a brief
+// containing that literal text comes back as `-->`.
+const ARROW = /-->/g;
+const ESCAPED_ARROW = /--&gt;/g;
+const escapeBlock = (text: string): string => text.replace(ARROW, "--&gt;");
+const unescapeBlock = (text: string): string => text.replace(ESCAPED_ARROW, "-->");
+
+// The block's real terminator is `-->` ALONE on its line, which is how renderBody writes it. Matching
+// that rather than the first `-->` anywhere is what lets a body written before the escaping — one with
+// a raw arrow inside the block — still be read back whole instead of truncated.
+const BLOCK_END = /^[ \t]*-->[ \t]*$/m;
+
+/** Where the hidden block ends, or -1. Falls back to the first `-->` so a hand-written one-line block
+ *  (`<!-- outputty:task id: x -->`) is still found. */
+function blockEnd(body: string, from: number): number {
+  const rest = body.slice(from);
+  const line = BLOCK_END.exec(rest);
+  if (line) return from + line.index + line[0].indexOf(META_CLOSE);
+  const first = body.indexOf(META_CLOSE, from);
+  return first;
+}
+
 /** Serialise a task into an issue body: the hidden machine block (id first), the visible spec render,
  *  then any genuinely human-added prose kept below (regenerating the spec never touches it). */
 function renderBody(task: Task, human = ""): string {
@@ -251,7 +278,7 @@ function renderBody(task: Task, human = ""): string {
     const value = (task as unknown as Record<string, unknown>)[key];
     if (!skipMeta(key, value)) meta[key] = value;
   }
-  const yaml = stringify(meta).trim();
+  const yaml = escapeBlock(stringify(meta).trim());
   const block = `${META_OPEN}\n${yaml}\n${META_CLOSE}`;
   const parts = human ? [block, renderSpec(task), human] : [block, renderSpec(task)];
   return parts.join("\n\n").trimEnd() + "\n";
@@ -264,9 +291,9 @@ function parseBody(body: string | null | undefined): {
   if (!body) return { meta: {}, human: "" };
   const start = body.indexOf(META_OPEN);
   if (start === -1) return { meta: {}, human: body.trim() };
-  const end = body.indexOf(META_CLOSE, start);
+  const end = blockEnd(body, start + META_OPEN.length);
   if (end === -1) return { meta: {}, human: body.trim() };
-  const yaml = body.slice(start + META_OPEN.length, end).trim();
+  const yaml = unescapeBlock(body.slice(start + META_OPEN.length, end).trim());
   let meta: Record<string, unknown> = {};
   try {
     meta = (parse(yaml) as Record<string, unknown>) || {};

@@ -47,6 +47,13 @@ A task's full record round-trips through its issue, split across three homes:
 | `tags`                                                                    | **plain labels**, verbatim (`security`, `frontend`) — adopted on pull    |
 | `title` / `status`                                                        | issue title / open ↔ closed                                              |
 
+**The block escapes `-->`.** That sequence ends an HTML comment — the HTML spec, not a parser choice —
+and a mermaid arrow is exactly `-->`. A brief carrying an inline diagram would otherwise close the block
+at its first arrow, spilling the rest of the YAML into the visible body and truncating the brief on the
+next read, with the YAML still valid so nothing errored. The block's text is written as `--&gt;` and
+restored on read; the terminator is matched as a `-->` alone on its line, so a body written before this
+still reads back whole.
+
 An issue is "managed" iff its body carries the block. Below the hidden block, the body renders a
 **visible, concise summary** — the brief (the problem and expected solution), then **What to account
 for** (the contract) — wrapped in `<!-- outputty:spec -->` sentinels and **regenerated on every write**,
