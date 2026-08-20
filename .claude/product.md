@@ -21,7 +21,9 @@ Strong sides, one example each:
   ranked by transitive downstream impact).
 - Two altitudes in one graph: a `target` is a roadmap row that groups the tasks serving it, its
   progress derived from them rather than maintained by hand, and the same engine answers
-  "what must ship before this target" that answers it for a task.
+  "what must ship before this target" that answers it for a task. The roadmap then RANKS the
+  work: a task inherits its target's urgency and reach, and one whose target still waits on an
+  unshipped target sorts below every task whose row is clear.
 - The sync survives the real world. A hand-opened issue is adopted as a task; a label edit
   in the GitHub UI flows back on the next sync; a junk label value is ignored, not crashed
   on; a corrupt or deleted local copy rebuilds itself from the providers.
@@ -44,13 +46,18 @@ a free migration and losing the local copy loses nothing.
 - **managed issue** — An issue whose body carries the block; human prose below the block is preserved across updates.
 - **adopt** — Import a hand-opened issue as task `gh-<number>` and stamp its body with the block, so it is tracked from then on.
 - **execution properties** — The scalar fields that modify how a task is built — kind, tier, qa, spec, stage, priority.
-- **field:value label** — One GitHub label per execution property (`tier:2`, `priority:high`) — created on demand, color-coded per field, editable in the UI, pulled back by sync; junk values ignored; foreign labels never touched.
+- **field:value label** — One GitHub label per execution property (`tier:2`, `priority:high`) — created on demand, color-coded per field, editable in the UI, pulled back by sync; junk values ignored.
+- **only what says something** — The rule for writing a label: absence already means the default, so a default value earns no label and a label on an issue always carries information. (replaces: label every set field)
+- **tag** — A plain GitHub label carried verbatim (`security`, `frontend`) — adopted into the task on every pull, written back exactly. (replaces: foreign label)
+- **clear** — Removing a field outright, `edit_task`'s way of taking a label off an issue; the one thing an absent key cannot say.
+- **roadmap weight** — What a target contributes to its tasks' rank: its priority x how many targets wait on it, normalized so an ordinary row weighs 1.
+- **the plan says not yet** — A ready task whose target waits on an unshipped target: ranked below every clear row, never hidden, never gated.
 - **board** — The Projects v2 kanban — one card per task-issue, Status column mirrors open/done both ways; found or created by name (default "Tasks"). (replaces: kanban)
 - **best-effort** — The board's error contract — a board failure warns and continues; the issue write always decides success.
 - **first-wins** — Duplicate-id resolution — when two issues claim one task id, every read and write resolves to the OLDEST issue; the collision is counted, never auto-deleted. (replaces: last-wins)
 - **quarantine** — An unparseable task file is renamed `.corrupt`; the layer reads empty and the next sync rebuilds it from the layers below.
 - **the two questions** — What a dependency graph is for — `prereqs` (what must be done before X, as ordered layers) and `blockers` (open tasks ranked by transitive downstream impact).
-- **target** — A roadmap item as a graph node: `type: target`, groups the tasks naming it, never dispatched, progress derived. (replaces: roadmap row, epic, milestone)
+- **target** — A roadmap item as a graph node: `type: target`, groups the tasks naming it, never dispatched, progress derived. A NAME and a WHY, both required; no build fields; never under another target. (replaces: roadmap row, epic, milestone)
 - **sub-issue edge** — Where a task's `target` is stored on GitHub — the target's issue is its parent, so re-parenting in the web UI flows back. (replaces: target label, project membership)
 - **derived progress** — A target's standing, counted from the tasks pointing at it; never authored, so it cannot go stale.
 - **ready** — A task that can be worked right now — open, spec settled, every dep done, and NOT a target.

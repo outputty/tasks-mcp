@@ -143,6 +143,8 @@ program
   .option("--stage <label>", "narrative label on a staged deliverable")
   .option("--brief <text>", "the build brief")
   .option("--contract <text>", "the done-condition")
+  .option("--kind <text>", "free-text classifier — feature | bug | chore | yours")
+  .option("--tags <labels>", "comma-separated plain GitHub labels (no `field:` prefix)")
   .option("--target <id>", "the roadmap target this task serves")
   .action(async (id: string, opts: Record<string, unknown>) => {
     // The SAME builder the MCP surface uses: comma strings normalize, tier/qa/priority validate.
@@ -151,13 +153,18 @@ program
 
 program
   .command("add-target")
-  .description("create a roadmap target — the row a set of tasks serves; never built itself")
+  .description(
+    "create a roadmap target — the row a set of tasks serves; never built itself. A name and a " +
+      "paragraph, both required; it may carry no build fields.",
+  )
   .argument("<id>", "stable unique id")
-  .option("--title <text>", "the target, nameable in one sentence")
-  .option("--brief <text>", "the WHY: what makes this worth building, and now")
-  .option("--deps <ids>", "comma-separated targets that must ship first")
-  .option("--priority <level>", "high | normal | low")
+  .requiredOption("--title <text>", "the target, nameable in one sentence")
+  .requiredOption("--brief <text>", "the WHY: what makes this worth building, and now")
+  .option("--deps <ids>", "comma-separated targets that must SHIP before this one")
+  .option("--priority <level>", "high | normal | low — multiplies the rank of every task it holds")
   .option("--spec <state>", "drafting | settled | replan")
+  .option("--kind <text>", "free-text classifier")
+  .option("--tags <labels>", "comma-separated plain GitHub labels")
   .action(async (id: string, opts: Record<string, unknown>) => {
     out(await service().create(ctx(), buildTask(id, { ...opts, type: "target" })));
   });
@@ -176,8 +183,11 @@ program
   .option("--stage <label>", "narrative label on a staged deliverable")
   .option("--brief <text>", "the build brief (problem + expected solution)")
   .option("--contract <text>", "the done-condition (what to account for)")
+  .option("--kind <text>", "free-text classifier — feature | bug | chore | yours")
+  .option("--tags <labels>", "comma-separated plain GitHub labels (replaces the list)")
   .option("--target <id>", "move this under a different roadmap target")
-  .option("--type <kind>", "task | target")
+  .option("--type <node>", "task | target")
+  .option("--clear <fields>", "comma-separated fields to REMOVE (how a label comes off an issue)")
   .action(async (id: string, opts: Record<string, unknown>) => {
     const patch = buildPatch(id, opts); // same builder the MCP edit_task uses
     if (!Object.keys(patch).length) throw new Error("edit needs at least one field to change");

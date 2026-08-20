@@ -36,6 +36,7 @@ import type {
 } from "../types.ts";
 import {
   LABEL_FIELD_NAMES,
+  DEFAULTS,
   NODE_TYPES,
   STATUSES,
   TIERS,
@@ -164,25 +165,38 @@ const labelField = (name: string): LabelFieldName | null => {
 };
 
 /**
- * Whether one field is worth a label on this record. `status` and `type` each have a value that
- * nearly every issue shares — `open` is the issue's own state, and everything that is not a target is
- * a task — so labelling those would put a redundant label on every issue in the repo. Only the value
- * GitHub cannot otherwise show gets one: `status:in_progress`, and `type:target`.
+ * Whether one field is worth a label on this record. A label earns its place only when it says
+ * something a reader could not already assume — and ABSENCE already means the default: `tierOf`
+ * returns 3, `qaOf` returns subagent, an absent spec counts as settled, an open issue is open, a
+ * record with no type is a task. A label carrying a default would therefore sit on nearly every issue
+ * in the repo saying nothing, so only the value GitHub cannot otherwise show gets one: `tier:1`,
+ * `priority:high`, `spec:drafting`, `type:target`. `kind` and `stage` are free text with no default
+ * and are worn whenever set; `status` is narrower still, since GitHub's issue state shows two of
+ * its three values on its own.
  */
 function wearsLabel(task: Task, field: LabelFieldName): boolean {
-  if (task[field] === undefined) return false;
-  if (field === "status") return task.status === "in_progress";
-  if (field === "type") return task.type === "target";
-  return true;
+  const value = task[field];
+  if (value === undefined) return false;
+  // `status` is the one field GitHub half-owns: its issue state already shows open AND closed, so
+  // only the value that has no native state — someone is on it — is worth a label.
+  if (field === "status") return value === "in_progress";
+  return value !== DEFAULTS[field as keyof typeof DEFAULTS];
 }
 
-/** The labels a task wears — one `field:value` per configured label-worn field that earns one — or
- *  null when the label sync is configured off (meaning: do not touch labels at all). */
+/** The labels a task wears — one `field:value` per configured field that earns one, then its tags
+ *  verbatim — or null when the label sync is configured off (meaning: do not touch labels at all). */
 function labelsFor(task: Task, config: ProjectConfig): string[] | null {
   if (config.labels === false) return null;
   const fields = config.labelFields ?? LABEL_FIELD_NAMES;
-  return fields.filter((field) => wearsLabel(task, field)).map((f) => `${f}:${task[f]}`);
+  const worn = fields.filter((field) => wearsLabel(task, field)).map((f) => `${f}:${task[f]}`);
+  return [...worn, ...(task.tags ?? [])];
 }
+
+/** The BARE labels an issue wears — everything that is not one of ours — read back as the task's
+ *  tags. Adoption happens on every pull, so a label a human adds in the web UI flows back like any
+ *  other edit, and a write can never drop one the local copy had not heard of yet. */
+const tagsOf = (issue: GhIssue): string[] =>
+  (issue.labels?.nodes ?? []).filter((l) => labelField(l.name) === null).map((l) => l.name);
 
 /** A label's value parsed for its field — hand-typed junk (`tier:x`) is ignored, not crashed on.
  *  The valid sets are the shared domains, so the parser can never drift from the validators. */
@@ -296,6 +310,7 @@ function issueToTask(issue: GhIssue): Task {
     id: String(meta.id),
     title: issue.title || "",
     status: issueStatus(issue, labelled),
+    tags: tagsOf(issue),
   } as Partial<Task> & { id: string });
 }
 
@@ -405,6 +420,8 @@ interface ListedIssue {
   task: Task;
   issueId: string;
   managed: boolean;
+  /** The label names the issue actually wears, so a pull can tell a STALE one from a current one. */
+  labels: string[];
   /** The issue this one hangs under, if any — resolved to a task id by `collate`. */
   parentIssueId: string | null;
 }
@@ -422,8 +439,30 @@ function listedIssue(issue: GhIssue): ListedIssue {
     task,
     issueId: issue.id,
     managed: mid !== null,
+    labels: (issue.labels?.nodes ?? []).map((l) => l.name),
     parentIssueId: issue.parent?.id ?? null,
   };
+}
+
+/**
+ * Whether the issue wears a `field:value` label this record would NOT wear — its value is the field's
+ * default (so it says nothing absence does not), or it is junk the parser dropped. A pull flags such
+ * an issue for a rewrite, which is how a repo migrates off the labels older versions wrote: without
+ * it a `spec:settled` from before this rule would sit there until something happened to touch the
+ * task, since both layers agree on the task itself and nothing would push.
+ *
+ * Deliberately narrower than "the labels differ from what we would write". Narrowing the
+ * `labelFields` preference must stay NON-destructive — it stops writing a field's label, it does not
+ * strip the ones already there — and any-difference would turn it into a purge. `wearsLabel` is
+ * asked about the parsed value alone and never consults the config, so this cannot.
+ */
+function wearsStaleLabel(task: Task, labels: string[]): boolean {
+  return labels.some((name) => {
+    const field = labelField(name);
+    if (!field) return false; // a plain label is a tag, and tags are never stale
+    const value = parseLabelValue(field, name.slice(field.length + 1));
+    return value === undefined || !wearsLabel({ ...task, [field]: value } as Task, field);
+  });
 }
 
 /** Push back when the sides disagree, the card is missing, or the issue needs adopting — the push
@@ -432,11 +471,12 @@ function needsReconcile(
   listed: ListedIssue,
   card: BoardCard | undefined,
   status: Task["status"],
-  boardOn: boolean,
+  on: { board: boolean; labels: boolean },
 ): boolean {
   if (!listed.managed) return true;
   if (listed.task.status !== status) return true;
-  return boardOn && (!card || card.status !== status);
+  if (on.labels && wearsStaleLabel(listed.task, listed.labels)) return true;
+  return on.board && (!card || card.status !== status);
 }
 
 /**
@@ -454,7 +494,7 @@ function resolveStatus(listed: ListedIssue, card: BoardCard | undefined): Task["
 function providerState(
   listed: ListedIssue,
   card: BoardCard | undefined,
-  boardOn: boolean,
+  on: { board: boolean; labels: boolean },
   owner: Map<string, string>,
 ): ProviderState {
   const status = resolveStatus(listed, card);
@@ -464,7 +504,7 @@ function providerState(
   // The task is rebuilt whole from the body (deps included), with status and target reconciled.
   return {
     task: { ...listed.task, status, ...(target ? { target } : {}) },
-    reconcile: needsReconcile(listed, card, status, boardOn),
+    reconcile: needsReconcile(listed, card, status, on),
   };
 }
 
@@ -493,7 +533,7 @@ interface Scanned {
  *  carrying an id (deterministic, and the one a human saw first); newer duplicates are flagged. */
 function collate(
   scan: Scanned[],
-  boardOn: boolean,
+  on: { board: boolean; labels: boolean },
 ): { states: Map<string, ProviderState>; index: Map<string, IssueHandle> } {
   const owner = issueOwners(scan);
   const states = new Map<string, ProviderState>();
@@ -504,7 +544,7 @@ function collate(
       existing.conflict = true; // a newer issue also claims this id; the oldest stays the record
       continue;
     }
-    states.set(listed.task.id, providerState(listed, card, boardOn, owner));
+    states.set(listed.task.id, providerState(listed, card, on, owner));
     index.set(listed.task.id, handleFor(listed, card));
   }
   return { states, index };
@@ -518,10 +558,17 @@ function issueOwners(scan: Scanned[]): Map<string, string> {
   return out;
 }
 
-/** The label node ids on an issue that are NOT ours — kept as-is on every update. */
-function foreignLabelIds(
+/**
+ * The label node ids an update KEEPS rather than replaces. A `field:value` label is always ours. A
+ * bare one is ours too once the task manages tags — which every pulled issue does, since pull adopts
+ * them. Only a task that has never been pulled leaves a human's labels untouched, so nothing a write
+ * has not seen can be dropped by one.
+ */
+function keptLabelIds(
   node: { labels: { nodes: Array<{ id: string; name: string }> } } | null,
+  task: Task,
 ): string[] {
+  if (task.tags !== undefined) return [];
   return (node?.labels.nodes ?? []).filter((l) => labelField(l.name) === null).map((l) => l.id);
 }
 
@@ -534,6 +581,12 @@ function warnConflicts(repo: RepoRef, states: Map<string, ProviderState>): void 
     `tasks-mcp: ${repo.owner}/${repo.repo} has duplicate issues for task id(s): ${ids.join(", ")} — using the oldest of each`,
   );
 }
+
+/** Which mirrors this project actually keeps — the two a pull must not reconcile against when off. */
+const syncedIn = (state: ProjectState): { board: boolean; labels: boolean } => ({
+  board: state.board !== null,
+  labels: state.config.labels !== false,
+});
 
 /** Everything init resolves for one project; every later call runs against this. */
 interface ProjectState {
@@ -672,7 +725,7 @@ export class GitHubProvider implements Provider {
 
   async pull(ctx: ProjectContext): Promise<Map<string, ProviderState>> {
     const state = await this.state(ctx.project);
-    const { states, index } = collate(await this.scan(state), state.board !== null);
+    const { states, index } = collate(await this.scan(state), syncedIn(state));
     this.indexes.set(ctx.project, Promise.resolve(index));
     warnConflicts(state.repo, states);
     return states;
@@ -758,7 +811,7 @@ export class GitHubProvider implements Provider {
     let index = this.indexes.get(project);
     if (!index) {
       index = this.scan(state)
-        .then((scan) => collate(scan, state.board !== null).index)
+        .then((scan) => collate(scan, syncedIn(state)).index)
         .catch((err) => {
           this.indexes.delete(project);
           throw err;
@@ -951,7 +1004,7 @@ export class GitHubProvider implements Provider {
       id: issueId,
       t: task.title || task.id,
       b: renderBody(task, human),
-      l: labelIds === undefined ? undefined : [...foreignLabelIds(current.node), ...labelIds],
+      l: labelIds === undefined ? undefined : [...keptLabelIds(current.node, task), ...labelIds],
     });
     await this.setIssueState(issueId, task.status);
   }
@@ -987,7 +1040,7 @@ export class GitHubProvider implements Provider {
 
   private async issuePage(repo: RepoRef, after: string | null): Promise<Page<GhIssue>> {
     const res: { repository: { issues: Page<GhIssue> } } = await this.octokit.graphql(
-      `query($o:String!,$n:String!,$c:String){ repository(owner:$o,name:$n){ issues(first:100,after:$c,states:[OPEN,CLOSED],orderBy:{field:CREATED_AT,direction:ASC}){ pageInfo{ hasNextPage endCursor } nodes{ id number title body state labels(first:20){ nodes{ name } } parent{ id } } } } }`,
+      `query($o:String!,$n:String!,$c:String){ repository(owner:$o,name:$n){ issues(first:100,after:$c,states:[OPEN,CLOSED],orderBy:{field:CREATED_AT,direction:ASC}){ pageInfo{ hasNextPage endCursor } nodes{ id number title body state labels(first:50){ nodes{ name } } parent{ id } } } } }`,
       { o: repo.owner, n: repo.repo, c: after },
     );
     return res.repository.issues;

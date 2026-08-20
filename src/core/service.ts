@@ -7,12 +7,21 @@
 
 import { isDeepStrictEqual } from "node:util";
 import { match } from "ts-pattern";
-import type { ProjectConfig, ProjectContext, Task, TrailEntry } from "./types.ts";
+import type { ProjectConfig, ProjectContext, Task, TaskPatch, TrailEntry } from "./types.ts";
 import type { Provider, ProviderState } from "./providers/provider.ts";
 import type { ServerOptions } from "./types.ts";
 import { ConfigProvider, defaultCacheDir, type ConfigSources } from "./providers/config.ts";
 import { buildStack } from "./providers/provider.ts";
-import { eligible, idList, isTarget, tasksOf, withDefaults } from "./graph.ts";
+import {
+  assertTargetFields,
+  assertTargetWhy,
+  eligible,
+  idList,
+  isTarget,
+  tasksOf,
+  touchesTargetShape,
+  withDefaults,
+} from "./graph.ts";
 import { Doorbell, DEFAULT_NOTE, EventLog, postEvent } from "./channel.ts";
 
 export interface SyncResult {
@@ -33,7 +42,8 @@ export interface TaskService {
   list(ctx: ProjectContext): Promise<Task[]>;
   get(ctx: ProjectContext, id: string): Promise<Task | null>;
   create(ctx: ProjectContext, task: Task): Promise<Task>;
-  update(ctx: ProjectContext, id: string, patch: Partial<Task>): Promise<Task>;
+  /** Change a task. Only the fields the patch carries move; a field set to `null` is REMOVED. */
+  update(ctx: ProjectContext, id: string, patch: TaskPatch): Promise<Task>;
   close(ctx: ProjectContext, id: string): Promise<void>;
   /** Mark a task in progress — a worker picking it up. It leaves `ready`, so nothing dispatches it
    *  twice; closing or replanning clears it again. */
@@ -164,19 +174,25 @@ export class TaskStack implements TaskService {
     const known = await (await this.top(ctx)).pull(ctx);
     if (known.has(task.id)) throw new DuplicateTaskError(task.id);
     assertTarget(known, task);
+    assertTargetFields(task);
+    assertTargetWhy(task); // a target exists only once someone has written down why
     await this.fanDown(ctx, task);
     this.announce(ctx, `task ${task.id} added — re-evaluate`);
     return task;
   }
 
-  async update(ctx: ProjectContext, id: string, patch: Partial<Task>): Promise<Task> {
+  async update(ctx: ProjectContext, id: string, patch: TaskPatch): Promise<Task> {
     const known = await (await this.top(ctx)).pull(ctx);
     const current = known.get(id)?.task;
     if (!current) throw new Error(`no task ${id}`);
-    const merged = released(withDefaults({ ...current, ...patch, id }));
+    const merged = released(withDefaults(applyPatch(current, patch)));
     // Only when the edit MOVES the task: re-validating an untouched target would refuse to close a
     // task whose roadmap row someone deleted, which is not this guard's business.
-    if (patch.target !== undefined) assertTarget(known, merged);
+    if (patch.target) assertTarget(known, merged);
+    if (touchesTargetShape(patch)) assertTargetFields(merged);
+    // The WHY is asked of a target when it is CREATED or PROMOTED, never on a later edit — a row
+    // filed before the rule existed still has to be closeable.
+    if (patch.type === "target") assertTargetWhy(merged);
     await this.fanDown(ctx, merged);
     const moved = movement(current, merged);
     if (moved) this.announce(ctx, `task ${id} ${moved} — re-evaluate`);
@@ -358,6 +374,20 @@ const statusMove = (status: Task["status"]): string =>
     .with("in_progress", () => "picked up")
     .with("open", () => "back in the queue")
     .exhaustive();
+
+/**
+ * Apply a patch to a task. An absent key leaves the field alone; a key set to `null` DELETES it, which
+ * is the only way a `field:value` label comes off an issue — the merge that a plain spread does can
+ * add and overwrite, never remove. `id` is the stable key and never moves.
+ */
+function applyPatch(current: Task, patch: TaskPatch): Task {
+  const next: Record<string, unknown> = { ...current };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete next[key];
+    else next[key] = value;
+  }
+  return { ...next, id: current.id } as Task;
+}
 
 /**
  * A task sent back for replanning is not being worked any more, so it returns to the queue. Without

@@ -15,6 +15,10 @@ import {
   tasksOf,
   progressOf,
   roadmap,
+  buildTask,
+  buildPatch,
+  assertTargetFields,
+  assertTargetWhy,
 } from "../src/core/graph.ts";
 import { task } from "./helpers.ts";
 import type { Task } from "../src/core/types.ts";
@@ -244,4 +248,105 @@ test("roadmap: a cycle among targets still renders — order is a display, not a
       .map((r) => r.target.id)
       .sort(),
   ).toEqual(["x", "y"]);
+});
+
+// ---------------------------------------------------------------------------------------------------
+// The roadmap in the RANKING. Before this, every ready task competed on its own priority alone, so
+// work under a shelved row outranked work under the row gating the next release.
+
+test("a target's priority ranks the work under it — ready tasks are not all equal any more", () => {
+  const tasks = [
+    target({ id: "urgent", priority: "high" }),
+    target({ id: "someday", priority: "low" }),
+    task({ id: "a", target: "someday" }),
+    task({ id: "b", target: "urgent" }),
+  ];
+  // Identical tasks; only the roadmap row they serve differs.
+  expect(eligible(tasks).map((e) => e.task.id)).toEqual(["b", "a"]);
+});
+
+test("a target waiting on an unshipped target sorts its work below every row that is clear", () => {
+  const tasks = [
+    target({ id: "foundation" }),
+    target({ id: "next", deps: ["foundation"], priority: "high" }),
+    task({ id: "later", target: "next", priority: "high" }),
+    task({ id: "now", target: "foundation", priority: "low" }),
+  ];
+  const ranked = eligible(tasks);
+  // `later` scores higher on every other axis; the roadmap saying "not yet" outranks all of them.
+  expect(ranked.map((e) => e.task.id)).toEqual(["now", "later"]);
+  expect(ranked[1].roadmap?.waiting).toBe(true);
+});
+
+test("a target other targets wait on lifts its own work — reach counts at both altitudes", () => {
+  const tasks = [
+    target({ id: "gate" }),
+    target({ id: "after-1", deps: ["gate"] }),
+    target({ id: "after-2", deps: ["gate"] }),
+    target({ id: "quiet" }),
+    task({ id: "on-gate", target: "gate" }),
+    task({ id: "on-quiet", target: "quiet" }),
+  ];
+  const ranked = eligible(tasks);
+  expect(ranked.map((e) => e.task.id)).toEqual(["on-gate", "on-quiet"]);
+  expect(ranked[0].roadmap).toMatchObject({ target: "gate", blocks: 2, waiting: false });
+});
+
+test("a task with no target is never penalised for it — an ordinary row weighs exactly 1", () => {
+  const tasks = [
+    target({ id: "ordinary" }),
+    task({ id: "filed", target: "ordinary" }),
+    task({ id: "stray" }),
+  ];
+  const scores = new Map(eligible(tasks).map((e) => [e.task.id, e.score]));
+  expect(scores.get("filed")).toBe(scores.get("stray"));
+});
+
+test("roadmap says what each row waits on, and what waits on it", () => {
+  const tasks = [
+    target({ id: "first", status: "done" }),
+    target({ id: "second", deps: ["first"] }),
+    target({ id: "third", deps: ["second"] }),
+  ];
+  const rows = roadmap(tasks);
+  const row = (id: string) => rows.find((r) => r.target.id === id)!;
+  expect(row("second").waitingOn).toEqual([]); // first has shipped, so nothing is in the way
+  expect(row("second").blocks).toEqual(["third"]);
+  expect(row("third").waitingOn).toEqual(["second"]);
+});
+
+// ---------------------------------------------------------------------------------------------------
+// What a target IS. Enforced rather than documented, because a roadmap of placeholder rows ranks
+// nothing — and a target wearing build fields is a task in a roadmap hat.
+
+test("a target refuses build fields — nothing ever builds one", () => {
+  expect(() => assertTargetFields(target({ id: "r", tier: 2, scope: ["src/"] }))).toThrow(
+    /cannot carry scope, tier/,
+  );
+  expect(() => assertTargetFields(target({ id: "r", target: "other" }))).toThrow(/one altitude/);
+  expect(() =>
+    assertTargetFields(target({ id: "r", priority: "high", deps: ["x"] })),
+  ).not.toThrow();
+  expect(() => assertTargetFields(task({ id: "a", tier: 2, scope: ["src/"] }))).not.toThrow();
+});
+
+test("a target needs a name and a why before it exists", () => {
+  expect(() => assertTargetWhy(target({ id: "r" }))).toThrow(/needs a title/);
+  expect(() => assertTargetWhy(target({ id: "r", title: "Row" }))).toThrow(/needs a brief/);
+  expect(() => assertTargetWhy(target({ id: "r", title: "Row", brief: "why" }))).not.toThrow();
+  expect(() => assertTargetWhy(task({ id: "a" }))).not.toThrow(); // a task owes no roadmap paragraph
+});
+
+// ---------------------------------------------------------------------------------------------------
+// Clearing and tags — what an edit could not say before.
+
+test("buildPatch: clear removes a field, and an unknown field name is refused not ignored", () => {
+  expect(buildPatch("a", { clear: "spec,tier" })).toEqual({ spec: null, tier: null });
+  expect(buildPatch("a", { tags: "x", clear: ["scope"] })).toEqual({ tags: ["x"], scope: [] });
+  expect(() => buildPatch("a", { clear: "teir" })).toThrow(/cannot clear teir/);
+});
+
+test("a tag shaped like one of our labels is refused, not silently lost on the next pull", () => {
+  expect(() => buildTask("a", { tags: "tier:9" })).toThrow(/shadows a task field/);
+  expect(buildTask("a", { tags: "security,needs:docs" }).tags).toEqual(["security", "needs:docs"]);
 });

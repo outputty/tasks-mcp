@@ -245,20 +245,53 @@ not mistaken for human prose; prose a human writes *below* the region is still p
 ### field:value labels
 
 The execution properties — `kind`, `tier`, `qa`, `spec`, `stage`, `priority` — are worn as one
-GitHub label each (`tier:2`, `priority:high`), color-coded per field, created on demand.
-Observed live on issue #13: `["tier:1", "qa:inline", "priority:normal"]`. Edit a label in the
-GitHub UI and the next `sync` pulls the change into the task.
+GitHub label each (`tier:2`, `priority:high`), color-coded per field, created on demand. Edit a
+label in the GitHub UI and the next `sync` pulls the change into the task.
 
-Foreign labels (`bug`, `help wanted`, …) are never touched. A hand-typed junk value
-(`tier:banana`) parses to `undefined` and is ignored, never crashed on. `labelFields` config
-narrows which properties become labels; `labels: false` turns label sync off entirely.
+**Only a label that says something is written.** Absence already means the default — `tierOf`
+returns 3, `qaOf` returns subagent, `priorityOf` returns normal, an absent `spec` counts as
+settled, a record with no `type` is a task — so a `tier:3` label would sit on nearly every issue
+in the repo carrying no information. `wearsLabel` compares against `DEFAULTS` in
+`src/core/types.ts`, the one source the validators read too, and writes only what GitHub cannot
+otherwise show: `tier:1`, `priority:high`, `spec:drafting`, `type:target`. `status` is narrower
+still — GitHub's own issue state shows open AND closed, so only `status:in_progress` is worn.
+
+Two consequences worth knowing: setting a field back to its default DROPS its label, and
+removing a field outright is what `edit_task`'s `clear` exists for.
+
+A hand-typed junk value (`tier:banana`) parses to `undefined` and is ignored, never crashed on.
+`labelFields` config narrows which properties become labels; `labels: false` turns label sync
+off entirely (and with it, tags).
 
 #### Gotchas
 
-- `kind` has a label but no `add` parameter on any surface yet — ruled (grill 2026-08-17):
-  add it to both add surfaces; task `kind-not-settable`, spec settled, ready to build.
 - The value domains the parser accepts are the const arrays in `src/core/types.ts` — one
-  source for types, validators, zod enums, and the parser.
+  source for types, validators, zod enums, the parser, and now the defaults.
+- Existing default labels are cleaned by a plain `sync`, no edit needed: `wearsStaleLabel` makes
+  the pull flag `reconcile` on an issue wearing one, because both layers otherwise AGREE on the
+  task and nothing would push. One sync rewrites the issue, the next reports `pushed: 0`.
+- That check is deliberately narrower than "the labels differ from what we would write":
+  narrowing the `labelFields` preference must stay NON-destructive, and any-difference would turn
+  it into a purge. It asks `wearsLabel` about the parsed value alone and never reads the config.
+- Junk (`tier:banana`) is stale by the same rule, so a sync now cleans that too.
+- A GitHub search for `label:"tier:3"` no longer matches anything. Search for the absence.
+
+### tags
+
+Any label that is NOT one of ours is a **tag** — `security`, `frontend`, `help wanted`. Tags are
+adopted into `task.tags` on every pull, so a label a human adds in the web UI flows back like any
+other edit, and a write then makes the issue wear exactly the tags the task carries.
+
+`add_task` / `add_target` / `edit_task` all take `tags` (an array or comma string); on `edit_task`
+it REPLACES the list, the same contract `deps` and `scope` have.
+
+#### Gotchas
+
+- A task that has never been pulled has no `tags` at all, and `keptLabelIds` leaves its labels
+  untouched. That is the migration grace: nothing a write has not seen can be dropped by one.
+- A tag shaped like one of ours (`tier:9`) is REFUSED at the authoring surface. It would be read
+  back as that field on the next pull, its junk value ignored, and silently vanish.
+- The listing query reads `labels(first:50)`. An issue wearing more would truncate on adoption.
 
 ### kanban board
 
@@ -379,8 +412,25 @@ trail as anything else — a roadmap row IS the task shape, which is why adding 
 second record type, no second seam, and no second store. Its `brief` is the **WHY** (what makes this
 worth building), not an implementation spec; the spec belongs to the tasks under it.
 
-`add_target` files one. `roadmap` reads every target back with its derived progress and the tasks under
-it that could start right now, in dependency order.
+**What a target is, is enforced, not documented.** Sharing the task shape means a target can drift
+into a second, worse task, and a roadmap of placeholder rows ranks nothing — so two guards run in
+`TaskStack.create` / `.update`:
+
+- `assertTargetWhy` — a target needs a **title and a brief**, both, before it exists. Enforced on
+  CREATE and on PROMOTION (`edit_task { type: "target" }`), never on a later edit, so a row filed
+  before the rule can still be closed.
+- `assertTargetFields` — a target may carry no **build fields** (`scope`, `contract`, `tier`, `qa`,
+  `stage`, `discovered_from`): nothing ever builds a target, so those describe work that does not
+  exist. It may not serve another target either — the roadmap is one altitude. It runs only when the
+  edit TOUCHED the shape (a build field, `type`, or `target`) — `touchesTargetShape` — so a
+  status-only change like `close_task` is never refused because someone hand-labelled the issue
+  `tier:2` in the web UI and `sync` adopted it.
+
+What a target DOES carry is `deps` (the targets that must ship first) and `priority` — and both rank
+every task underneath it, see [ready / planning / schedule](#ready--planning--schedule).
+
+`add_target` files one. `roadmap` reads every target back with its derived progress, the tasks under
+it that could start right now, what it is still `waitingOn`, and the targets it `blocks`.
 
 #### Gotchas
 
@@ -391,6 +441,8 @@ it that could start right now, in dependency order.
   as an ordinary node, which is what makes target-level dependency questions work.
 - `roadmap` tolerates a cycle among targets and falls back to the given order. Order there is a
   display; `schedule` owns the cycle error contract.
+- `sync` stays tolerant of both guards. It records what GitHub already says, so a legacy target with
+  no brief pulls in fine; only the authoring surfaces refuse one.
 
 ### the sub-issue edge
 
@@ -483,10 +535,34 @@ The `blockers` example in `examples.md` — real observed: `schema` first with `
 
 ### ready / planning / schedule
 
-The working set. `ready` = open, spec settled, every dep done — what a build sweep dispatches.
-`planning` = spec `drafting` or `replan` — what the planning stage still owns. `schedule` =
-the whole open plan as layers; a dependency cycle is a loud error naming its members, never a
-silent drop.
+The working set. `ready` = open, spec settled, every dep done, and NOT a target — what a build
+sweep dispatches. `planning` = spec `drafting` or `replan` — what the planning stage still owns.
+`schedule` = the whole open plan as layers; a dependency cycle is a loud error naming its
+members, never a silent drop.
+
+`eligible` (behind `list_ready`) RANKS the ready set across **both altitudes**:
+
+    score = (blocks + 1) x priorityWeight(task) x roadmapWeight(its target)
+
+`blocks` counts open TASKS only; roadmap reach is counted separately over targets, so the two
+altitudes never mix into one integer. The roadmap weight is
+`priorityWeight(target) / ORDINARY x (targets waiting on it + 1)` — normalized so a
+normal-priority target that blocks nothing weighs exactly **1**, which is also what a task with
+no target gets. Nothing is penalised for having no roadmap row; only a target that is genuinely
+more (or less) than ordinary moves its work.
+
+One thing is a **tier rather than a factor**: a task whose target still waits on an unshipped
+target sorts BELOW every task whose roadmap row is clear. That is categorical — the plan says
+"not yet" — not a matter of degree, so no weight could express it honestly. Each ready row
+carries the `roadmap` standing that ranked it (`target`, `priority`, `blocks`, `waiting`,
+`weight`), so the order is legible rather than a bare number.
+
+#### Gotchas
+
+- A target's dep is a soft rank, never a gate. Gating would deadlock the queue on a human
+  action: a target's tasks can all be done while its issue stays open, because a target ships
+  when someone says so — `close_task` — and a target can ship with work deliberately deferred.
+- "Shipped" for a target dep means `status: done`, exactly like every other dep in the graph.
 
 #### Example
 
@@ -813,7 +889,9 @@ release; never create a release unprompted. On a yes: bump version, commit, push
 | one class per provider | pattern | A provider is ONE class in ONE file wrapping its own API client — no satellite modules. |
 | GraphQL-only | pattern | The GitHub layer speaks one protocol with one kind of handle (node ids) end to end. |
 | body block | feature | The hidden YAML block leading a managed issue's body carries what labels cannot (the source of truth pull reads); below it, a VISIBLE regenerated summary makes the issue read cleanly in the GitHub web UI; human prose below that survives every update. |
-| field:value labels | feature | A task's execution properties are visible, filterable, HAND-EDITABLE GitHub labels that sync back. |
+| field:value labels | feature | A task's execution properties are visible, filterable, HAND-EDITABLE GitHub labels that sync back — written only when the value is NOT the default, so a label on an issue always means something. |
+| tags | feature | Any label that is not one of ours is a tag: adopted from the issue on every pull, settable through add/edit, written back exactly. |
+| clear | feature | edit_task's `clear` removes a field outright — the only way a field:value label comes off an issue without the GitHub UI. |
 | kanban board | feature | Each task-issue gets a card on a Projects v2 board; the Status column tracks the task and flows back. |
 | adoption | feature | Issues humans open by hand become tracked tasks instead of invisible strangers. |
 | project scope requirement | limitation | The board needs the token's project scope; without it tasks still land as issues and the board is skipped with a warning. |
@@ -838,7 +916,8 @@ release; never create a release unprompted. On a yes: bump version, commit, push
 | doorbell | pattern | One event kind, coalesced per tick, naming what moved — never a count to act on. |
 | spool broadcast | pattern | Cross-process delivery once PER PROCESS: EventLog reads without consuming, files swept by age. |
 | in_progress | feature | A third status a worker sets on pickup, so a task being built leaves list_ready. |
-| target | feature | A roadmap item as a graph node: groups tasks, never dispatched, progress derived from them. |
+| target | feature | A roadmap item as a graph node: groups tasks, never dispatched, progress derived from them. A name and a why, both required; no build fields; one altitude. |
+| roadmap-aware ranking | feature | list_ready ranks by the task AND the roadmap row it serves; a target waiting on an unshipped target sorts its work below every clear row. |
 | sub-issue edge | feature | A task's target IS its issue's parent on GitHub — free to read, and re-parenting in the UI flows back. |
-| roadmap tool | feature | Every target with derived progress and its startable tasks, dependency ordered. |
+| roadmap tool | feature | Every target with derived progress, its startable tasks, what it waits on and what waits on it — dependency ordered. |
 | no per-target boards | limitation | One Projects v2 board per roadmap item costs a paged read per item per sync; a grouped Target field is one read. |

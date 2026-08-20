@@ -26,6 +26,21 @@ export const LABEL_FIELD_NAMES = [
 // once here; the type, the zod enum, and the store's validator all derive from it.
 export const TRAIL_KINDS = ["decision", "action", "note"] as const;
 
+/**
+ * What ABSENCE already means for each label-worn field. Stated once here so the validators
+ * (`tierOf`, `qaOf`, `priorityOf`, `specSettled`, `typeOf`) and the GitHub label writer cannot
+ * drift: a field set to its default is indistinguishable from one never set, which is why writing
+ * a `tier:3` label would put a redundant label on nearly every issue in the repo.
+ */
+export const DEFAULTS = {
+  type: "task",
+  tier: 3,
+  qa: "subagent",
+  spec: "settled",
+  priority: "normal",
+  status: "open",
+} as const;
+
 export type Status = (typeof STATUSES)[number];
 export type NodeType = (typeof NODE_TYPES)[number];
 export type SpecState = (typeof SPEC_STATES)[number];
@@ -83,6 +98,13 @@ export interface Task {
   /** Folders the task may edit (not a file list). */
   scope: string[];
   kind?: string;
+  /**
+   * Free-form GitHub labels, carried verbatim (no `field:` prefix). ADOPTED on pull — every bare
+   * label a managed issue wears reads back as a tag, so a label added in the web UI flows back like
+   * any other edit. ABSENT means outputty does not manage this issue's bare labels and leaves them
+   * alone; a present list (`[]` included) is exact, and a write makes the issue wear precisely it.
+   */
+  tags?: string[];
   brief?: string;
   contract?: string;
   /** 1-4; how much model the work needs. Absent means 3. */
@@ -100,6 +122,13 @@ export interface Task {
   /** The parent task a discovered task was split from. */
   discovered_from?: string;
 }
+
+/**
+ * A partial update. Only the fields it carries change — and `null` CLEARS one, which is the single
+ * thing an absent key cannot say, since absence already means "leave it alone". Clearing is how a
+ * `field:value` label comes OFF an issue without anyone opening the GitHub UI.
+ */
+export type TaskPatch = { [K in keyof Task]?: Task[K] | null };
 
 /** Which project (and optionally which branch) a tool call is about. The server has no cwd of its own. */
 export interface ProjectContext {
