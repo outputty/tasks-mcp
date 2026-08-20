@@ -1,7 +1,7 @@
 # @outputty/tasks-mcp
 
 A local **MCP server** that gives a coding agent a dependency-aware task tracker. The agent calls typed
-tools — `add_task`, `list_ready`, `prereqs`, `blockers`, `sync` — over a task graph that is mirrored
+tools — `add_task`, `list_ready`, `prereqs`, `blockers`, `roadmap`, `sync` — over a task graph that is mirrored
 two-way into GitHub: one issue per task, `field:value` labels for its execution properties, and a
 Projects v2 kanban board.
 
@@ -115,6 +115,7 @@ the board once.
 | Tool            | Answers                                                         | Writes |
 | --------------- | --------------------------------------------------------------- | ------ |
 | `prereqs`       | what must be done before this task can start, in build order    | —      |
+| `roadmap`       | where every target stands: derived progress, and what is ready  | —      |
 | `blockers`      | which tasks hold up the most work, ranked                       | —      |
 | `list_tasks`    | every task, full records — the whole graph                      | —      |
 | `list_ready`    | which tasks can be worked right now, ranked best first          | —      |
@@ -122,6 +123,7 @@ the board once.
 | `schedule`      | the whole open plan as dependency layers; errors on a cycle     | —      |
 | `get_task`      | one task's full record                                          | —      |
 | `add_task`      | create a task (file + issue + labels + board card)              | ✎      |
+| `add_target`    | create a roadmap target — the row a set of tasks serves         | ✎      |
 | `amend_task`    | widen an open task's scope, or set its brief                    | ✎      |
 | `edit_task`     | edit any field of a task (only the fields you pass change)      | ✎      |
 | `start_task`    | mark a task in progress — it leaves `list_ready` while built    | ✎      |
@@ -132,7 +134,7 @@ the board once.
 | `sync`          | reconcile every layer both ways; adopt hand-opened issues       | ✎      |
 | `notify`        | ring the channel doorbell with a one-line reason                | ✎      |
 
-A task carries: `id`, `title`, `status` (open/in_progress/done), `deps`, `scope`, the
+A task carries: `id`, `title`, `status` (open/in_progress/done), `deps`, `scope`, `target`, the
 execution-modifying properties `tier` (1–4), `qa` (skip/inline/subagent), `priority`
 (high/normal/low), `spec`, `stage`, `kind`, and `brief`/`contract` prose. On GitHub, the scalar
 properties are worn as **`field:value` labels** (`tier:2`, `priority:high`, `status:in_progress`, …)
@@ -141,6 +143,41 @@ back. The issue **body renders a concise summary** — the brief (the
 problem and expected solution), then **What to account for** (the contract) — for the web UI,
 regenerated on every write, with the machine-readable record kept in a hidden block above it. See
 [docs/architecture.md](docs/architecture.md) for the full mapping.
+
+## The roadmap — two altitudes in one graph
+
+A **target** is a roadmap item: it groups the tasks that serve it, it is never dispatched, and its
+progress is **derived** from those tasks rather than maintained by anyone.
+
+```js
+// tool: add_target  { "project": "/abs/repo", "id": "memory-is-derived",
+//                     "title": "Product memory stops duplicating the graph",
+//                     "brief": "<the WHY — what makes this worth building>" }
+// tool: add_task    { "project": "/abs/repo", "id": "plugin-roadmap-is-why",
+//                     "target": "memory-is-derived" }
+// tool: roadmap     { "project": "/abs/repo" }
+{
+  "targets": [
+    { "id": "roadmap-in-graph", "summary": "The roadmap becomes a second altitude in the graph",
+      "status": "open", "deps": [],
+      "progress": { "total": 0, "open": 0, "in_progress": 0, "done": 0 }, "ready": [] },
+    { "id": "memory-is-derived", "summary": "Product memory stops duplicating the graph",
+      "status": "open", "deps": ["roadmap-in-graph"],
+      "progress": { "total": 1, "open": 1, "in_progress": 0, "done": 0 },
+      "ready": ["plugin-roadmap-is-why"] }
+  ]
+}
+```
+
+On GitHub a task's `target` **is** its issue's parent — the sub-issue edge — so the hierarchy you
+browse and the one the graph reasons over are the same object, GitHub draws its own progress bar, and
+re-parenting an issue in the web UI flows back on the next sync. It costs nothing to read: `parent`
+rides the issue listing the provider already pages through.
+
+Because a target is an ordinary node, the graph answers roadmap questions with the machinery it
+already had — `prereqs` on a target is "what must ship before this", and `blockers` ranks targets by
+how much waits on them. And because a target is never `ready`, nothing dispatches a roadmap row as if
+it were a single build.
 
 ## Trails — the decisions behind a task
 

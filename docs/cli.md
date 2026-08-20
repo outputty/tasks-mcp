@@ -19,6 +19,12 @@ npx -y @outputty/tasks-mcp prereqs deploy --project /abs/repo
 npx -y @outputty/tasks-mcp blockers --project /abs/repo
 # -> [{ "id": "schema", "blocks": 3, "blocked": "api, ui, deploy", "priority": "normal" }, …]
 
+# the roadmap altitude
+npx -y @outputty/tasks-mcp roadmap  --project /abs/repo   # every target, derived progress, what's ready
+# -> [{ "id": "memory-is-derived", "summary": "…", "status": "open",
+#       "progress": { "total": 1, "open": 1, "in_progress": 0, "done": 0 },
+#       "ready": ["plugin-roadmap-is-why"] }, …]
+
 # the working set
 npx -y @outputty/tasks-mcp ready    --project /abs/repo   # ids that can be worked now, best first
 npx -y @outputty/tasks-mcp planning --project /abs/repo   # ids planning still owns
@@ -31,8 +37,10 @@ npx -y @outputty/tasks-mcp config --project /abs/repo
 # -> { "flags": {...}, "global": {...}, "repo": {...}, "effective": {...} }
 
 # writes
+npx -y @outputty/tasks-mcp add-target memory-is-derived --title "…" --brief "<the WHY>" \
+  --project /abs/repo
 npx -y @outputty/tasks-mcp add api --title "Build the API" --deps schema --tier 2 \
-  --priority high --project /abs/repo
+  --priority high --target memory-is-derived --project /abs/repo
 npx -y @outputty/tasks-mcp edit api --title "Build the API v2" --tier 1 --project /abs/repo
 npx -y @outputty/tasks-mcp start api --project /abs/repo  # in progress: leaves the ready list
 npx -y @outputty/tasks-mcp close api --project /abs/repo
@@ -59,8 +67,9 @@ doorbell of a session running elsewhere on the machine, because the note travels
 on the repo rather than on the checkout path.
 
 `add` options: `--title`, `--deps a,b`, `--scope src/api`, `--tier 1..4`, `--qa skip|inline|subagent`,
-`--priority high|normal|low`, `--brief`, `--contract`. `trail-add` options: `--note` (required),
-`--kind decision|action|note`, `--link`.
+`--priority high|normal|low`, `--brief`, `--contract`, `--target <id>`. `add-target` options:
+`--title`, `--brief` (the WHY), `--deps a,b`, `--priority`, `--spec`. `trail-add` options: `--note`
+(required), `--kind decision|action|note`, `--link`.
 
 ## The library
 
