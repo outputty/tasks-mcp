@@ -132,7 +132,6 @@ the board once.
 | `get_trail`     | a task's trail: its issue comment thread, oldest first                  | —      |
 | `append_trail`  | append one entry to a task's trail (posts an issue comment)             | ✎      |
 | `sync`          | reconcile every layer both ways; adopt hand-opened issues               | ✎      |
-| `notify`        | ring the channel doorbell with a one-line reason                        | ✎      |
 
 A task carries: `id`, `title`, `status` (open/in_progress/done), `deps`, `scope`, `target`, `tags`,
 the execution-modifying properties `tier` (1–4), `qa` (skip/inline/subagent), `priority`
@@ -227,37 +226,24 @@ comment still renders as plain text on GitHub while round-tripping the tags. A c
 hand has no `kind`/`link`, just its `note`, `author`, and `at`. Trails need a GitHub-backed project;
 `append_trail` requires the task's issue to exist (`sync` it first).
 
-## The channel — waking an idle session
+## Reading the queue — `list_ready`
 
-The server is also a [Claude Code channel](https://code.claude.com/docs/en/channels-reference): it
-pushes events into a running session, so a caller can sit idle instead of polling on a timer. Start
-the session that should receive them with the research-preview flag, naming the `.mcp.json` key:
-
-```bash
-claude --dangerously-load-development-channels server:tasks
-```
-
-**One event exists, and it is a doorbell.** It carries no state to act on, because Claude Code
-delivers channel events on the session's _next_ turn — any count stamped at emit time would already be
-stale. It does name the direction to look, so "nothing changed" is not a defensible reading of a ring
-that fired because two tasks finished:
-
-```text
-<channel source="tasks">task rollback-fail-path closed — re-evaluate</channel>
-<channel source="tasks">ready now: deploy, docs; 1 left the ready set — re-evaluate</channel>
-```
-
-The reader answers it by asking for the truth. `list_ready` is **ranked**, best first, by
+Nothing here pushes. A dispatcher learns that the graph moved by re-reading `list_ready`, which is
+also the call that would tell it anything a push could have — so the one read is both the wake signal
+and the answer. `list_ready` is **ranked**, best first, by
 `(blocks + 1) x the task's priority x the standing of the roadmap target it serves` — so reach and
 urgency combine at **both altitudes** instead of any one overriding the rest:
 
 ```jsonc
-// tool: list_ready     { "project": "/abs/repo" }
+// tool: list_ready     { "project": "/abs/repo", "scope": ["src"] }
 { "ids": ["hub", "solo"],
-  "tasks": [ { "id": "hub",  "blocks": 5, "score": 6, "priority": "low",  … },
+  "tasks": [ { "id": "hub",  "blocks": 5, "score": 6, "priority": "low",
+               "scope": ["src/hub"], "tags": [], "overlap": [], … },
              { "id": "solo", "blocks": 0, "score": 3, "priority": "high",
+               "scope": ["src/solo"], "tags": ["spike"], "overlap": [],
                "roadmap": { "target": "ship-v2", "priority": "high", "blocks": 1,
-                            "waiting": false, "weight": 3 } } ] }
+                            "waiting": false, "weight": 3 } } ],
+  "stale_claims": [] }
 ```
 
 A low task blocking five outranks a lone high task; priority decides between tasks of comparable
@@ -274,26 +260,50 @@ own roadmap on top.
 > back to `spec: replan` returns it to `open`, so an abandoned build cannot strand a task. **How
 > many** may run at once is still the caller's call — this package holds the graph, not the schedule.
 
-Three things ring the doorbell: a **graph mutation** (a task added, picked up, closed, respecced, its
-deps changed, or deleted), a **background sync** that changed what can be started, and an explicit
-`notify` — the hook for anything the graph does not say, like a planning gate reached. A prose-only
-edit rings nothing. Rings inside one tick coalesce, so ten tasks closing at once wake the session
-exactly once.
+### Lanes, and what a lane would collide with
 
-A note travels between processes through a spool keyed on the **repo**, so a worker in a worktree can
-ring an orchestrator watching from the primary checkout. The spool is **watched**, not polled, so a
-note arrives at once and needs no flags — and it is a **broadcast**: reading never consumes a note, so
-every session gets its own copy. That matters when only one of them is listening. A session started
-without the channel flag still reads the spool, and if reading took the note, that session would
-silently swallow the one the orchestrator was waiting for.
+`scope` draws a **lane**: only tasks whose folders touch it are listed, so two dispatchers can run
+side by side without ever writing the same files. Folder containment counts either way (`src` covers
+`src/orders`) and is segment-wise, so `src/orders` never matches `src/orders-legacy`. A task with no
+scope is in every lane, and no filter means everything.
 
-`--sync-interval` adds a background reconcile with GitHub (it is what notices a label edited in the web
-UI), but the channel no longer depends on it.
+Each row also carries `overlap`: the ids of tasks being worked **right now** whose scope touches that
+row's. It is computed across **all** lanes, because a claim in another lane is exactly the collision a
+lane filter would otherwise hide. Normally empty; non-empty means dispatching that row would put two
+workers over the same folders. Advisory — the dispatcher decides.
 
-> The channel is **additive**. In a session started without the flag — or under `--http` — the events
-> are dropped and every tool keeps working exactly as before. Channels are an Anthropic research
-> preview, and a custom one is not on the approved allowlist, which is why the flag says
-> `--dangerously-`.
+`tags` carries the row's plain GitHub labels, so a dispatcher can branch on the **kind** of work
+without a second call, and labels added in the web UI reach it on the next pull.
+
+### Stale claims — a worker that died still holding work
+
+`start_task` takes a task out of `list_ready` so nothing dispatches it twice. That is right while the
+worker lives and wrong once it dies: the task stays `in_progress`, and the queue is one task narrower
+with nothing to say whether it is progressing or abandoned.
+
+So a claim carries a **heartbeat**. `start_task` stamps `claimed_at` and `heartbeat_at`, and every
+later write by the holder — `append_trail` above all, which a build already calls once per layer —
+moves the beat. A claim nobody has refreshed inside the threshold appears in `stale_claims`:
+
+```jsonc
+{
+  "stale_claims": [
+    { "id": "csv-export", "claimed_at": "…", "heartbeat_at": "…", "stale_for_minutes": 20 },
+  ],
+}
+```
+
+Default 15 minutes, `claimStaleMinutes` to change it. It is a **report, not a release**: freeing a
+claim whose worker is merely slow would let a second worker take the same task, which is the one race
+`start_task` exists to prevent. Release one deliberately with `edit_task { spec: "replan" }`.
+
+The ledger is local and keyed on the **repo**, not the checkout, so a worker claiming from inside a
+worktree and a dispatcher sweeping from the primary checkout read one file. It is deliberately not a
+task field: a heartbeat per layer would rewrite the GitHub issue body on every beat, and the liveness
+of a local process is not project truth.
+
+`--sync-interval` adds a background reconcile with GitHub — it is what notices a label edited in the
+web UI.
 
 ## Configuration
 

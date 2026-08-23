@@ -7,7 +7,6 @@ import nock from "nock";
 import { TaskStack, DuplicateTaskError } from "../src/core/service.ts";
 import { FileProvider } from "../src/core/providers/file.ts";
 import { ready, roadmap, tierOf } from "../src/core/graph.ts";
-import { Doorbell, EventLog, postEvent } from "../src/core/channel.ts";
 import { task, tmp, tmpRepo } from "./helpers.ts";
 import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
 
@@ -179,122 +178,7 @@ test("sync reports real conflicts when two issues claim one task id", async () =
   cleanup();
 });
 
-// --- the background poll: what actually rings the channel -------------------------------------------
-
-/** A doorbell wired to an array, so a test can read what it delivered. */
-function recordingBell(): { bell: Doorbell; rung: string[] } {
-  const bell = new Doorbell();
-  const rung: string[] = [];
-  bell.on((note) => void rung.push(note));
-  return { bell, rung };
-}
-
-/** The harness with a doorbell attached, plus the notes it delivered. */
-function ringingHarness() {
-  installNock(new NockGitHub());
-  const project = tmpRepo();
-  const cache = tmp();
-  const { bell, rung } = recordingBell();
-  const layers = [
-    new FileProvider({ cacheDir: cache.dir }),
-    nockProvider({ projects: false, cacheDir: cache.dir }),
-  ];
-  const svc = new TaskStack({ cacheDir: cache.dir }, layers, undefined, bell);
-  const cleanup = () => {
-    project.cleanup();
-    cache.cleanup();
-  };
-  return { svc, rung, project: project.dir, cacheDir: cache.dir, settle, cleanup };
-}
-
-/** Let the doorbell's coalescing timer fire. */
-const settle = () => new Promise((r) => setTimeout(r, 5));
-
-test("the background poll rings when what can be started changes, and stays quiet when it does not", async () => {
-  const { svc, rung, project, settle, cleanup } = ringingHarness();
-  const ctx = { project };
-  await svc.create(ctx, task({ id: "schema" }));
-
-  await svc.syncSeen(); // first pass: a startable task appeared
-  await settle();
-  expect(rung).toEqual(["ready now: schema — re-evaluate"]); // the ring names which way to look
-
-  await svc.syncSeen(); // nothing moved
-  await settle();
-  expect(rung).toHaveLength(1);
-
-  await svc.create(ctx, task({ id: "parser" }));
-  await svc.syncSeen();
-  await settle();
-  expect(rung).toHaveLength(2);
-  cleanup();
-});
-
-test("a poll that finds nothing startable does not wake the session at startup", async () => {
-  const { svc, rung, project, settle, cleanup } = ringingHarness();
-  const ctx = { project };
-  await svc.create(ctx, task({ id: "later", spec: "drafting" })); // planning owns it, no worker can start
-  await svc.syncSeen();
-  await settle();
-  expect(rung).toEqual([]);
-  cleanup();
-});
-
-test("a note another process spooled is delivered on the next poll", async () => {
-  const { svc, rung, project, cacheDir, settle, cleanup } = ringingHarness();
-  await svc.list({ project }); // the server only polls projects it has served
-  postEvent(cacheDir, project, "spec gate on channel-emitter", 999_999);
-
-  await svc.syncSeen();
-  await settle();
-  expect(rung).toContain("spec gate on channel-emitter");
-  cleanup();
-});
-
-test("closing a task spools a note for every other process, naming what moved", async () => {
-  const { svc, project, cacheDir, cleanup } = harness();
-  const ctx = { project };
-  const log = new EventLog(cacheDir, project, 999_999); // read as another session would
-  await svc.create(ctx, task({ id: "schema" }));
-  log.read(); // the create's own note, taken by this reader
-
-  await svc.close(ctx, "schema");
-
-  // Drained as ANOTHER session would drain it: our own pid is filtered out of our own reads, and a
-  // closure has to travel, or the orchestrator learns of it only on its next background sync.
-  expect(log.read()).toEqual(["task schema closed — re-evaluate"]);
-  svc.stop();
-  cleanup();
-});
-
-test("an edit that only touches prose spools nothing — a retitled task is not news", async () => {
-  const { svc, project, cacheDir, cleanup } = harness();
-  const ctx = { project };
-  const log = new EventLog(cacheDir, project, 999_999);
-  await svc.create(ctx, task({ id: "schema" }));
-  log.read();
-
-  await svc.update(ctx, "schema", { title: "Design the schema" });
-
-  expect(log.read()).toEqual([]);
-  svc.stop();
-  cleanup();
-});
-
-test("a dependency change spools, because it can move what is ready", async () => {
-  const { svc, project, cacheDir, cleanup } = harness();
-  const ctx = { project };
-  const log = new EventLog(cacheDir, project, 999_999);
-  await svc.create(ctx, task({ id: "schema" }));
-  await svc.create(ctx, task({ id: "api" }));
-  log.read();
-
-  await svc.update(ctx, "api", { deps: ["schema"] });
-
-  expect(log.read()).toEqual(["task api changed its dependencies — re-evaluate"]);
-  svc.stop();
-  cleanup();
-});
+// --- claiming: what leaves the ready set, and what puts it back ------------------------------------
 
 test("a task a worker started leaves the ready list, and comes back when it closes", async () => {
   const { svc, project, cleanup } = harness();
@@ -329,20 +213,6 @@ test("a replan releases a started task back to the queue", async () => {
   await svc.update(ctx, "schema", { spec: "replan" });
 
   expect((await svc.get(ctx, "schema"))?.status).toBe("open");
-  svc.stop();
-  cleanup();
-});
-
-test("starting a task announces it, so a second dispatcher sees the graph move", async () => {
-  const { svc, project, cacheDir, cleanup } = harness();
-  const ctx = { project };
-  const log = new EventLog(cacheDir, project, 999_999);
-  await svc.create(ctx, task({ id: "schema" }));
-  log.read();
-
-  await svc.start(ctx, "schema");
-
-  expect(log.read()).toEqual(["task schema picked up — re-evaluate"]);
   svc.stop();
   cleanup();
 });
