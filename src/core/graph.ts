@@ -427,6 +427,9 @@ export interface Eligible {
   score: number;
   /** How the roadmap ranks it. Absent when the task serves no target. */
   roadmap?: Standing;
+  /** Ids of tasks being worked RIGHT NOW whose scope touches this one's. Normally empty; non-empty
+   *  means dispatching this would put two workers over the same folders. */
+  overlap: string[];
 }
 
 /**
@@ -452,22 +455,70 @@ const countReached = (reached: Map<string, Task>, keep: (t: Task) => boolean): n
   [...reached.values()].filter(keep).length;
 
 /**
+ * Whether two scope lists touch. Scope is a FOLDER, never a file list, so containment either way is
+ * an intersection: `src` covers `src/orders`, and a task scoped `src/orders` is inside a lane drawn
+ * at `src`. Comparison is path-segment-wise, so `src/orders` never matches `src/orders-legacy`.
+ */
+export function scopesIntersect(a: string[], b: string[]): boolean {
+  return a.some((one) => b.some((other) => covers(one, other) || covers(other, one)));
+}
+
+/** Whether `outer` contains `inner` as a folder — equal, or a parent of it. */
+const covers = (outer: string, inner: string): boolean => {
+  const o = trimSlashes(outer);
+  const i = trimSlashes(inner);
+  return o === "" || o === i || i.startsWith(`${o}/`);
+};
+
+const trimSlashes = (folder: string): string => folder.replace(/^\/+|\/+$/g, "");
+
+/**
+ * The tasks inside a lane. An EMPTY filter is not a lane — it means "everything", so an unfiltered
+ * dispatcher behaves exactly as it did before lanes existed. A task with no scope at all is in every
+ * lane: it declares no files, so no lane can exclude it on evidence.
+ */
+export function inLane(task: Task, lane: string[]): boolean {
+  if (lane.length === 0) return true;
+  if (task.scope.length === 0) return true;
+  return scopesIntersect(task.scope, lane);
+}
+
+/**
+ * The live claims whose scope touches this task's — the mis-drawn-lane signal. A task being worked is
+ * a task whose files are moving, so dispatching a second task over the same folders is how two agents
+ * come to edit one file. Normally empty: PLAN packs same-folder tasks into one LAYER, built in
+ * sequence by one worker, and lanes are drawn so items do not share folders. Advisory, because the
+ * dispatcher decides — a hard refusal here would also block re-dispatching after a stale claim.
+ */
+export function overlappingClaims(tasks: Task[], task: Task): string[] {
+  return tasks
+    .filter((t) => t.status === "in_progress" && t.id !== task.id)
+    .filter((t) => scopesIntersect(t.scope, task.scope))
+    .map((t) => t.id);
+}
+
+/**
  * The ready tasks, ranked — the DEFAULT order, not the decision. The orchestrator starts from this
  * and re-reads the roadmap before it picks. Score MULTIPLIES three things rather than letting any one
  * override the rest: the task's own reach, its own urgency, and the standing of the roadmap row it
  * serves. A task whose target still waits on an unshipped target sorts below every task whose row is
  * clear, because that is a categorical fact about the plan, not a matter of degree.
  */
-export function eligible(tasks: Task[]): Eligible[] {
+export function eligible(tasks: Task[], lane: string[] = []): Eligible[] {
   const graph = buildGraph(tasks);
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const done = doneIds(tasks);
-  const ranked = ready(tasks).map((task) => {
-    const blocks = countReached(openReach(graph, task.id, "out"), (t) => !isTarget(t));
-    const standing = standingOf(graph, byId, done, task);
-    const score = (blocks + 1) * priorityWeight(task) * (standing?.weight ?? 1);
-    return { task, blocks, score, ...(standing ? { roadmap: standing } : {}) };
-  });
+  const ranked = ready(tasks)
+    .filter((task) => inLane(task, lane))
+    .map((task) => {
+      const blocks = countReached(openReach(graph, task.id, "out"), (t) => !isTarget(t));
+      const standing = standingOf(graph, byId, done, task);
+      const score = (blocks + 1) * priorityWeight(task) * (standing?.weight ?? 1);
+      // Overlap is computed against EVERY task, never just the lane: a claim in another lane is
+      // exactly the collision a lane filter would otherwise hide.
+      const overlap = overlappingClaims(tasks, task);
+      return { task, blocks, score, overlap, ...(standing ? { roadmap: standing } : {}) };
+    });
   return ranked.sort(byScore);
 }
 

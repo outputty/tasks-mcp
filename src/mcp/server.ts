@@ -116,15 +116,31 @@ const STANDING = z.object({
 });
 const READY_ROW = {
   ...ROW,
+  scope: z.array(z.string()),
+  tags: z.array(z.string()),
   blocks: z.number(),
   score: z.number(),
+  overlap: z.array(z.string()),
   roadmap: STANDING.optional(),
 };
 const readyRow = (entry: Eligible) => ({
   ...indexRow(entry.task),
+  scope: entry.task.scope,
+  // Always a list, never absent: a dispatcher branching on `spike` should read an empty array for a
+  // task that wears no labels, not have to tell "untagged" from "this build forgot to send tags".
+  tags: entry.task.tags ?? [],
   blocks: entry.blocks,
   score: entry.score,
+  overlap: entry.overlap,
   ...(entry.roadmap ? { roadmap: entry.roadmap } : {}),
+});
+
+// A claim whose holder has gone quiet past the threshold — what a dispatcher sweeps between waves.
+const STALE_CLAIM = z.object({
+  id: z.string(),
+  claimed_at: z.string(),
+  heartbeat_at: z.string(),
+  stale_for_minutes: z.number(),
 });
 
 // One trail entry (an issue comment), as the trail tools return it. author/at come from GitHub.
@@ -164,15 +180,43 @@ export function createMcpServer(service: TaskService): McpServer {
         "rest. A task whose target still waits on an unshipped target sorts below every task whose " +
         "roadmap row is clear. Each row carries the `roadmap` standing that ranked it. The rank is " +
         "a starting order, not a decision. A task a worker has marked in progress (start_task) is " +
-        "NOT listed, so this is safe to dispatch straight from.",
-      inputSchema: { project: PROJECT, branch: BRANCH },
-      outputSchema: { ids: z.array(z.string()), tasks: z.array(z.object(READY_ROW)) },
+        "NOT listed, so this is safe to dispatch straight from.\n\n" +
+        "`stale_claims` reports work held by a claim nobody has refreshed inside the threshold " +
+        "(default 15 minutes, `claimStaleMinutes` to change it) — a worker that died still holding " +
+        "a task, which would otherwise narrow this list silently and forever. It is a REPORT, not a " +
+        "release: freeing a claim whose worker is merely slow would let a second worker take the " +
+        'same task. Release one deliberately with `edit_task { spec: "replan" }`.\n\n' +
+        "`scope` draws a LANE: only tasks whose folders touch it are listed, so two dispatchers can " +
+        "run side by side without ever writing the same files. Folder containment counts either way " +
+        "(`src` covers `src/orders`), a task with no scope is in every lane, and no filter means " +
+        "everything. Each row also carries `overlap`: the ids of tasks being worked right now whose " +
+        "scope touches that row's, computed across ALL lanes, because a claim in another lane is " +
+        "exactly what a lane filter would otherwise hide. Normally empty; non-empty means " +
+        "dispatching it would put two workers over the same folders.\n\n" +
+        "`tags` carries the row's plain GitHub labels, so a dispatcher can branch on the KIND of " +
+        "work without a second call. `spike` is the one this flow reads: a spike ticket's " +
+        "deliverable is a drafted ticket, not merged code, so it is briefed differently. Labels are " +
+        "adopted from the issue on every pull, so one added in the web UI reaches the dispatcher.",
+      inputSchema: {
+        project: PROJECT,
+        branch: BRANCH,
+        scope: LIST.optional().describe(
+          "Folders that draw this dispatcher's lane. Omit for every ready task.",
+        ),
+      },
+      outputSchema: {
+        ids: z.array(z.string()),
+        tasks: z.array(z.object(READY_ROW)),
+        stale_claims: z.array(STALE_CLAIM),
+      },
     },
     async (args) => {
-      const ranked = eligible(await service.list(ctxOf(args)));
+      const ctx = ctxOf(args);
+      const ranked = eligible(await service.list(ctx), asArray(args.scope));
       return result({
         ids: ranked.map((e) => e.task.id),
         tasks: ranked.map(readyRow),
+        stale_claims: await service.staleClaims(ctx),
       });
     },
   );
