@@ -172,4 +172,6 @@ export interface ProjectConfig {
   labels?: boolean;
   /** Which fields become labels when `labels` is on. Default: all of them. */
   labelFields?: LabelFieldName[];
+  /** Minutes of silence before a claim is reported stale. Default 15. */
+  claimStaleMinutes?: number;
 }

@@ -23,6 +23,7 @@ import {
   withDefaults,
 } from "./graph.ts";
 import { Doorbell, DEFAULT_NOTE, EventLog, postEvent } from "./channel.ts";
+import { ClaimStore, DEFAULT_STALE_MINUTES, type StaleClaim } from "./claims.ts";
 
 export interface SyncResult {
   pulled: number;
@@ -54,6 +55,10 @@ export interface TaskService {
   /** Reconcile every project this service has served so far, one at a time; a project's own failure
    *  is logged and skipped, never thrown. This is what the background loop drives. */
   syncSeen(): Promise<Map<string, SyncResult>>;
+  /** The claims nobody has refreshed inside the threshold — a crashed worker still holding work.
+   *  Reported, never released: a claim released under a worker that is merely slow lets a second
+   *  worker take the same task. */
+  staleClaims(ctx: ProjectContext): Promise<StaleClaim[]>;
   /** A task's trail: the append-only journal of decisions and actions behind it. */
   getTrail(ctx: ProjectContext, id: string): Promise<TrailEntry[]>;
   /** Append one entry to a task's trail; returns the whole trail. Refuses an unknown task. */
@@ -91,6 +96,10 @@ export class TaskStack implements TaskService {
   // not per file: reading it does not consume, so every other session still gets its own copy.
   private readonly logs = new Map<string, EventLog>();
   private readonly watchers = new Map<string, () => void>();
+  // One claim ledger per project served. Keyed on the project path like everything else here; the
+  // store itself resolves that to the shared repo slug, so a worktree and its primary checkout write
+  // the same file.
+  private readonly claimStores = new Map<string, ClaimStore>();
 
   constructor(
     private readonly options: ServerOptions = {},
@@ -132,6 +141,22 @@ export class TaskStack implements TaskService {
     for (const close of this.watchers.values()) close();
     this.watchers.clear();
     this.logs.clear();
+  }
+
+  /** This project's claim ledger, made once and reused — the repo-slug lookup behind its path shells
+   *  out to git, so a fresh store per call would pay for that on every write. */
+  private claims(project: string): ClaimStore {
+    let store = this.claimStores.get(project);
+    if (!store) {
+      store = new ClaimStore(this.cacheDir(), project);
+      this.claimStores.set(project, store);
+    }
+    return store;
+  }
+
+  async staleClaims(ctx: ProjectContext): Promise<StaleClaim[]> {
+    const minutes = this.config.get(ctx.project).claimStaleMinutes ?? DEFAULT_STALE_MINUTES;
+    return this.claims(ctx.project).stale(minutes);
   }
 
   async getConfig(ctx: ProjectContext): Promise<ConfigSources> {
@@ -194,9 +219,21 @@ export class TaskStack implements TaskService {
     // filed before the rule existed still has to be closeable.
     if (patch.type === "target") assertTargetWhy(merged);
     await this.fanDown(ctx, merged);
+    this.trackClaim(ctx, merged);
     const moved = movement(current, merged);
     if (moved) this.announce(ctx, `task ${id} ${moved} — re-evaluate`);
     return merged;
+  }
+
+  /**
+   * Keep the claim ledger in step with the task's status. Every path that starts, closes, replans or
+   * reopens a task runs through `update`, so this one call covers all of them: a task in progress is
+   * claimed (or its heartbeat moved), and a task in any other state holds no claim.
+   */
+  private trackClaim(ctx: ProjectContext, task: Task): void {
+    const claims = this.claims(ctx.project);
+    if (task.status === "in_progress") claims.mark(task.id);
+    else claims.release(task.id);
   }
 
   async close(ctx: ProjectContext, id: string): Promise<void> {
@@ -239,8 +276,12 @@ export class TaskStack implements TaskService {
     return (await this.trailLayer(ctx)).getTrail!(ctx, id);
   }
 
+  /** Append to the trail, and take the write as a heartbeat. A build writes one note per layer, so
+   *  the liveness signal costs nothing extra and cannot be forgotten by a worker that is working. */
   async appendTrail(ctx: ProjectContext, id: string, entry: TrailEntry): Promise<TrailEntry[]> {
-    return (await this.trailLayer(ctx)).appendTrail!(ctx, id, entry);
+    const trail = await (await this.trailLayer(ctx)).appendTrail!(ctx, id, entry);
+    this.claims(ctx.project).touch(id);
+    return trail;
   }
 
   /** The deepest layer that backs trails (GitHub owns the issue comments; the file cache has none). */

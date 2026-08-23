@@ -127,6 +127,14 @@ const readyRow = (entry: Eligible) => ({
   ...(entry.roadmap ? { roadmap: entry.roadmap } : {}),
 });
 
+// A claim whose holder has gone quiet past the threshold — what a dispatcher sweeps between waves.
+const STALE_CLAIM = z.object({
+  id: z.string(),
+  claimed_at: z.string(),
+  heartbeat_at: z.string(),
+  stale_for_minutes: z.number(),
+});
+
 // One trail entry (an issue comment), as the trail tools return it. author/at come from GitHub.
 const TRAIL_ENTRY = z.object({
   note: z.string(),
@@ -164,15 +172,26 @@ export function createMcpServer(service: TaskService): McpServer {
         "rest. A task whose target still waits on an unshipped target sorts below every task whose " +
         "roadmap row is clear. Each row carries the `roadmap` standing that ranked it. The rank is " +
         "a starting order, not a decision. A task a worker has marked in progress (start_task) is " +
-        "NOT listed, so this is safe to dispatch straight from.",
+        "NOT listed, so this is safe to dispatch straight from.\n\n" +
+        "`stale_claims` reports work held by a claim nobody has refreshed inside the threshold " +
+        "(default 15 minutes, `claimStaleMinutes` to change it) — a worker that died still holding " +
+        "a task, which would otherwise narrow this list silently and forever. It is a REPORT, not a " +
+        "release: freeing a claim whose worker is merely slow would let a second worker take the " +
+        'same task. Release one deliberately with `edit_task { spec: "replan" }`.',
       inputSchema: { project: PROJECT, branch: BRANCH },
-      outputSchema: { ids: z.array(z.string()), tasks: z.array(z.object(READY_ROW)) },
+      outputSchema: {
+        ids: z.array(z.string()),
+        tasks: z.array(z.object(READY_ROW)),
+        stale_claims: z.array(STALE_CLAIM),
+      },
     },
     async (args) => {
-      const ranked = eligible(await service.list(ctxOf(args)));
+      const ctx = ctxOf(args);
+      const ranked = eligible(await service.list(ctx));
       return result({
         ids: ranked.map((e) => e.task.id),
         tasks: ranked.map(readyRow),
+        stale_claims: await service.staleClaims(ctx),
       });
     },
   );

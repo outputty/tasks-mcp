@@ -10,6 +10,13 @@ export {
 } from "./service.ts";
 export { Doorbell, EventLog, postEvent, DEFAULT_NOTE, type RingSink } from "./channel.ts";
 export {
+  ClaimStore,
+  DEFAULT_STALE_MINUTES,
+  minutesSince,
+  type Claim,
+  type StaleClaim,
+} from "./claims.ts";
+export {
   ConfigProvider,
   ProjectConfigSchema,
   defaultCacheDir,

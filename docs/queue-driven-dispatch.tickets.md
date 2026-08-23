@@ -10,7 +10,6 @@ Cross-repo ordering: **`mcp-claim-heartbeat` and `mcp-lane-filter` merge before 
 `start-dispatcher` dispatches anything, and `mcp-delete-channel` merges last** - it removes `notify`,
 which older plugin versions still call, so it ships as a major or clearly-flagged minor.
 
-
 ### `mcp-claim-heartbeat` - a claim carries a heartbeat, and staleness is queryable
 
 `{ id: "mcp-claim-heartbeat", scope: ["src"], deps: [] }`
@@ -99,7 +98,7 @@ Output shape - `list_ready` 20 minutes later:
 
 ## Problem
 
-A dispatcher session owns a *lane*: a scope subtree it may build in, so two concurrent dispatchers never
+A dispatcher session owns a _lane_: a scope subtree it may build in, so two concurrent dispatchers never
 write the same files. `list_ready` today returns everything ready repo-wide, so a lane dispatcher must
 filter by hand from prose, and a mis-drawn lane (a ready task whose scope crosses another lane's live
 claim) is invisible until the merge conflicts. Cross-agent PR pairs conflict at roughly twice the rate
@@ -117,7 +116,7 @@ Input - the `examples.md` task (`scope: ["src/orders"]`) is ready.
 Output shape:
 
 ```json
-{ "ready": [ { "id": "csv-export", "scope": ["src/orders"], "overlap": [] } ] }
+{ "ready": [{ "id": "csv-export", "scope": ["src/orders"], "overlap": [] }] }
 ```
 
 for `scope: ["src/orders"]`, and `{ "ready": [] }` for `scope: ["docs"]`. Every returned task carries
@@ -128,7 +127,7 @@ non-empty value is the mis-drawn-lane signal the dispatcher refuses to dispatch 
 - **Architecture:** no new seams - one filter parameter, one derived field per row.
 - **Where:** the server's ready-ranking module (`src`).
 - **Anchor:** claude-plugin `skills/planning/SKILL.md:196-197` (scope is one folder; sharing a folder is normal
-  *within* an item - the filter guards *across* items).
+  _within_ an item - the filter guards _across_ items).
 
 #### Contract
 
@@ -147,7 +146,7 @@ non-empty value is the mis-drawn-lane signal the dispatcher refuses to dispatch 
 - **Filter, never partition** - the server must not learn what a "lane" is. Lanes are a dispatcher
   convention; baking them into the store adds state that goes stale the moment a human redraws one.
 - **`overlap` is advisory** - the dispatcher decides; the server only reports. A hard server-side block
-  would also block the single-dispatcher case where overlap with your *own* wave's finished claims is
+  would also block the single-dispatcher case where overlap with your _own_ wave's finished claims is
   routine.
 
 ## Open questions
@@ -165,7 +164,7 @@ non-empty value is the mis-drawn-lane signal the dispatcher refuses to dispatch 
 ## Problem
 
 Under queue dispatch a build child folds research, planning and building into one unattended session -
-*unless* the ticket is a spike, whose deliverable is a drafted ticket rather than merged code. That
+_unless_ the ticket is a spike, whose deliverable is a drafted ticket rather than merged code. That
 branch is taken by the dispatcher when it writes the child's prompt, so the marker must ride the
 `list_ready` row. Today the only candidate carriers are prose in the brief (not a mechanism - nothing
 parses it) and `tags` (plain GitHub labels, adopted on every pull).
@@ -182,7 +181,7 @@ list_ready { project }
 Output shape:
 
 ```json
-{ "ready": [ { "id": "spike-csv-shape", "tags": ["spike"], "scope": ["src/orders"] } ] }
+{ "ready": [{ "id": "spike-csv-shape", "tags": ["spike"], "scope": ["src/orders"] }] }
 ```
 
 - **Sibling:** the `tags` field on `edit_task` (already sets plain GitHub labels).
@@ -260,4 +259,3 @@ claude <no channel flag> -> full functionality
 - (none)
 
 ---
-

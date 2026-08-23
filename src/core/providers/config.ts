@@ -30,6 +30,12 @@ export const ProjectConfigSchema = z
       .array(z.enum(LABEL_FIELD_NAMES))
       .optional()
       .describe("Which fields become labels (default: all)."),
+    claimStaleMinutes: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("Minutes of silence before a claim is reported stale (default 15)."),
   })
   .strict();
 
