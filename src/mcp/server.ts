@@ -117,6 +117,7 @@ const STANDING = z.object({
 const READY_ROW = {
   ...ROW,
   scope: z.array(z.string()),
+  tags: z.array(z.string()),
   blocks: z.number(),
   score: z.number(),
   overlap: z.array(z.string()),
@@ -125,6 +126,9 @@ const READY_ROW = {
 const readyRow = (entry: Eligible) => ({
   ...indexRow(entry.task),
   scope: entry.task.scope,
+  // Always a list, never absent: a dispatcher branching on `spike` should read an empty array for a
+  // task that wears no labels, not have to tell "untagged" from "this build forgot to send tags".
+  tags: entry.task.tags ?? [],
   blocks: entry.blocks,
   score: entry.score,
   overlap: entry.overlap,
@@ -188,7 +192,11 @@ export function createMcpServer(service: TaskService): McpServer {
         "everything. Each row also carries `overlap`: the ids of tasks being worked right now whose " +
         "scope touches that row's, computed across ALL lanes, because a claim in another lane is " +
         "exactly what a lane filter would otherwise hide. Normally empty; non-empty means " +
-        "dispatching it would put two workers over the same folders.",
+        "dispatching it would put two workers over the same folders.\n\n" +
+        "`tags` carries the row's plain GitHub labels, so a dispatcher can branch on the KIND of " +
+        "work without a second call. `spike` is the one this flow reads: a spike ticket's " +
+        "deliverable is a drafted ticket, not merged code, so it is briefed differently. Labels are " +
+        "adopted from the issue on every pull, so one added in the web UI reaches the dispatcher.",
       inputSchema: {
         project: PROJECT,
         branch: BRANCH,

@@ -471,3 +471,90 @@ test("list_ready ranks by the ROADMAP row, not the task alone", async () => {
   expect(ready.tasks[0].roadmap).toMatchObject({ target: "urgent", priority: "high" });
   await cleanup();
 });
+
+// --- The dispatcher's read: lane, overlap, spike marker, stale claims -------------------------------
+// list_ready is the one call a queue-driven dispatcher makes per wave, so its whole surface is
+// exercised here through the real transport rather than trusted from the unit tests underneath.
+
+test("list_ready carries scope, tags and overlap on every row", async () => {
+  const { client, project, cleanup } = await harness();
+  await client.callTool({
+    name: "add_task",
+    arguments: {
+      project,
+      id: "spike-csv-shape",
+      title: "What shape should the CSV take?",
+      scope: ["src/orders"],
+      tags: ["spike"],
+    },
+  });
+  const [row] = structured(
+    await client.callTool({ name: "list_ready", arguments: { project } }),
+  ).tasks;
+  expect(row).toMatchObject({
+    id: "spike-csv-shape",
+    scope: ["src/orders"],
+    tags: ["spike"], // the marker a dispatcher branches on
+    overlap: [], // nothing in flight
+  });
+  await cleanup();
+});
+
+test("an untagged task reads as an empty tag list, never a missing key", async () => {
+  const { client, project, cleanup } = await harness();
+  await client.callTool({ name: "add_task", arguments: { project, id: "plain" } });
+  const [row] = structured(
+    await client.callTool({ name: "list_ready", arguments: { project } }),
+  ).tasks;
+  expect(row.tags).toEqual([]);
+  await cleanup();
+});
+
+test("the scope filter draws a lane, and overlap still crosses it", async () => {
+  const { client, project, cleanup } = await harness();
+  await client.callTool({
+    name: "add_task",
+    arguments: { project, id: "csv-export", scope: ["src/orders"] },
+  });
+  await client.callTool({
+    name: "add_task",
+    arguments: { project, id: "sweep", scope: ["src"] },
+  });
+  await client.callTool({ name: "start_task", arguments: { project, id: "sweep" } });
+
+  const lane = structured(
+    await client.callTool({ name: "list_ready", arguments: { project, scope: ["src/orders"] } }),
+  );
+  expect(lane.ids).toEqual(["csv-export"]); // `sweep` is outside the lane AND claimed
+  expect(lane.tasks[0].overlap).toEqual(["sweep"]); // …but its claim still shows
+
+  const elsewhere = structured(
+    await client.callTool({ name: "list_ready", arguments: { project, scope: ["docs"] } }),
+  );
+  expect(elsewhere.ids).toEqual([]);
+  await cleanup();
+});
+
+test("list_ready reports stale claims and nothing else releases them", async () => {
+  const { client, project, cleanup } = await harness();
+  await client.callTool({ name: "add_task", arguments: { project, id: "csv-export" } });
+  await client.callTool({ name: "start_task", arguments: { project, id: "csv-export" } });
+
+  const held = structured(await client.callTool({ name: "list_ready", arguments: { project } }));
+  expect(held.ids).toEqual([]); // claimed, so not offered
+  expect(held.stale_claims).toEqual([]); // and fresh, so not flagged
+
+  // The deliberate release: the same exit a build takes when it cannot proceed.
+  await client.callTool({
+    name: "edit_task",
+    arguments: { project, id: "csv-export", spec: "replan" },
+  });
+  await client.callTool({
+    name: "edit_task",
+    arguments: { project, id: "csv-export", spec: "settled" },
+  });
+  const freed = structured(await client.callTool({ name: "list_ready", arguments: { project } }));
+  expect(freed.ids).toEqual(["csv-export"]);
+  expect(freed.stale_claims).toEqual([]);
+  await cleanup();
+});
