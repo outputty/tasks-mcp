@@ -292,15 +292,20 @@ test("/health answers with the server info", async () => {
   await cleanup();
 });
 
-// --- the channel ------------------------------------------------------------------------------------
+// --- the server surface -----------------------------------------------------------------------------
 
-test("the server declares itself a channel, and never opts into permission relay", async () => {
+test("the server is a plain tool provider — no channel capability, no push", async () => {
   const { client, cleanup } = await harness();
   const capabilities = client.getServerCapabilities() as any;
-  expect(capabilities.experimental["claude/channel"]).toEqual({});
-  // relay would hand tool-approval authority to whoever can reach the channel; there is no human there
-  expect(capabilities.experimental["claude/channel/permission"]).toBeUndefined();
-  expect(client.getInstructions()).toMatch(/doorbell, not a report/);
+  expect(capabilities.experimental?.["claude/channel"]).toBeUndefined();
+  expect(client.getInstructions()).toMatch(/Nothing here pushes/);
+  await cleanup();
+});
+
+test("notify is gone from the surface", async () => {
+  const { client, cleanup } = await harness();
+  const { tools } = await client.listTools();
+  expect(tools.map((t) => t.name)).not.toContain("notify");
   await cleanup();
 });
 
@@ -320,21 +325,6 @@ test("list_ready is ranked: reach multiplied by priority, best first", async () 
   ]);
   await cleanup();
 });
-
-test("notify rings the doorbell with a one-line reason", async () => {
-  const { client, project, cleanup } = await harness();
-  const res = structured(
-    await client.callTool({
-      name: "notify",
-      arguments: { project, note: "spec gate on channel-emitter" },
-    }),
-  );
-  expect(res.note).toBe("spec gate on channel-emitter");
-  await cleanup();
-});
-
-// ---------------------------------------------------------------------------------------------------
-// The roadmap altitude, over the real protocol.
 
 test("add_target files a roadmap row that list_ready never offers", async () => {
   const { client, project, cleanup } = await harness();

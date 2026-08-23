@@ -180,50 +180,7 @@ Like the board, the edge is **best-effort**: GitHub caps a parent at 100 sub-iss
 whose repository owner differs, and neither is worth failing the issue write over. `sync` pushes
 targets ahead of the tasks naming them, so a first sync attaches the edge in one pass.
 
-## The channel — one doorbell, two hops
-
-The MCP server declares the `claude/channel` capability, so Claude Code registers a notification
-listener and the server can push `notifications/claude/channel` into a live session.
-`claude/channel/permission` is deliberately **not** declared: relay forwards tool-approval prompts to
-whoever is on the other end of a channel, and here that is a spool file, not a human.
-
-Exactly one event exists, and it carries no state to act on. Channel events are delivered on the
-session's next turn and batched, so any count stamped at emit time would be stale by the time it is
-read; the reader calls `list_ready` instead. What the ring text does carry is the **direction** to
-look — `task api closed — re-evaluate`, `ready now: deploy — re-evaluate` — because a bare "something
-changed" is too easy to reconcile with a stale belief that nothing has.
-
-Two mechanisms carry a ring, because a worker session and an orchestrator never share a process:
-
-| Hop           | Mechanism                                                           | Where             |
-| ------------- | ------------------------------------------------------------------- | ----------------- |
-| in-process    | `Doorbell` — coalesces every ring in one tick into a single event   | `core/channel.ts` |
-| cross-process | a spool file per note, broadcast to every session watching the repo | `core/channel.ts` |
-
-`TaskStack.notify` does both: it rings locally _and_ posts to the spool, and a reader skips notes it
-posted itself so one ring is never delivered twice. The spool keys on `repoSlug` — the primary
-checkout, resolved through `git rev-parse --git-common-dir` — rather than on `projectSlug`, so a note
-raised in a worktree reaches a session watching from the checkout it was cut from.
-
-**The spool is a broadcast, not a queue.** Reading it never removes a file. Every session's server
-reads the spool, but only some of them have a channel listener behind their doorbell — so a note
-_consumed_ by a worker session is a note the orchestrator never sees, and with instant delivery that
-race is near-certain rather than occasional. Instead each `EventLog` remembers the files it has handed
-over, so a note reaches every process exactly once, and files are swept by age (five minutes, read
-from the filename so sweeping costs no `stat`).
-
-**The spool is watched, not polled.** `EventLog.watch` puts an `fs.watch` on the spool directory the
-first time a project is named, so a note lands in the other session immediately and with no
-configuration — the wake path must never depend on a flag someone has to remember. A dropped `fs.watch`
-event self-heals, since the next one re-reads the whole directory and hands over anything unseen; the
-background sync reads the same log as a further backstop.
-
-Three things ring: an **explicit `notify`**, a **graph mutation** (`create`, a status/spec/deps change,
-`delete` — announced to other processes but not to the session that made it, which already knows), and
-a **background sync whose eligible set moved**. A prose-only edit rings nothing; a retitled task is not
-news. Only the **stdio** transport wires the doorbell to a notification (`mcp/stdio.ts`), because that
-is how Claude Code spawns a channel server. Under HTTP the ring goes nowhere and every tool still
-works.
+## Claims — the in-flight set, and how it survives a dead worker
 
 **The in-flight set is in the graph, not in the dispatcher.** A worker calls `start_task` as it picks
 a task up: `status` moves to `in_progress`, `ready` matches only `open`, and the task stops being
@@ -235,3 +192,31 @@ and `spec: replan` returns the task to `open`, so a build that abandons cannot s
 An in-progress task is still **scheduled** and still counts as a **blocker** — it is being worked, not
 finished, so everything behind it still waits on it. What remains the caller's is only **how many** may
 run at once — this package holds the graph, not the schedule.
+
+**A claim carries a heartbeat, so a dead worker stops hiding work.** The marker clearing itself covers
+every exit a worker takes deliberately; it covers nothing about a worker that simply stops. `start_task`
+therefore stamps `claimed_at` and `heartbeat_at` into a claim ledger, and every later write by the
+holder moves the beat — `append_trail` above all, because a build already writes one note per layer, so
+the liveness signal costs nothing and cannot be forgotten by a worker that is working. `list_ready`
+reports any claim quiet past the threshold (`claimStaleMinutes`, default 15) as a `stale_claims` row.
+
+It **reports and never releases**. Releasing a claim whose worker is merely slow would let a second
+worker take the same task, which is the one race `start_task` exists to prevent; the deliberate release
+is `edit_task { spec: "replan" }`, which is also the exit an abandoning build already takes.
+
+| Concern       | Where it lives                                 | Why there                                                 |
+| ------------- | ---------------------------------------------- | --------------------------------------------------------- |
+| the claim     | `status: in_progress` on the task              | project truth, and it syncs to the issue and the board    |
+| the heartbeat | a local ledger in the cache (`core/claims.ts`) | a beat per layer would rewrite the issue body every layer |
+
+The ledger keys on `repoSlug` — the primary checkout, resolved through `git rev-parse
+--git-common-dir` — rather than on `projectSlug`, so a worker claiming from inside a worktree and a
+dispatcher sweeping from the checkout it was cut from read one file. An unreadable or half-written
+ledger reads as empty: losing it costs the staleness signal, and must never take down the tool call
+that touched it.
+
+**Lanes keep two dispatchers off each other's files.** `list_ready { scope }` filters to the tasks
+whose folders touch the lane, by segment-wise containment either way. Every row carries `overlap` —
+live claims whose scope touches that row's, computed across **all** lanes, because a claim outside the
+lane is exactly the collision the filter would hide. Both are pure functions of the `Task[]`
+(`core/graph.ts`), which is why lanes needed no backend change.
