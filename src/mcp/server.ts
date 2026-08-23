@@ -116,14 +116,18 @@ const STANDING = z.object({
 });
 const READY_ROW = {
   ...ROW,
+  scope: z.array(z.string()),
   blocks: z.number(),
   score: z.number(),
+  overlap: z.array(z.string()),
   roadmap: STANDING.optional(),
 };
 const readyRow = (entry: Eligible) => ({
   ...indexRow(entry.task),
+  scope: entry.task.scope,
   blocks: entry.blocks,
   score: entry.score,
+  overlap: entry.overlap,
   ...(entry.roadmap ? { roadmap: entry.roadmap } : {}),
 });
 
@@ -177,8 +181,21 @@ export function createMcpServer(service: TaskService): McpServer {
         "(default 15 minutes, `claimStaleMinutes` to change it) — a worker that died still holding " +
         "a task, which would otherwise narrow this list silently and forever. It is a REPORT, not a " +
         "release: freeing a claim whose worker is merely slow would let a second worker take the " +
-        'same task. Release one deliberately with `edit_task { spec: "replan" }`.',
-      inputSchema: { project: PROJECT, branch: BRANCH },
+        'same task. Release one deliberately with `edit_task { spec: "replan" }`.\n\n' +
+        "`scope` draws a LANE: only tasks whose folders touch it are listed, so two dispatchers can " +
+        "run side by side without ever writing the same files. Folder containment counts either way " +
+        "(`src` covers `src/orders`), a task with no scope is in every lane, and no filter means " +
+        "everything. Each row also carries `overlap`: the ids of tasks being worked right now whose " +
+        "scope touches that row's, computed across ALL lanes, because a claim in another lane is " +
+        "exactly what a lane filter would otherwise hide. Normally empty; non-empty means " +
+        "dispatching it would put two workers over the same folders.",
+      inputSchema: {
+        project: PROJECT,
+        branch: BRANCH,
+        scope: LIST.optional().describe(
+          "Folders that draw this dispatcher's lane. Omit for every ready task.",
+        ),
+      },
       outputSchema: {
         ids: z.array(z.string()),
         tasks: z.array(z.object(READY_ROW)),
@@ -187,7 +204,7 @@ export function createMcpServer(service: TaskService): McpServer {
     },
     async (args) => {
       const ctx = ctxOf(args);
-      const ranked = eligible(await service.list(ctx));
+      const ranked = eligible(await service.list(ctx), asArray(args.scope));
       return result({
         ids: ranked.map((e) => e.task.id),
         tasks: ranked.map(readyRow),

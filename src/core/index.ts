@@ -28,6 +28,9 @@ export {
 export {
   ready,
   eligible,
+  inLane,
+  scopesIntersect,
+  overlappingClaims,
   planning,
   schedule,
   prereqs,
