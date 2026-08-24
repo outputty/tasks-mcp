@@ -105,6 +105,19 @@ test("an update keeps a label it has never pulled, and replaces only the field l
   expect(gh.issues[0].labels).toEqual(["bug", "tier:1"]);
 });
 
+test("two servers racing on one new label: the loser adopts it instead of failing the write", async () => {
+  const { gh, provider: first, cacheDir, ctx } = setup();
+  const second = nockProvider({ cacheDir, projects: false });
+  await first.init(ctx);
+  await second.init(ctx); // both snapshot the repo's labels BEFORE either mints `kind:feature`
+
+  await first.upsert(ctx, task({ id: "t-1", kind: "feature" })); // mints it
+  await second.upsert(ctx, task({ id: "t-2", kind: "feature" })); // create refused: adopt, don't fail
+
+  expect([...gh.labels.keys()]).toEqual(["kind:feature"]); // one label, created once
+  expect(gh.issues.map((i) => i.labels)).toEqual([["kind:feature"], ["kind:feature"]]);
+});
+
 test("a field set to its DEFAULT wears no label — absence already means exactly that", async () => {
   const { gh, provider, ctx } = setup();
   await provider.upsert(

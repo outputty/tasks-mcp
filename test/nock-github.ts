@@ -8,6 +8,10 @@ import { GitHubProvider } from "../src/core/providers/github.ts";
 import type { ServerOptions } from "../src/core/types.ts";
 import { ConfigProvider } from "../src/core/providers/config.ts";
 
+/** An error GitHub answers INSIDE a 200 response, in the `errors` array — what a handler throws to
+ *  make the interceptor render one, so the provider meets the real Octokit `GraphqlResponseError`. */
+export class GraphQLError extends Error {}
+
 export interface FakeIssue {
   id: string;
   number: number;
@@ -60,6 +64,7 @@ export class NockGitHub {
     ],
     ["ProjectV2SingleSelectField", () => this.statusField()],
     ["ProjectV2ItemFieldSingleSelectValue", () => this.boardItems()],
+    ["label(name:", (v) => this.label(v)],
     ["projectsV2(", () => this.repoBoards()],
     ["issues(first", () => this.repoIssues()],
     ["comments(first", (v) => this.issueComments(v)],
@@ -82,9 +87,18 @@ export class NockGitHub {
   }
 
   private createLabel(vars: Record<string, any>): unknown {
+    const name = String(vars.n);
+    // Label names are unique per repo: the real API refuses a second one rather than returning the
+    // first, which is what a caller working from a stale label snapshot walks into.
+    if (this.labels.has(name)) throw new GraphQLError("Name has already been taken");
     const id = `L_${this.labelSeq++}`;
-    this.labels.set(String(vars.n), id);
+    this.labels.set(name, id);
     return { createLabel: { label: { id } } };
+  }
+
+  private label(vars: Record<string, any>): unknown {
+    const id = this.labels.get(String(vars.l));
+    return { repository: { label: id ? { id } : null } };
   }
 
   private deleteIssue(vars: Record<string, any>): unknown {
@@ -242,9 +256,14 @@ export function installNock(gh: NockGitHub = new NockGitHub()): NockGitHub {
   nock("https://api.github.com")
     .persist()
     .post("/graphql")
-    .reply(200, (_uri, body: any) => ({
-      data: gh.reply(body.query, body.variables || {}),
-    }));
+    .reply(200, (_uri, body: any) => {
+      try {
+        return { data: gh.reply(body.query, body.variables || {}) };
+      } catch (err) {
+        if (!(err instanceof GraphQLError)) throw err;
+        return { errors: [{ message: err.message }] };
+      }
+    });
   return gh;
 }
 

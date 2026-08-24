@@ -141,6 +141,10 @@ const LABEL_FIELDS: Record<LabelFieldName, string> = {
   status: "d93f0b",
 };
 
+// GitHub's wording when `createLabel` is handed a name the repo already carries. Matched on the
+// message because GraphQL gives a mutation-level error no code or type distinguishes.
+const NAME_TAKEN = /name has already been taken/i;
+
 // The board's Status columns, matched case-insensitively, first hit wins. One source for both
 // directions: `setCardStatus` writes to the first column that exists, `collectCard` reads one back.
 const COLUMNS: Record<Task["status"], string[]> = {
@@ -728,11 +732,27 @@ export class GitHubProvider implements Provider {
   private async ensureLabels(state: ProjectState, names: string[]): Promise<string[]> {
     const ids: string[] = [];
     for (const name of names) {
-      const id = state.labels.get(name) ?? (await this.createLabel(state, name));
+      const id = state.labels.get(name) ?? (await this.resolveLabel(state, name));
       state.labels.set(name, id);
       ids.push(id);
     }
     return ids;
+  }
+
+  /**
+   * Create the label, or adopt the one that beat us to it. `state.labels` is a snapshot taken at init
+   * (and only the first page of them), so a label minted since — by a second worker's own server
+   * process, or by hand in the web UI — reads as missing here and collides on create. That collision
+   * means the label EXISTS, which is all the caller wanted, so resolve its id rather than failing the
+   * write: a task must not be lost to a label another process happened to create first.
+   */
+  private async resolveLabel(state: ProjectState, name: string): Promise<string> {
+    try {
+      return await this.createLabel(state, name);
+    } catch (err) {
+      if (!NAME_TAKEN.test((err as Error).message)) throw err;
+      return await this.findLabel(state, name);
+    }
   }
 
   private async createLabel(state: ProjectState, name: string): Promise<string> {
@@ -748,6 +768,20 @@ export class GitHubProvider implements Provider {
       },
     );
     return res.createLabel.label.id;
+  }
+
+  private async findLabel(state: ProjectState, name: string): Promise<string> {
+    const res = await this.octokit.graphql<{ repository: { label: { id: string } | null } }>(
+      `query($o:String!,$n:String!,$l:String!){ repository(owner:$o,name:$n){ label(name:$l){ id } } }`,
+      { o: state.repo.owner, n: state.repo.repo, l: name },
+    );
+    const id = res.repository.label?.id;
+    if (!id) {
+      throw new Error(
+        `label ${name} was refused as taken but is not in ${state.repo.owner}/${state.repo.repo}`,
+      );
+    }
+    return id;
   }
 
   async pull(ctx: ProjectContext): Promise<Map<string, ProviderState>> {
