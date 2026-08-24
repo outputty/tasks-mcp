@@ -7,6 +7,7 @@ import nock from "nock";
 import { TaskStack, DuplicateTaskError } from "../src/core/service.ts";
 import { FileProvider } from "../src/core/providers/file.ts";
 import { ready, roadmap, tierOf } from "../src/core/graph.ts";
+import type { Task } from "../src/core/types.ts";
 import { task, tmp, tmpRepo } from "./helpers.ts";
 import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
 
@@ -213,6 +214,41 @@ test("a replan releases a started task back to the queue", async () => {
   await svc.update(ctx, "schema", { spec: "replan" });
 
   expect((await svc.get(ctx, "schema"))?.status).toBe("open");
+  svc.stop();
+  cleanup();
+});
+
+test("settling a claimed item releases it to the build queue", async () => {
+  const { svc, project, cleanup } = harness();
+  const ctx = { project };
+  // A planning session claims the item it is specifying, so that a second planning session offers a
+  // different one. Settling is the handoff, and it has to hand the claim back too: a settled task
+  // still marked in progress reaches no queue — `ready` wants open, `planning` wants unsettled.
+  await svc.create(ctx, task({ id: "csv", spec: "drafting" }));
+  await svc.start(ctx, "csv");
+
+  await svc.update(ctx, "csv", { spec: "settled" });
+
+  const settled = await svc.get(ctx, "csv");
+  expect(settled?.status).toBe("open");
+  expect(ready([settled as Task]).map((t) => t.id)).toEqual(["csv"]);
+  svc.stop();
+  cleanup();
+});
+
+test("a build's own claim survives an edit — the settle release is a transition", async () => {
+  const { svc, project, cleanup } = harness();
+  const ctx = { project };
+  // A build's task is settled AND in progress for the whole run. Releasing on that STATE would put a
+  // second worker on live work, so only a move from unsettled to settled hands the claim back.
+  await svc.create(ctx, task({ id: "api" })); // spec defaults to settled
+  await svc.start(ctx, "api");
+
+  await svc.update(ctx, "api", { spec: "settled" });
+  expect((await svc.get(ctx, "api"))?.status).toBe("in_progress");
+
+  await svc.update(ctx, "api", { qa: "inline" });
+  expect((await svc.get(ctx, "api"))?.status).toBe("in_progress");
   svc.stop();
   cleanup();
 });

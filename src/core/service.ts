@@ -16,6 +16,7 @@ import {
   assertTargetWhy,
   idList,
   isTarget,
+  specSettled,
   tasksOf,
   touchesTargetShape,
   withDefaults,
@@ -179,7 +180,7 @@ export class TaskStack implements TaskService {
     const known = await (await this.top(ctx)).pull(ctx);
     const current = known.get(id)?.task;
     if (!current) throw new Error(`no task ${id}`);
-    const merged = released(withDefaults(applyPatch(current, patch)));
+    const merged = released(current, withDefaults(applyPatch(current, patch)));
     assertEdit(known, merged, patch);
     await this.fanDown(ctx, merged);
     this.trackClaim(ctx, merged);
@@ -384,13 +385,21 @@ function applyPatch(current: Task, patch: TaskPatch): Task {
 }
 
 /**
- * A task sent back for replanning is not being worked any more, so it returns to the queue. Without
- * this an abandoned build would leave the task marked in progress — invisible to `list_ready` and
- * waiting for a human to notice.
+ * The two edits that hand a claimed item back.
+ *
+ * A task sent back for replanning is not being worked any more. And a planning session claims the item
+ * it is specifying, so SETTLING that item hands it on to whoever builds it. Without either release the
+ * item stays marked in progress and reaches no queue at all: `ready` wants an open task, `planning`
+ * wants an unsettled one, and it waits for a human to notice.
+ *
+ * ⚠ The settle release keys off the TRANSITION, never the state. A build's own task is settled AND in
+ * progress for its whole run, so releasing on that state would put a second worker on live work.
  */
-function released(task: Task): Task {
-  if (task.spec !== "replan" || task.status !== "in_progress") return task;
-  return { ...task, status: "open" };
+function released(current: Task, next: Task): Task {
+  if (next.status !== "in_progress") return next;
+  if (next.spec === "replan") return { ...next, status: "open" };
+  if (specSettled(next) && !specSettled(current)) return { ...next, status: "open" };
+  return next;
 }
 
 /** One layer's batch of pushes: the batch method when the layer has one, else task by task. */
