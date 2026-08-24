@@ -305,9 +305,14 @@ function validateLabelFields(task: Partial<Task> & { id: string }): void {
 }
 
 /** The whole plan as ordered layers, in dependency order. Throws on a dependency cycle. */
-export function schedule(tasks: Task[]): Task[][] {
+export function schedule(tasks: Task[], target?: string): Task[][] {
   const done = doneIds(tasks);
   let remaining = tasks.filter((t) => t.status !== "done");
+  // Scoping to one target keeps `done` seeded from the WHOLE graph, so a dep this target does not hold
+  // still resolves when it has shipped. One that has not shipped throws the unmet-dependency error
+  // below, which is the correct loud failure: a target whose work waits on another target is
+  // mis-scoped, and nothing can build it as one stack.
+  if (target !== undefined) remaining = remaining.filter((t) => t.target === target);
   const layers: Task[][] = [];
 
   while (remaining.length > 0) {

@@ -168,6 +168,7 @@ export class TaskStack implements TaskService {
     const known = await (await this.top(ctx)).pull(ctx);
     if (known.has(task.id)) throw new DuplicateTaskError(task.id);
     assertTarget(known, task);
+    assertDepsInTarget(known, task);
     assertTargetFields(task);
     assertTargetWhy(task); // a target exists only once someone has written down why
     await this.fanDown(ctx, task);
@@ -179,13 +180,7 @@ export class TaskStack implements TaskService {
     const current = known.get(id)?.task;
     if (!current) throw new Error(`no task ${id}`);
     const merged = released(withDefaults(applyPatch(current, patch)));
-    // Only when the edit MOVES the task: re-validating an untouched target would refuse to close a
-    // task whose roadmap row someone deleted, which is not this guard's business.
-    if (patch.target) assertTarget(known, merged);
-    if (touchesTargetShape(patch)) assertTargetFields(merged);
-    // The WHY is asked of a target when it is CREATED or PROMOTED, never on a later edit — a row
-    // filed before the rule existed still has to be closeable.
-    if (patch.type === "target") assertTargetWhy(merged);
+    assertEdit(known, merged, patch);
     await this.fanDown(ctx, merged);
     this.trackClaim(ctx, merged);
     return merged;
@@ -324,6 +319,54 @@ function assertTarget(known: Map<string, ProviderState>, task: Task): void {
   const target = known.get(task.target)?.task;
   if (!target) throw new Error(`no target ${task.target}`);
   if (!isTarget(target)) throw new Error(`${task.target} is a task, not a target`);
+}
+
+/**
+ * A target is self-contained: its tasks depend on each other and on nothing outside it. That is what
+ * lets a dispatcher take one target and ship its whole set as a single stack — a dep reaching out
+ * would stall the stack on work no one in it can do. Sequencing BETWEEN targets is the target's own
+ * `deps`, one altitude up.
+ *
+ * Like `assertTarget`, this guards the AUTHORING surface only. `sync` stays tolerant, because it
+ * records what GitHub already says, and a dep whose task this stack has never seen is left alone:
+ * nothing here can tell which target it belongs to.
+ */
+function assertDepsInTarget(known: Map<string, ProviderState>, task: Task): void {
+  if (!task.target || isTarget(task)) return;
+  const stray = strayDep(known, task);
+  if (stray) throw new Error(`task ${task.id} (target ${task.target}) ${stray}`);
+}
+
+/** The first dep that leaves this task's target, worded as the rest of the error. */
+function strayDep(known: Map<string, ProviderState>, task: Task): string | null {
+  for (const dep of task.deps) {
+    const other = known.get(dep)?.task;
+    if (!other) continue;
+    if (isTarget(other)) {
+      return `depends on target ${dep} — put that sequencing in the target's own deps`;
+    }
+    if (other.target !== task.target) {
+      return (
+        `depends on ${dep} (target ${other.target ?? "none"}) — a target is self-contained, ` +
+        `so split the target or move the task`
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * The authoring guards an EDIT runs. Each fires only when the patch touches what it guards, because
+ * re-validating an untouched graph would refuse honest edits: closing a task whose roadmap row
+ * someone deleted, or one whose cross-target dep predates the self-contained rule.
+ */
+function assertEdit(known: Map<string, ProviderState>, merged: Task, patch: TaskPatch): void {
+  if (patch.target) assertTarget(known, merged);
+  if (patch.deps || patch.target) assertDepsInTarget(known, merged);
+  if (touchesTargetShape(patch)) assertTargetFields(merged);
+  // The WHY is asked of a target when it is CREATED or PROMOTED, never on a later edit — a row
+  // filed before the rule existed still has to be closeable.
+  if (patch.type === "target") assertTargetWhy(merged);
 }
 
 /**
