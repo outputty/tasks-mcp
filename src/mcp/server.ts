@@ -283,8 +283,18 @@ export function createMcpServer(service: TaskService): McpServer {
     "schedule",
     {
       description:
-        "The whole open plan as dependency-ordered layers. Errors on a dependency cycle.",
-      inputSchema: { project: PROJECT, branch: BRANCH },
+        "The open plan as dependency-ordered layers. Errors on a dependency cycle. Pass `target` to " +
+        "scope it to one roadmap target — what a build dispatched that target should read, since a " +
+        "target is self-contained and ships as one stack. A dep outside the target that has not " +
+        "shipped errors here as an unmet dependency, which means the target is mis-scoped.",
+      inputSchema: {
+        project: PROJECT,
+        branch: BRANCH,
+        target: z
+          .string()
+          .optional()
+          .describe("Scope the layers to the tasks this roadmap target holds."),
+      },
       outputSchema: {
         layers: z.array(
           z.object({
@@ -296,7 +306,7 @@ export function createMcpServer(service: TaskService): McpServer {
       },
     },
     async (args) => {
-      const layers = schedule(await service.list(ctxOf(args)));
+      const layers = schedule(await service.list(ctxOf(args)), args.target);
       return result({
         layers: layers.map((layer, i) => ({
           layer: i + 1,

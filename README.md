@@ -120,7 +120,7 @@ the board once.
 | `list_tasks`    | every task, full records — the whole graph                              | —      |
 | `list_ready`    | which tasks can be worked now, ranked by task AND roadmap row           | —      |
 | `list_planning` | which tasks planning still owns (drafting / replan)                     | —      |
-| `schedule`      | the whole open plan as dependency layers; errors on a cycle             | —      |
+| `schedule`      | the open plan as dependency layers, all of it or one `target`           | —      |
 | `get_task`      | one task's full record                                                  | —      |
 | `add_task`      | create a task (file + issue + labels + board card)                      | ✎      |
 | `add_target`    | create a roadmap target — a name and a why, no build fields             | ✎      |
@@ -196,6 +196,13 @@ Because a target is an ordinary node, the graph answers roadmap questions with t
 already had — `prereqs` on a target is "what must ship before this", and `blockers` ranks targets by
 how much waits on them. And because a target is never `ready`, nothing dispatches a roadmap row as if
 it were a single build.
+
+**A target is self-contained**: its tasks depend on each other and on nothing outside it, and
+`add_task` / `edit_task` refuse a dep that reaches out. Sequencing between targets lives one altitude
+up, on the target's own `deps`. That invariant is what lets a caller take a whole target and ship it
+as one unit — `schedule { target }` gives exactly its layers, and a dep pointing at unshipped work
+elsewhere surfaces there as an unmet dependency rather than as a stalled build. `sync` stays tolerant,
+because it records what GitHub already says.
 
 ## Trails — the decisions behind a task
 

@@ -68,6 +68,37 @@ test("schedule: orders tasks into dependency layers", () => {
   ]);
 });
 
+test("schedule: scoped to a target, layers only that target's tasks", () => {
+  const tasks = [
+    task({ id: "api", target: "export", deps: ["schema"] }),
+    task({ id: "schema", target: "export" }),
+    task({ id: "unrelated", target: "billing" }),
+  ];
+  expect(schedule(tasks, "export").map((layer) => layer.map((x) => x.id))).toEqual([
+    ["schema"],
+    ["api"],
+  ]);
+});
+
+test("schedule: a scoped dep that already shipped resolves from the whole graph", () => {
+  // `done` is seeded from every task, not just the target's, so work another target already
+  // finished does not read as unmet here.
+  const tasks = [
+    task({ id: "shipped", target: "billing", status: "done" }),
+    task({ id: "api", target: "export", deps: ["shipped"] }),
+  ];
+  expect(schedule(tasks, "export").map((layer) => layer.map((x) => x.id))).toEqual([["api"]]);
+});
+
+test("schedule: a scoped dep still open outside the target is an unmet dependency", () => {
+  // The loud failure a mis-scoped target earns: nothing can build it as one stack.
+  const tasks = [
+    task({ id: "pending", target: "billing" }),
+    task({ id: "api", target: "export", deps: ["pending"] }),
+  ];
+  expect(() => schedule(tasks, "export")).toThrow(/unmet dependency/);
+});
+
 test("schedule: throws on a dependency cycle", () => {
   const tasks = [task({ id: "a", deps: ["b"] }), task({ id: "b", deps: ["a"] })];
   expect(() => schedule(tasks)).toThrow(/cycle or unmet dependency/);

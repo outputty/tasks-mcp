@@ -233,6 +233,56 @@ test("a task may only name a target the stack actually holds", async () => {
   cleanup();
 });
 
+test("a task's deps stay inside its own target", async () => {
+  const { svc, project, cleanup } = harness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "export", type: "target", title: "Export", brief: "why" }));
+  await svc.create(ctx, task({ id: "billing", type: "target", title: "Billing", brief: "why" }));
+  await svc.create(ctx, task({ id: "invoice", target: "billing" }));
+
+  // A target is self-contained: a dispatcher takes it whole, so work under another target would
+  // stall the stack on something nobody in it can do.
+  await expect(
+    svc.create(ctx, task({ id: "csv", target: "export", deps: ["invoice"] })),
+  ).rejects.toThrow(/a target is self-contained/);
+
+  // Sequencing between targets belongs one altitude up, on the target's own deps.
+  await expect(
+    svc.create(ctx, task({ id: "csv2", target: "export", deps: ["billing"] })),
+  ).rejects.toThrow(/put that sequencing in the target's own deps/);
+
+  // In-target deps are the normal case.
+  await svc.create(ctx, task({ id: "schema", target: "export" }));
+  await expect(
+    svc.create(ctx, task({ id: "csv3", target: "export", deps: ["schema"] })),
+  ).resolves.toBeTruthy();
+  svc.stop();
+  cleanup();
+});
+
+test("the dep guard runs on an edit that rewrites deps, and leaves other edits alone", async () => {
+  const { svc, project, cacheDir, cleanup } = harness();
+  const ctx = { project };
+  await svc.create(ctx, task({ id: "export", type: "target", title: "Export", brief: "why" }));
+  await svc.create(ctx, task({ id: "billing", type: "target", title: "Billing", brief: "why" }));
+  await svc.create(ctx, task({ id: "invoice", target: "billing" }));
+  await svc.create(ctx, task({ id: "csv", target: "export" }));
+
+  await expect(svc.update(ctx, "csv", { deps: ["invoice"] })).rejects.toThrow(
+    /a target is self-contained/,
+  );
+
+  // A cross-target dep written before this guard existed must stay closeable, so an edit that
+  // touches neither deps nor target does not re-validate the graph.
+  await new FileProvider({ cacheDir }).upsert(
+    ctx,
+    task({ id: "legacy", target: "export", deps: ["invoice"] }),
+  );
+  await expect(svc.close(ctx, "legacy")).resolves.toBeUndefined();
+  svc.stop();
+  cleanup();
+});
+
 test("closing a task whose target vanished still works — the guard is for MOVES only", async () => {
   const { svc, project, cacheDir, cleanup } = harness();
   const ctx = { project };
