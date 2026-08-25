@@ -24,6 +24,21 @@
       "Bash(rm -rf:*)",
       "Bash(git clean -f:*)"
     ],
-    "defaultMode": "auto"
+    "defaultMode": "auto",
+    "allow": [
+      "Bash(git:*)",
+      "Bash(gh:*)",
+      "Bash(npm run check)",
+      "Bash(npm test)",
+      "Bash(npm run lint)",
+      "Bash(npm run typecheck)",
+      "Bash(npm run build)",
+      "Bash(npm run format)",
+      "Bash(npm run format:check)"
+    ]
+  },
+  "outputStyle": "outputty",
+  "worktree": {
+    "baseRef": "head"
   }
 }
