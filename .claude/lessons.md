@@ -6,12 +6,14 @@
 
 ## Communication that broke down
 
-- [2026-08-26 · PLANNING](lessons/2026-08-26-deriving-a-project-id-from-a-provider-makes-that-provider-the-authority.md) - a design derived a system-wide key from one layer's data, silently promoting that layer to authority over every project. ×1
+- [2026-08-26 · PLANNING](lessons/2026-08-26-deriving-a-project-id-from-a-provider-makes-that-provider-the-authority.md) - a component derived an identity it could have been told, and a second reader derived it differently. ×2
 
 ## An assumption that broke
 
 - [2026-08-26 · PLANNING](lessons/2026-08-26-a-deleted-mechanism-outlived-its-deletion-in-the-docs.md) - a commit deleted a subsystem and left product memory describing it as live; counted claims read as verified and age silently. ×1
 - [2026-08-26 · PLANNING](lessons/2026-08-26-a-package-cannot-npx-itself.md) - the repository publishing a tool could not launch it, because npx resolves a package name against the local checkout first. ×1
+- [2026-08-26 · PLANNING](lessons/2026-08-26-a-build-verified-against-the-production-tracker.md) - a build proved a live cross-process feature against the real tracker and left two fixture tasks in the ready queue. ×1
+- [2026-08-26 · PLANNING](lessons/2026-08-26-reading-state-through-a-stale-build-artifact.md) - state was read through an un-rebuilt dist/, so the answers described code the branch no longer had. ×1
 
 ## Legacy archive (pre-index prose)
 
