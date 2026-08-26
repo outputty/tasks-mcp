@@ -6,19 +6,68 @@ What exists and how it works. The forward plan lives in the `tasks` MCP server (
 
 ## What we're building towards
 
-Register the server, then ask the graph its questions — the two planning questions at the task
-altitude, and `roadmap` at the target altitude.
+A project is what you call it, so one tracker holds every project it has been pointed at, an outside
+reader can list them and follow them live, and a project may be backed by more than one tracker.
 
-    // .mcp.json
-    { "mcpServers": { "tasks": { "command": "npx", "args": ["-y", "@outputty/tasks-mcp"] } } }
+    // `project` is an opaque, supplied id — never derived, so no provider owns what a project is called
+    tasks-mcp --project-id outputty/tasks-mcp     // a session; .mcp.json carries this, so worktrees agree
+    tasks-mcp --http --port 3917                  // binds 127.0.0.1; --host is the explicit opt-in
 
-    prereqs  { "project": "/abs/repo", "id": "deploy" }   // what must be done before this task
-    blockers { "project": "/abs/repo" }                   // what holds up the most work
-    roadmap  { "project": "/abs/repo" }                   // where every target stands
+    list_projects {}                              // every project this tracker holds
+    GET /events                                   // SSE — one line each time a project's graph moves
 
-Full `Input:`/`Output:` for each, with real observed values, is in `examples.md` — pinned once there
-and never copied. Every write lands on GitHub too: one issue per task, `field:value` labels, a card on
-the Tasks board, and a task's target as its issue's parent.
+Identity is the change everything rested on, and it has shipped. A project is an opaque, supplied id,
+never derived from a path or a provider. (Before this, a project was its **absolute path**, hashed into
+a slug, so every git worktree of one repository became a separate project holding its own stale copy of
+the graph; deriving the id from the GitHub repo would have fixed that while making GitHub the authority
+over the identity of projects that may not use it.) Nothing derives the id, and a project's stack is now
+free to hold as many remotes as it configures.
+
+Storage follows the id verbatim — `<cacheDir>/<id>.yaml`, nesting where the id contains `/` — so the
+directory is readable, and therefore enumerable. Where a remote lives is per-project *configuration*
+(`repo` for GitHub, defaulting to the launch cwd's `origin`), not a property of the name.
+
+Input: `list_projects`
+
+```json
+{}
+```
+
+Output: (real, observed 2026-08-26)
+
+```json
+{
+  "projects": [
+    {
+      "project": "outputty/tasks-mcp",
+      "tasks": 3,
+      "open": 1,
+      "in_progress": 1,
+      "done": 1,
+      "updated_at": "2026-08-26T19:12:32.494Z"
+    }
+  ]
+}
+```
+
+Output: `GET /events` (real, observed 2026-08-26)
+
+```
+event: changed
+data: {"project":"outputty/tasks-mcp","at":"2026-08-26T19:12:53.638Z"}
+```
+
+The stream names which project moved, never what changed — a reader asks the graph, which is local and
+instant. `/mcp` is untouched: it still answers every non-POST with `405 + Allow`, which is what keeps the
+SDK from holding a GET open as an SSE stream of its own.
+
+The console — `tasks-mcp --tui`, shipped in this package — is then a thin client over what already
+exists. It holds a list of trackers, asks each `list_projects`, and drives the existing tools.
+
+⚠ Three boundaries this does not cross. `append_trail` writes only the remote's comment thread and
+touches no cache file, so a new trail entry raises no event. Nothing authenticates the HTTP transport —
+loopback is the whole defence, which is why exposing it has to be deliberate. And only `github` is
+registered in `REMOTES`: the stack becomes N-layer, but a second real provider is not part of this.
 
 ## The provider stack
 
@@ -36,8 +85,9 @@ flowchart TB
 
 ### provider stack
 
-`TaskStack` orchestrates `Provider[]`, built by `buildStack(remote, options, config)` —
-`[FileProvider, GitHubProvider]` in production, three layers in the stack test suite. Order is
+`TaskStack` orchestrates `Provider[]`, built by `buildStack(remotes, options, config)` —
+`[FileProvider, ...remotes]` for a configured `providers` list (`[FileProvider, GitHubProvider]` by
+default; the singular `provider` is a one-element list), three layers in the stack test suite. Order is
 authority order: every read is answered by the top layer; the deepest layer wins any sync
 disagreement, and the merged truth is pushed back into each layer that lacks a task or
 disagrees.
@@ -61,8 +111,8 @@ only vanishes by hand.
 ### file layer
 
 `FileProvider`, the top of the stack: one YAML file per project under the OS cache dir
-(`XDG_CACHE_HOME` or `~/.cache/tasks-mcp`, overridable with `--cache-dir`), keyed
-`<basename>-<hash>.yaml` — never inside the user's repo. Every read tool (`list_ready`,
+(`XDG_CACHE_HOME` or `~/.cache/tasks-mcp`, overridable with `--cache-dir`), keyed on the project id
+verbatim (`<cacheDir>/<id>.yaml`, nesting on `/`) — never inside the user's repo. Every read tool (`list_ready`,
 `prereqs`, `blockers`, …) is answered here: instant, offline, no network.
 
 The file is disposable by design: `sync` reconstructs the full task, deps included, from the
@@ -574,66 +624,6 @@ carries the `roadmap` standing that ranked it (`target`, `priority`, `blocks`, `
 The `ready-and-planning` example in `examples.md`: this repo's own tracker after bootstrap —
 six ready, two in planning.
 
-## The channel
-
-The server is a **Claude Code channel** as well as a tool provider: it pushes an event into a live
-session so an orchestrator can sit idle instead of polling. One kind of event exists, and it is a
-**doorbell** — it says which way to look, never a figure to act on, because a channel event arrives on
-the reader's next turn and anything numeric in it would be stale by then.
-
-```mermaid
-flowchart LR
-    change["a graph mutation\n(create · close · start · deps)"] --> ring["Doorbell.ring\ncoalesced per tick"]
-    change --> spool["spool file\n&lt;cacheDir&gt;/&lt;repoSlug&gt;/"]
-    spool -->|"fs.watch, no flag"| other["every OTHER process\nEventLog.read (never consumes)"]
-    other --> ring2["their Doorbell"]
-    ring --> note["notifications/claude/channel\n&lt;channel source=tasks&gt;"]
-    ring2 --> note
-```
-
-### doorbell
-
-`McpServer` declares the `claude/channel` capability and the **stdio** transport wires a `Doorbell` to
-`notifications/claude/channel`. The doorbell coalesces every ring in one tick into a single event, and
-a coalesced burst **joins** the notes rather than replacing them with a count — a burst is exactly when
-the reader most needs to know what moved. Rings name the movement (`task <id> closed`,
-`ready now: <ids>`), never a total.
-
-`claude/channel/permission` is deliberately **not** declared. Permission relay forwards tool-approval
-prompts to whoever holds the other end of the channel, and here that is a spool file, not a human.
-
-#### Gotchas
-
-- A prose-only edit stays silent. A retitled task is not news; only a change that can move the ready
-  set rings (`movement()` in `service.ts`).
-- The poll is guarded. A junk field on one task throws out of `eligible`, and the background loop voids
-  that promise — an unhandled rejection there would take the server down over a value someone mistyped
-  in the GitHub UI.
-
-### spool broadcast
-
-A worker session and an orchestrator never share a process, so a ring has two hops: the in-process
-`Doorbell`, and a **spool** file per note that crosses processes. `watchEvents` puts an `fs.watch` on
-the spool the first time a project is named, so delivery needs no configuration; the background sync
-drain stays behind it as a backstop for what `fs.watch` coalesces or misses.
-
-The spool **broadcasts** — `EventLog` reads without consuming and remembers what it has handed over, so
-delivery is once *per process*, and files are swept by age.
-
-#### Gotchas
-
-- The spool keys on `repoSlug` — the primary checkout, resolved through `git rev-parse
-  --git-common-dir` — so a note raised inside a worktree finds the session watching from the checkout
-  it was cut from.
-- Every session's server reads the spool, but only an orchestrator has a channel listener behind its
-  doorbell. Claim-by-rename (exactly-once delivery) therefore loses notes: see `lessons.md`.
-
-### what the channel does not model
-
-**Dispatch.** `list_ready` answers what the *graph* allows. Tasks a worker has marked `in_progress` are
-excluded, so the list is what is genuinely free — but how many may run at once is still the caller's
-call, and the channel has no opinion about it.
-
 ## The surfaces
 
 The three ways in — MCP tools (primary), CLI (human/scripts), library (importable core) — all
@@ -642,8 +632,8 @@ over the same `TaskStack`. What the tools DO belongs to [graph engine](#the-grap
 
 ```mermaid
 flowchart TB
-    agent["MCP client"] -->|"stdio (default) or\nStreamable HTTP :3917/mcp"| mcp["createMcpServer\n16 tools, zod in+out"]
-    human["shell"] --> cli["bin/cli.ts (commander)\nlist·ready·planning·schedule·prereqs·blockers·get·\nadd·edit·close·delete·trail·trail-add·config·sync"]
+    agent["MCP client"] -->|"stdio (default) or\nStreamable HTTP :3917 /mcp · /events"| mcp["createMcpServer\n21 tools, zod in+out"]
+    human["shell"] --> cli["bin/cli.ts (commander)\nlist·ready·roadmap·projects·planning·schedule·prereqs·\nblockers·get·add·edit·close·delete·trail·trail-add·config·sync"]
     code["your program"] --> lib["import '@outputty/tasks-mcp'\nmakeService·TaskStack·graph fns"]
     mcp --> stack["TaskStack"]
     cli --> stack
@@ -653,17 +643,19 @@ flowchart TB
 ### MCP server
 
 The primary surface: `createMcpServer` on the official `@modelcontextprotocol/sdk` — never a
-hand-rolled JSON-RPC handler. 16 tools (`list_ready`, `list_planning`, `schedule`, `get_task`,
-`add_task`, `amend_task`, `edit_task`, `close_task`, `delete_task`, `get_trail`, `append_trail`,
-`sync`, `prereqs`,
-`blockers`, `get_config`, `set_config`), each declaring zod input AND output schemas and
-returning `structuredContent`. Every tool takes `project` — the absolute repo path — because the
-server has no working directory of its own.
+hand-rolled JSON-RPC handler. 21 tools (`list_ready`, `roadmap`, `list_planning`, `schedule`,
+`list_tasks`, `list_projects`, `get_task`, `add_task`, `add_target`, `amend_task`, `edit_task`,
+`start_task`, `close_task`, `delete_task`, `get_trail`, `append_trail`, `sync`, `prereqs`, `blockers`,
+`get_config`, `set_config`), each declaring zod input AND output schemas and
+returning `structuredContent`. Every tool takes `project` — an opaque, supplied id, optional because a
+`--project-id` default fills an omitted one — except `list_projects`, which takes none and answers about
+the server itself.
 
 Transports: `StdioServerTransport` (default) and stateless Streamable HTTP (JSON responses) on
 plain `node:http` — no framework; the server itself answers non-POST `/mcp` with `405 + Allow`
-so the SDK transport can never hold a GET open as SSE. `SERVER_INFO` reads name/version from
-`package.json` at build time.
+so the SDK transport can never hold a GET open as SSE. A third route, `GET /events`, is the one
+held-open connection: an SSE change stream (see the change stream below). `--http` binds `127.0.0.1`
+unless `--host` opts out. `SERVER_INFO` reads name/version from `package.json` at build time.
 
 #### Example
 
@@ -679,11 +671,11 @@ The `mcp-registration` example in `examples.md`.
 ### CLI
 
 `bin/cli.ts` on commander (user ruling: a real CLI library, never homebrew argv parsing). With
-no command it runs the MCP server; subcommands drive the core directly: `list`, `ready`,
-`planning`, `schedule`, `prereqs <id>`, `blockers`, `get <id>`, `add <id>`, `edit <id>`,
-`close <id>`, `delete <id>`, `trail <id>`, `trail-add <id>`, `config`, `sync`. `--project` defaults
-to cwd; the deployment
-flags work on every command.
+no command it runs the MCP server; subcommands drive the core directly: `list`, `ready`, `roadmap`,
+`projects`, `planning`, `schedule`, `prereqs <id>`, `blockers`, `get <id>`, `add <id>`, `edit <id>`,
+`close <id>`, `delete <id>`, `trail <id>`, `trail-add <id>`, `config`, `sync`, `identify`. `projects`
+takes no `--project` (it asks about the server); `--project` otherwise defaults to cwd, and the
+deployment flags work on every command.
 
 #### Example
 
@@ -699,10 +691,11 @@ The `ready-and-planning` example in `examples.md`.
 ### library
 
 The core is importable; the MCP layer is a wrapper, never a requirement. `.` exports
-`makeService`/`TaskStack`, `FileProvider`/`GitHubProvider`/`buildStack`, the pure graph
+`makeService`/`TaskStack`, `FileProvider`/`GitHubProvider`/`buildStack`/`resolveRemotes`, the pure graph
 functions (`ready`, `planning`, `schedule`, `prereqs`, `blockers`, `priorityOf`),
-`ConfigProvider`/`ProjectConfigSchema`/`projectSlug`, `DuplicateTaskError`, and the types.
-`./mcp` exports `createMcpServer`/`createHttpServer`/`runStdio`.
+`ConfigProvider`/`ProjectConfigSchema`/`validateProjectId`, `DuplicateTaskError`,
+`ChangeBus`/`readProjectSummaries`, and the types.
+`./mcp` exports `createMcpServer`/`createHttpServer`/`startHttpServer`/`runStdio`.
 
 #### Example
 
@@ -712,6 +705,8 @@ The `library-blockers` example in `examples.md` — real observed output: `schem
 
 - v0.7.0 broke this surface once: `CachedTaskService` → `TaskStack`, `stackFor` → `buildStack`
   (v0.8.0), `Cache`/`Refs`/`CacheEntry`/`providerFor` gone.
+- The identity change broke it again: `projectSlug`/`repoRoot`/`repoSlug` are gone (a project id is
+  supplied and used verbatim, so nothing hashes a path), replaced by `validateProjectId`.
 
 ### branch parameter unused
 
@@ -905,21 +900,27 @@ release; never create a release unprompted. On a yes: bump version, commit, push
 | prereqs | feature | "I want to start on X — what has to be done first?", answered as dependency-ordered layers. |
 | blockers | feature | "What holds up the most work?", ranked by transitive downstream impact. |
 | ready / planning / schedule | feature | The working set: what can be built now, what planning still owns, and the whole plan in layers. |
-| MCP server | feature | The primary surface: 16 typed tools on the official SDK, over stdio (default) or stateless HTTP. Task CRUD is add/get/edit/amend/close/delete; plus the graph queries, trails, sync, and config. |
+| MCP server | feature | The primary surface: 21 typed tools on the official SDK, over stdio (default) or stateless HTTP. Task CRUD is add/get/edit/amend/close/delete; plus the graph queries, trails, sync, and config. |
 | CLI | feature | The same tracker as shell commands for humans and scripts; no MCP involved. |
 | library | feature | The core is importable; the MCP layer is a wrapper, never a requirement. |
+| list_projects | feature | The one read that takes no `project`: it walks the cache directory and reports every project with its task counts by status (targets included) and the cache mtime. Local only — no provider, no network. `tasks-mcp projects` on the CLI. |
+| change stream | feature | `GET /events` is an SSE stream (`src/mcp/events.ts`) that emits `event: changed` naming which project moved, fed by the server's own writes (a `ChangeBus`) and a cache-dir watcher for other processes. The watcher re-scans and diffs mtimes on any event — never trusting the `fs.watch` filename. |
+| loopback bind default | feature | `--http` binds `127.0.0.1`; `--host 0.0.0.0` is the explicit opt-in that exposes the full tool surface. The startup log prints the address actually bound. A BREAKING change from the earlier bind-every-interface behaviour. |
+| own writes stream twice | limitation | With an `/events` client attached, a write this server makes emits once directly (the ChangeBus) and again when its cache-dir watcher re-scans the just-written file. Harmless — the event is a re-read hint and the reader is idempotent — but a consumer that counts events must expect duplicates. |
+| a foreign delete raises no change | limitation | The watcher's mtime diff only iterates files that still exist, so another process DELETING a project's cache file emits no `/events` change (this server's own `delete` does emit). Acceptable: deletions are a hand operation and never propagate. |
 | branch parameter unused | limitation | Every tool accepts branch; nothing reads it — declared at the initial import, never implemented. |
 | trail store | feature | A task's trail IS its GitHub issue comment thread — every comment an entry, people's comments included. append_trail posts a comment; get_trail reads the whole thread. There is no separate trail store: the provider that owns the issue owns its comments. |
 | central config | feature | Preferences are configured through the server and stored beside the caches — never by files inside the user's repo. |
+| project identity | feature | A project is an opaque, supplied id — `--project-id` sets a server default, a tool call may override it — never derived from a path or a provider. Used verbatim as the cache filename (nesting on `/`), so worktrees sharing one checked-in id share one cache and one claim ledger. |
+| id containment | limitation | The supplied id becomes a cache path segment, so `cachePath` (`src/core/providers/config.ts`) refuses any id that would escape the cache dir. Probe: `node dist/cli.js identify --project ../../etc/passwd` must print `Error: invalid project id … an id may not contain path traversal`. |
+| coordinates are config | feature | GitHub `owner/repo` is the project's `repo` setting, else the launch cwd's `origin` — never the id. A server outside any repo with no `repo` errors naming `repo`. Probe: `cd /tmp && node dist/cli.js sync --project x` prints `Error: no GitHub repo for this project — set \`repo\` …`. |
+| multi-remote stack | feature | A project configures a `providers` list (deepest last); `buildStack` returns `[FileProvider, ...remotes]` for any length; the singular `provider` is the one-element form. Only `github` is registered, so a list can only repeat it; the N-layer semantics are proven with `MockProvider`. |
 | deployment flags | knob | How the server is deployed, as CLI flags in the .mcp.json args — distinct from user preferences. |
 | oxc toolchain with working-set caps | pattern | One toolchain end to end, with complexity budgets the build enforces. |
 | e2e tests nock at the wire | pattern | Tests drive the real stack — provider, service, protocol, transport — and fake only the wire. |
 | runtime portability | limitation | The package runs on Node >= 18 and bun, but developing needs Node >= 22 and tests must run on Node. |
 | delete semantics | feature | An explicit deepest-first removal, distinct from sync's absence rule; refused for a target that still holds tasks. |
 | publish pipeline | feature | Pushing code never publishes; publishing a GitHub Release does — tokenless, with provenance. |
-| channel | feature | The server pushes a doorbell event into a live session, so an orchestrator waits instead of polling. |
-| doorbell | pattern | One event kind, coalesced per tick, naming what moved — never a count to act on. |
-| spool broadcast | pattern | Cross-process delivery once PER PROCESS: EventLog reads without consuming, files swept by age. |
 | in_progress | feature | A third status a worker sets on pickup, so a task being built leaves list_ready. |
 | target | feature | A roadmap item as a graph node: groups tasks, never dispatched, progress derived from them. A name and a why, both required; no build fields; one altitude. |
 | roadmap-aware ranking | feature | list_ready ranks by the task AND the roadmap row it serves; a target waiting on an unshipped target sorts its work below every clear row. |

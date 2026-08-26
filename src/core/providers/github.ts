@@ -6,9 +6,9 @@
 //
 // Lifecycle: construct (optionally passing your own Octokit — the one test seam; nock intercepts its
 // HTTP so the real request path is always exercised), then `await init(ctx)`. There are no async
-// constructors, so init is where everything remote is resolved ONCE per project: the repo behind the
-// project's `origin`, its config, the repository node id, and the Projects v2 board — found by
-// number/title, or created and linked to the repo.
+// constructors, so init is where everything remote is resolved ONCE per project: the repo (its
+// configured `repo`, else the launch cwd's `origin` — never the opaque project id), its config, the
+// repository node id, and the Projects v2 board — found by number/title, or created and linked to it.
 //
 // The layer owns its own bookkeeping: a per-project index from task id to issue/card node ids, built
 // from one listing pass and refreshed by every `pull`. Nothing above the seam sees a GitHub handle —
@@ -79,12 +79,33 @@ function defaultOctokit(): Octokit {
   return client;
 }
 
-/** Read `<project>`'s `origin` remote and parse the owner/repo it points at on github.com. */
-function resolveRepo(project: string): RepoRef {
-  const url = run("git", ["-C", project, "remote", "get-url", "origin"]);
+/**
+ * The GitHub coordinates for a project: its configured `repo` (owner/repo), else the `origin` of the
+ * server's launch working directory. A project id is opaque and never a path, so nothing is resolved
+ * from it — a server started outside any git repo with no `repo` set is told to configure `repo`,
+ * not handed a git error.
+ */
+function resolveRepo(config: ProjectConfig, launchCwd: string): RepoRef {
+  if (config.repo) return parseRepoRef(config.repo);
+  const url = run("git", ["-C", launchCwd, "remote", "get-url", "origin"]);
   if (url === null) {
-    throw new Error(`no git 'origin' remote in ${project} — the GitHub provider needs one`);
+    throw new Error(
+      "no GitHub repo for this project — set `repo` (owner/repo) in its config, or launch the " +
+        "server from the repository so `origin` can supply it",
+    );
   }
+  return parseGitHubUrl(url);
+}
+
+/** owner/repo from a configured string, `.git` suffix tolerated. */
+function parseRepoRef(repo: string): RepoRef {
+  const m = repo.match(/^([^/]+)\/([^/]+?)(?:\.git)?$/);
+  if (!m) throw new Error(`invalid repo '${repo}' — expected owner/repo`);
+  return { owner: m[1], repo: m[2] };
+}
+
+/** owner/repo from a github.com remote url (ssh or https). */
+function parseGitHubUrl(url: string): RepoRef {
   const m = url.match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/);
   if (!m) throw new Error(`origin is not a github.com remote: ${url}`);
   return { owner: m[1], repo: m[2] };
@@ -642,6 +663,9 @@ export class GitHubProvider implements Provider {
   constructor(
     private readonly config: ConfigProvider,
     octokit?: Octokit,
+    // The directory whose `origin` supplies coordinates when a project sets no `repo`. Captured at
+    // construction (the process's launch cwd) rather than read per call, so it is stable and testable.
+    private readonly launchCwd: string = process.cwd(),
   ) {
     this.octokit = octokit ?? defaultOctokit();
   }
@@ -919,7 +943,7 @@ export class GitHubProvider implements Provider {
     const key = `${project}\u0000${JSON.stringify(config)}`;
     let state = this.states.get(key);
     if (!state) {
-      state = this.buildState(project, config).catch((err) => {
+      state = this.buildState(config).catch((err) => {
         this.states.delete(key); // a failed init retries next call instead of caching the error
         throw err;
       });
@@ -928,8 +952,8 @@ export class GitHubProvider implements Provider {
     return state;
   }
 
-  private async buildState(project: string, config: ProjectConfig): Promise<ProjectState> {
-    const repo = resolveRepo(project);
+  private async buildState(config: ProjectConfig): Promise<ProjectState> {
+    const repo = resolveRepo(config, this.launchCwd);
     const snapshot = await this.repoSnapshot(repo);
     return {
       repo,

@@ -15,39 +15,64 @@ JSON, indented two spaces, to stdout.
 
 These are declared on the program, so they may appear before or after a subcommand name.
 
-| Option                   | Argument | Default           | Meaning                                                 |
-| ------------------------ | -------- | ----------------- | ------------------------------------------------------- |
-| `-V`, `--version`        | —        | —                 | Print the package version and exit.                     |
-| `-h`, `--help`           | —        | —                 | Print help for the program or a subcommand and exit.    |
-| `--http`                 | —        | stdio             | Run the standalone HTTP server instead of stdio.        |
-| `--port <n>`             | integer  | `3917`            | HTTP port. Only meaningful with `--http`.               |
-| `--provider <name>`      | string   | `github`          | The remote layer backing each project.                  |
-| `--project-number <n>`   | integer  | find or create    | Target an existing Projects v2 board by number.         |
-| `--no-projects`          | —        | board on          | Disable the Projects v2 board sync.                     |
-| `--board <title>`        | string   | `Tasks`           | Board title to find or create.                          |
-| `--cache-dir <dir>`      | path     | OS cache dir      | Where the file layer and the config files live.         |
-| `--sync-interval <secs>` | integer  | `0` (off)         | Background reconcile cadence while the MCP server runs. |
-| `--project <path>`       | path     | current directory | The repo a subcommand acts on.                          |
+| Option                   | Argument | Default                  | Meaning                                                                                                 |
+| ------------------------ | -------- | ------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `-V`, `--version`        | —        | —                        | Print the package version and exit.                                                                     |
+| `-h`, `--help`           | —        | —                        | Print help for the program or a subcommand and exit.                                                    |
+| `--http`                 | —        | stdio                    | Run the standalone HTTP server instead of stdio.                                                        |
+| `--port <n>`             | integer  | `3917`                   | HTTP port. Only meaningful with `--http`.                                                               |
+| `--host <ip>`            | string   | `127.0.0.1`              | HTTP bind address. `--host 0.0.0.0` exposes the server to every interface, deliberately. `--http` only. |
+| `--provider <name>`      | string   | `github`                 | The remote layer backing each project.                                                                  |
+| `--project-number <n>`   | integer  | find or create           | Target an existing Projects v2 board by number.                                                         |
+| `--no-projects`          | —        | board on                 | Disable the Projects v2 board sync.                                                                     |
+| `--board <title>`        | string   | `Tasks`                  | Board title to find or create.                                                                          |
+| `--cache-dir <dir>`      | path     | OS cache dir             | Where the file layer and the config files live.                                                         |
+| `--sync-interval <secs>` | integer  | `0` (off)                | Background reconcile cadence while the MCP server runs.                                                 |
+| `--project-id <id>`      | string   | —                        | The default [project id](#the-project-id) for the server and subcommands.                               |
+| `--project <id>`         | string   | `--project-id`, then cwd | The project id a subcommand acts on (overrides `--project-id`).                                         |
 
 `--provider`, `--project-number`, `--no-projects`, and `--board` are the CLI-flag layer of the
 [configuration](reference-configuration.md); `--cache-dir` and `--sync-interval` are deployment knobs
 and never reach the config surface. `github` is the only registered remote; any other value throws
 `unknown provider '<name>' (known: github)`.
 
+### The project id
+
+A **project** is identified by an opaque, supplied string — never derived from a path or a provider. As
+the MCP server, `--project-id` sets the default a tool call uses when it omits `project`; a call may
+override it. As a subcommand, `--project` names the id (falling back to `--project-id`, then the current
+directory used verbatim). The id is validated for path traversal and used verbatim as a cache filename,
+but is never resolved against git or the filesystem:
+
+```console
+$ tasks-mcp identify --project outputty/tasks-mcp
+{
+  "id": "outputty/tasks-mcp"
+}
+
+$ tasks-mcp identify --project ../../etc/passwd
+Error: invalid project id '../../etc/passwd' — an id may not contain path traversal
+```
+
+A repo's checked-in `.mcp.json` carries `--project-id`, so every git worktree cut from it shares one id
+and therefore one task cache — see [how to register the server](how-to-register-the-server-with-an-mcp-client.md).
+
 ## Reading the graph
 
-| Command        | Argument | Prints                                                        |
-| -------------- | -------- | ------------------------------------------------------------- |
-| `list`         | —        | Every record, full, straight from the top layer.              |
-| `ready`        | —        | The ids ready to build right now, best first.                 |
-| `roadmap`      | —        | Every target: `id`, `summary`, `status`, `progress`, `ready`. |
-| `planning`     | —        | The ids the planning stage owns, resubmitted ones first.      |
-| `schedule`     | —        | The whole open plan as an array of layers of ids.             |
-| `prereqs <id>` | task id  | The open prerequisites as an array of layers of ids.          |
-| `blockers`     | —        | Each blocker: `id`, `blocks`, `blocked`, `priority`.          |
-| `get <id>`     | task id  | One record, or `null`.                                        |
-| `trail <id>`   | task id  | The task's issue comment thread, oldest first.                |
-| `config`       | —        | `flags`, `global`, `repo`, `effective`.                       |
+| Command        | Argument | Prints                                                                                             |
+| -------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| `list`         | —        | Every record, full, straight from the top layer.                                                   |
+| `ready`        | —        | The ids ready to build right now, best first.                                                      |
+| `roadmap`      | —        | Every target: `id`, `summary`, `status`, `progress`, `ready`.                                      |
+| `projects`     | —        | Every project the cache holds, with task counts. Takes no `--project` — it asks about the server.  |
+| `planning`     | —        | The ids the planning stage owns, resubmitted ones first.                                           |
+| `schedule`     | —        | The whole open plan as an array of layers of ids.                                                  |
+| `prereqs <id>` | task id  | The open prerequisites as an array of layers of ids.                                               |
+| `blockers`     | —        | Each blocker: `id`, `blocks`, `blocked`, `priority`.                                               |
+| `get <id>`     | task id  | One record, or `null`.                                                                             |
+| `trail <id>`   | task id  | The task's issue comment thread, oldest first.                                                     |
+| `config`       | —        | `flags`, `global`, `repo`, `effective`.                                                            |
+| `identify`     | —        | The [project id](#the-project-id) a call would use: `{ "id": ... }`. Touches no git or filesystem. |
 
 The CLI's `roadmap` and `blockers` print a narrower row than the MCP tools of the same name; see the
 [MCP tool reference](reference-mcp-tools.md) for the full shapes. The CLI has no `--target` option on
@@ -89,6 +114,29 @@ $ tasks-mcp prereqs export-endpoint
   ]
 ]
 ```
+
+`projects` is the one read that takes no `--project`: it walks the cache directory and reports every
+project it holds, each with its task counts by status and the cache file's mtime. `updated_at` is when
+the cache last changed, so a project edited only on GitHub shows an older stamp until the next sync.
+
+```console
+$ tasks-mcp projects
+{
+  "projects": [
+    {
+      "project": "outputty/tasks-mcp",
+      "tasks": 3,
+      "open": 1,
+      "in_progress": 1,
+      "done": 1,
+      "updated_at": "2026-08-26T19:12:32.494Z"
+    }
+  ]
+}
+```
+
+`tasks` counts every record the project holds, targets included, so it equals `open + in_progress +
+done`.
 
 ## `add <id>`
 
@@ -215,7 +263,7 @@ A failing command throws; Node prints the stack trace to stderr and exits non-ze
 first line, for example:
 
 ```text
-Error: no git 'origin' remote in /tmp/scratch — the GitHub provider needs one
+Error: no GitHub repo for this project — set `repo` (owner/repo) in its config, or launch the server from the repository so `origin` can supply it
 ```
 
 Warnings that do not fail a command — a Projects board that could not be reached, a duplicate task id,

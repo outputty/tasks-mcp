@@ -3,5 +3,5 @@
 // node:http). It depends on the core, never the other way round.
 
 export { createMcpServer, SERVER_INFO } from "./server.ts";
-export { createHttpServer } from "./http.ts";
+export { createHttpServer, startHttpServer } from "./http.ts";
 export { runStdio } from "./stdio.ts";

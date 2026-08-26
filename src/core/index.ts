@@ -8,6 +8,8 @@ export {
   type TaskService,
   type SyncResult,
 } from "./service.ts";
+export { ChangeBus } from "./changes.ts";
+export { readProjectSummaries, type ProjectSummary } from "./projects.ts";
 export {
   ClaimStore,
   DEFAULT_STALE_MINUTES,
@@ -19,9 +21,7 @@ export {
   ConfigProvider,
   ProjectConfigSchema,
   defaultCacheDir,
-  projectSlug,
-  repoRoot,
-  repoSlug,
+  validateProjectId,
   type ConfigSources,
 } from "./providers/config.ts";
 export {
@@ -64,6 +64,11 @@ export type {
   TrailEntry,
   TrailKind,
 } from "./types.ts";
-export { buildStack, type Provider, type ProviderState } from "./providers/provider.ts";
+export {
+  buildStack,
+  resolveRemotes,
+  type Provider,
+  type ProviderState,
+} from "./providers/provider.ts";
 export { FileProvider } from "./providers/file.ts";
 export { GitHubProvider } from "./providers/github.ts";

@@ -2,14 +2,15 @@
 // The package entry, on commander. With no subcommand it runs the MCP server — stdio by default (for
 // `.mcp.json` -> `bunx @outputty/tasks-mcp`), or `--http` for the standalone HTTP server. The
 // subcommands drive the same core directly, no MCP involved: `add`, `add-target`, `edit`, `delete`,
-// `list`, `ready`, `roadmap`, `planning`, `schedule`, `prereqs`, `blockers`, `get`, `start`, `close`,
-// `trail`, `trail-add`, `sync`.
+// `list`, `ready`, `roadmap`, `projects`, `planning`, `schedule`, `prereqs`, `blockers`, `get`,
+// `start`, `close`, `trail`, `trail-add`, `sync`, `identify`.
 
 import { Command } from "commander";
 import { runStdio } from "../src/mcp/stdio.ts";
-import { createHttpServer } from "../src/mcp/http.ts";
+import { startHttpServer } from "../src/mcp/http.ts";
 import { SERVER_INFO } from "../src/mcp/server.ts";
 import { makeService, startBackgroundSync } from "../src/core/service.ts";
+import { validateProjectId } from "../src/core/providers/config.ts";
 import type { ServerOptions } from "../src/core/types.ts";
 import type { ProjectContext, TrailEntry, TrailKind } from "../src/core/types.ts";
 import {
@@ -31,6 +32,11 @@ const program = new Command()
   .version(SERVER_INFO.version)
   .option("--http", "run the standalone HTTP server instead of stdio")
   .option("--port <n>", "HTTP port (--http mode)", (v) => Number.parseInt(v, 10), 3917)
+  .option(
+    "--host <ip>",
+    "HTTP bind address (--http mode); default 127.0.0.1 (loopback only). `--host 0.0.0.0` exposes the " +
+      "server — and its full tool surface — to every interface, deliberately",
+  )
   .option("--provider <name>", "the remote layer backing each project (default github)")
   .option("--project-number <n>", "target an existing Projects v2 board", (v) =>
     Number.parseInt(v, 10),
@@ -44,7 +50,11 @@ const program = new Command()
     (v) => Number.parseInt(v, 10),
     0,
   )
-  .option("--project <path>", "target repo for subcommands (default: cwd)");
+  .option(
+    "--project-id <id>",
+    "default project id for the MCP server and subcommands — an opaque, supplied string",
+  )
+  .option("--project <id>", "project id for subcommands (overrides --project-id)");
 
 /** The CLI-set knobs, in ServerOptions shape. `projects` is only carried when actually turned off. */
 function serverOptions(): ServerOptions {
@@ -59,7 +69,11 @@ function serverOptions(): ServerOptions {
   };
 }
 
-const ctx = (): ProjectContext => ({ project: program.opts().project || process.cwd() });
+// The project id a subcommand acts on: an explicit --project, else --project-id, else the cwd (a valid
+// opaque id for direct CLI use). Validated, never resolved against git or the filesystem.
+const projectId = (): string =>
+  validateProjectId(program.opts().project ?? program.opts().projectId ?? process.cwd());
+const ctx = (): ProjectContext => ({ project: projectId() });
 const service = () => makeService(serverOptions());
 const out = (value: unknown) => console.log(JSON.stringify(value, null, 2));
 
@@ -87,6 +101,13 @@ program
       })),
     ),
   );
+
+program
+  .command("projects")
+  .description(
+    "every project the cache holds, with task counts — the one read that takes no --project",
+  )
+  .action(async () => out({ projects: await service().listProjects() }));
 
 program
   .command("planning")
@@ -251,17 +272,35 @@ program
   .description("reconcile every layer of the stack, both ways")
   .action(async () => out(await service().sync(ctx())));
 
+program
+  .command("identify")
+  .description(
+    "echo the project id a call would use — opaque, validated, never resolved against git or the fs",
+  )
+  .action(() => out({ id: projectId() }));
+
 // No subcommand: run the MCP server on the chosen transport. One service instance backs both the
 // transport and the background loop, so the loop reconciles exactly the projects the server serves.
+// The --project-id (or --project) becomes the server's default project, filling a tool call that omits
+// one — validated up front so a bad default fails at launch, not on the first call.
 program.action(async () => {
   const opts = program.opts();
   const svc = makeService(serverOptions());
+  const rawDefault = opts.project ?? opts.projectId;
+  const defaultProject = rawDefault === undefined ? undefined : validateProjectId(rawDefault);
   if (opts.syncInterval > 0) startBackgroundSync(svc, opts.syncInterval);
-  if (!opts.http) return runStdio(svc);
-  console.error(
-    `tasks-mcp (http) listening on http://localhost:${opts.port}/mcp  (health: /health)`,
-  );
-  createHttpServer(svc).listen(opts.port);
+  if (!opts.http) return runStdio(svc, defaultProject);
+  // Bind loopback unless --host says otherwise, and log the address ACTUALLY bound — never a
+  // hardcoded `localhost` while the socket is on every interface.
+  startHttpServer(svc, {
+    port: opts.port,
+    host: opts.host,
+    defaultProject,
+    onListening: (addr) =>
+      console.error(
+        `tasks-mcp (http) listening on http://${addr.address}:${addr.port}/mcp  (events: /events, health: /health)`,
+      ),
+  });
 });
 
 await program.parseAsync(process.argv);

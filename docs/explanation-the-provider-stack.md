@@ -99,16 +99,19 @@ whole point of mirroring onto a board: it is a surface people can act on.
 
 ## What N layers are actually for
 
-The machinery is not special-cased for two. The stack tests run three layers deep with a controllable
-mock at the bottom, and adding a fourth is one entry in a registry plus a class.
+The machinery is not special-cased for two. A project configures a `providers` **list** (deepest last);
+`buildStack` returns `[file, ...remotes]` for any length, and the stack rules apply across all of them.
+The singular `provider` setting is the one-element form, so a config written before the list still
+works. The stack tests run three layers deep with a controllable mock at the bottom, and adding a real
+one is a single entry in the `REMOTES` registry plus its class.
 
 The intended uses are a second remote (Linear is the stub the registry is shaped around) and an
-archive or audit layer that only ever receives. In both cases the migration is free: add the layer,
-run `sync`, and absence-is-not-a-claim backfills it with everything.
+archive or audit layer that only ever receives. In both cases the migration is free: add the layer to
+`providers`, run `sync`, and absence-is-not-a-claim backfills it with everything.
 
-The honest caveat is that only one remote is registered today. `--provider` accepts `github` and
-throws on anything else, including `file` — so there is no supported way to run the CLI or the server
-without GitHub. Injecting your own stack in code is the escape hatch; see
+The honest caveat is that only `github` is registered today, so a list can only repeat it. An unknown
+name throws `unknown provider '<name>' (known: github)`, naming the bad entry. Injecting your own stack
+in code is the escape hatch for a second real layer; see
 [how to use tasks-mcp as a library](how-to-use-tasks-mcp-as-a-library.md).
 
 ## Related

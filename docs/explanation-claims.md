@@ -80,18 +80,19 @@ live work every time anything edited the task.
 
 ## Why the ledger is a local file
 
-Claims live in `<cacheDir>/claims/<repoSlug>.json`, not on the task record.
+Claims live in `<cacheDir>/claims/<id>.json`, not on the task record.
 
 A field on the record would mean a heartbeat per layer rewrites the GitHub issue body on every beat.
 That is a lot of API traffic, a lot of noise on the issue, and a lot of sync churn, all to record
 something that is not project truth: the liveness of a local process is a fact about this machine, not
 about the work.
 
-The ledger is keyed on the **repository**, resolved through `git rev-parse --git-common-dir`, rather
-than on the checkout path. A build agent frequently claims from inside a git worktree while the
-dispatcher sweeps from the primary checkout; keying on the path would give them two different files
-and the dispatcher would see no claims at all. Task caches stay per-path, because two checkouts
-legitimately hold different graphs; only the claim ledger is shared.
+The ledger is keyed on the **project id**, like every other store. A build agent frequently claims from
+inside a git worktree while the dispatcher sweeps from the primary checkout; they resolve to one ledger
+because they share one supplied id — the `--project-id` in the repo's checked-in `.mcp.json` — not
+because of any git resolution of a worktree back to its primary checkout. (Earlier the ledger was keyed
+on the repository via `git rev-parse --git-common-dir` while task caches were keyed per path, so a
+worktree shared a ledger but not a cache; the supplied id collapses both onto one key.)
 
 An unreadable or half-written ledger reads as empty. Losing it costs the staleness signal, and it must
 never take down the tool call that touched it. Note the asymmetry that follows: deleting the ledger

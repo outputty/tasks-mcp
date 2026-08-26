@@ -8,8 +8,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import { parse, stringify } from "yaml";
 import { z } from "zod";
 import type { ProjectConfig, ServerOptions } from "../types.ts";
@@ -18,7 +16,20 @@ import { LABEL_FIELD_NAMES } from "../types.ts";
 /** The config schema — the ONE definition of what may be configured; the MCP tools reuse its shape. */
 export const ProjectConfigSchema = z
   .object({
-    provider: z.string().min(1).optional().describe("The remote layer backing the project."),
+    provider: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("The remote layer backing the project (singular)."),
+    providers: z
+      .array(z.string().min(1))
+      .optional()
+      .describe("Remote layers backing the project, deepest last (default [provider ?? github])."),
+    repo: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("GitHub coordinates owner/repo; defaults to the launch cwd's origin."),
     projects: z.boolean().optional().describe("Projects v2 board sync on/off (default on)."),
     projectNumber: z.number().int().positive().optional().describe("Target an existing board."),
     board: z.string().min(1).optional().describe("Board title to find or create (default Tasks)."),
@@ -53,37 +64,38 @@ export function defaultCacheDir(): string {
   return path.join(base, "tasks-mcp");
 }
 
-/** A project's stable file slug: `<basename>-<hash>`, keyed by the project's absolute path. */
-export function projectSlug(project: string): string {
-  const base = path.basename(project) || "repo";
-  const hash = createHash("sha256").update(project).digest("hex").slice(0, 8);
-  return `${base}-${hash}`;
+/**
+ * A supplied project id, checked. It is opaque — never resolved against a provider or the filesystem —
+ * but it becomes a path segment under the cache dir, so a `..` component would let it escape; that is
+ * refused. Everything else (an `owner/repo` id, or even an absolute path from a pre-id caller) is a
+ * valid id and nests harmlessly. Returns the id unchanged so a faithful echo round-trips.
+ *
+ * `validateProjectId("../../etc/passwd")` → throws; `validateProjectId("outputty/tasks-mcp")` → same.
+ */
+export function validateProjectId(id: string): string {
+  if (!id.trim()) throw new Error("a project id may not be empty");
+  if (id.split(/[/\\]/).includes("..")) {
+    throw new Error(`invalid project id '${id}' — an id may not contain path traversal`);
+  }
+  return id;
 }
 
 /**
- * The REPO a project belongs to: the primary checkout, shared by every git worktree cut from it.
- * `--git-common-dir` resolves to the primary `.git` from inside a worktree, so a worktree and the
- * checkout it came from answer the same path. Falls back to the project itself outside a repo.
+ * The cache file for a project: `<root>/<id><suffix>`, the id used VERBATIM so the directory is
+ * human-readable and (in the next target) enumerable — an id with `/` nests into folders. Refuses an
+ * id that would escape `root`: an absolute pre-id path nests harmlessly, but a `..` or rooted escape
+ * is rejected. This is the one place a supplied id becomes a filesystem path, so it is the guard.
+ *
+ * `cachePath("/cache", "acme/widgets", ".yaml")` → `/cache/acme/widgets.yaml`.
  */
-export function repoRoot(project: string): string {
-  const proc = spawnSync(
-    "git",
-    ["-C", project, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-    { encoding: "utf8" },
-  );
-  if (proc.status !== 0) return project;
-  const common = proc.stdout.trim();
-  if (!common) return project;
-  return path.basename(common) === ".git" ? path.dirname(common) : common;
-}
-
-/**
- * The slug the CROSS-SESSION event spool keys on. Worktrees must share it: a worker session raises a
- * note from its worktree while the orchestrator watches from the primary checkout, and the note has to
- * find it. Task caches stay per-path on `projectSlug`; only the spool is shared.
- */
-export function repoSlug(project: string): string {
-  return projectSlug(repoRoot(project));
+export function cachePath(root: string, id: string, suffix: string): string {
+  const file = path.join(root, `${id}${suffix}`);
+  const base = path.resolve(root);
+  const resolved = path.resolve(file);
+  if (resolved !== base && !resolved.startsWith(base + path.sep)) {
+    throw new Error(`invalid project id '${id}' — it would escape the cache directory`);
+  }
+  return file;
 }
 
 export class ConfigProvider {
@@ -98,9 +110,9 @@ export class ConfigProvider {
     return path.join(this.dir(), "config.yaml");
   }
 
-  /** One repo's override, beside its task cache. */
+  /** One project's config override, beside its task cache: `<cacheDir>/<id>.config.yaml`. */
   private repoFile(project: string): string {
-    return path.join(this.dir(), `${projectSlug(project)}.config.yaml`);
+    return cachePath(this.dir(), project, ".config.yaml");
   }
 
   /** The effective config for a project: defaults < CLI flags < global spec < per-repo override. */

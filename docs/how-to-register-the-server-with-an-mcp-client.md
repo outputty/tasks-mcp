@@ -5,18 +5,24 @@ tasks-mcp: the client launches the package on demand and talks to it on stdin an
 
 ## Register it
 
-Put a `.mcp.json` at the root of the repository the agent works in:
+Put a `.mcp.json` at the root of the repository the agent works in, and give it a `--project-id` — an
+opaque string that names this project's graph:
 
 ```json
 {
   "mcpServers": {
     "tasks": {
       "command": "npx",
-      "args": ["-y", "@outputty/tasks-mcp"]
+      "args": ["-y", "@outputty/tasks-mcp", "--project-id", "outputty/tasks-mcp"]
     }
   }
 }
 ```
+
+`--project-id` is the default a tool call uses when it omits `project`, so the agent need not repeat it.
+Because the file is checked in, every git worktree cut from the repo inherits the same id and therefore
+one shared task cache — see [the project id](reference-cli.md#the-project-id). Use any stable string;
+`owner/repo` is a convenient convention, not a requirement.
 
 Nothing is cloned or installed ahead of time — `npx -y` fetches the package the first time the client
 launches it. Use `bunx` in place of `npx` if you prefer bun; the package runs on Node 18 or newer.
@@ -33,7 +39,14 @@ dragged, an issue closed — when something calls `sync`. Give it a cadence in s
   "mcpServers": {
     "tasks": {
       "command": "npx",
-      "args": ["-y", "@outputty/tasks-mcp", "--sync-interval", "60"]
+      "args": [
+        "-y",
+        "@outputty/tasks-mcp",
+        "--project-id",
+        "outputty/tasks-mcp",
+        "--sync-interval",
+        "60"
+      ]
     }
   }
 }
@@ -90,17 +103,21 @@ environment, not the server.
 Logs go to stderr, never stdout — stdout carries the protocol. Anything the server has to warn about
 is prefixed `tasks-mcp:` and will show up in your client's MCP log.
 
-## Tell the agent which repository it is working on
+## Which project a call is about
 
-The server has no working directory of its own. Every tool takes `project`, the **absolute** path to a
-repository root, and that repository must have a github.com `origin` remote. A relative path, or a
-directory that is not a git repository, fails with:
+The server has no working directory of its own. Every tool takes `project` — the opaque
+[project id](reference-cli.md#the-project-id), not a path — and falls back to the server's
+`--project-id` when a call omits it. One server instance handles any number of projects; the id in each
+call (or the default) decides which.
+
+GitHub coordinates are separate from the id: the provider uses the project's `repo` setting, or the
+`origin` of the directory the server was launched from. A server launched by a repo's `.mcp.json` gets
+its coordinates from that repo's `origin` for free. A shared server started outside any repository must
+set `repo` for the project, or a GitHub-touching call fails with:
 
 ```text
-Error: no git 'origin' remote in <path> — the GitHub provider needs one
+Error: no GitHub repo for this project — set `repo` (owner/repo) in its config, or launch the server from the repository so `origin` can supply it
 ```
-
-One server instance handles any number of projects; the path in each call decides which.
 
 ## Related
 
