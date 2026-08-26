@@ -97,11 +97,12 @@ const TOOL_NAMES = [
   "roadmap",
 ];
 
-test("tools/list advertises the whole surface, each requiring project", async () => {
+test("tools/list advertises the whole surface, and project is optional (a --project-id default fills it)", async () => {
   const { client, cleanup } = await harness();
   const { tools } = await client.listTools();
   expect(tools.map((t) => t.name)).toEqual(expect.arrayContaining(TOOL_NAMES));
-  for (const t of tools) expect(t.inputSchema.required).toContain("project");
+  // `project` is no longer required: an omitted one resolves to the server's --project-id default.
+  for (const t of tools) expect(t.inputSchema.required ?? []).not.toContain("project");
   await cleanup();
 });
 

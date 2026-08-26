@@ -132,13 +132,14 @@ export type TaskPatch = { [K in keyof Task]?: Task[K] | null };
 
 /** Which project (and optionally which branch) a tool call is about. The server has no cwd of its own. */
 export interface ProjectContext {
-  /** Absolute path to the target repository root. */
+  /** The project id — an opaque, supplied string, never derived from a path or a provider. */
   project: string;
   /** Branch to scope to; the backend decides how it uses this. */
   branch?: string;
 }
 
-/** The GitHub coordinates a project resolves to, read from its `origin` remote. */
+/** The GitHub coordinates a project resolves to — from its configured `repo`, else the launch cwd's
+ *  `origin`. */
 export interface RepoRef {
   owner: string;
   repo: string;
@@ -162,6 +163,13 @@ export type LabelFieldName = (typeof LABEL_FIELD_NAMES)[number];
 export interface ProjectConfig {
   /** Which provider backs this project. Default "github". A future value is "linear". */
   provider?: string;
+  /**
+   * The GitHub coordinates (`owner/repo`) backing this project. A project id is opaque and never a
+   * path, so the repo is configuration, not something derived from the id. Absent means fall back to
+   * the `origin` of the server's launch working directory; a server outside any git repo with no
+   * `repo` set cannot resolve one and says so.
+   */
+  repo?: string;
   /** Turn the Projects v2 board sync on or off (GitHub only). Default on. */
   projects?: boolean;
   /** Target an existing Projects v2 board by number. Absent means find/create one named `board`. */

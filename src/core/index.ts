@@ -19,6 +19,7 @@ export {
   ConfigProvider,
   ProjectConfigSchema,
   defaultCacheDir,
+  validateProjectId,
   projectSlug,
   repoRoot,
   repoSlug,

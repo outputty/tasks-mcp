@@ -1,8 +1,8 @@
 // The MCP server, on the official @modelcontextprotocol/sdk — one tool per tracker operation, each a
 // thin shell over the backend and the pure graph engine. The SDK owns the protocol (initialize,
 // tools/list, tools/call, ping, notifications); this file owns only the tool surface. Every tool takes
-// `project` (an absolute repo root) because the server has no cwd of its own; `branch` is optional and
-// passed straight through to the backend.
+// `project` — an opaque, supplied id (the server has no cwd of its own) that falls back to the
+// server's --project-id default when omitted; `branch` is optional and passed straight to the backend.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -10,7 +10,7 @@ import pkg from "../../package.json";
 import type { TaskService } from "../core/service.ts";
 import type { ProjectContext, Task } from "../core/types.ts";
 import { QA_LEVELS, SPEC_STATES, PRIORITIES, TRAIL_KINDS, NODE_TYPES } from "../core/types.ts";
-import { ProjectConfigSchema } from "../core/providers/config.ts";
+import { ProjectConfigSchema, validateProjectId } from "../core/providers/config.ts";
 import {
   eligible,
   planning,
@@ -51,7 +51,13 @@ const SERVER_OPTIONS = {
     "`list_ready` when you want the truth.",
 };
 
-const PROJECT = z.string().describe("Absolute path to the target repository root.");
+const PROJECT = z
+  .string()
+  .optional()
+  .describe(
+    "The project id — an opaque, supplied string, never derived. Omit to use the server's " +
+      "--project-id default.",
+  );
 const BRANCH = z
   .string()
   .optional()
@@ -69,11 +75,6 @@ const TAGS = LIST.optional().describe(
 const CLEAR = LIST.optional().describe(
   `Fields to REMOVE outright — the only way a label comes off an issue. Clearing a list empties it. One of: ${CLEARABLE_FIELDS.join(", ")}.`,
 );
-
-const ctxOf = (args: { project: string; branch?: string }): ProjectContext => ({
-  project: args.project,
-  branch: args.branch,
-});
 
 // A compact index row, the same shape the tracker's derived index has always emitted.
 const ROW = {
@@ -154,13 +155,29 @@ const result = <T extends Record<string, unknown>>(structured: T) => ({
   structuredContent: structured,
 });
 
-/** The MCP server over one task service. A transport (stdio or HTTP) connects to it. */
+/**
+ * The MCP server over one task service. A transport (stdio or HTTP) connects to it. `defaultProject`
+ * is the server's --project-id: the id a tool call uses when it omits `project`, so a session need not
+ * repeat it on every call.
+ */
 // Deviation from the 24-line cap, justified: this is a declarative tool table — eighteen registerTool
 // calls that are schema data plus one-expression handlers. Splitting it into arbitrary function
 // groups would hide the surface, and every handler body is under the cap on its own.
 // oxlint-disable-next-line max-lines-per-function
-export function createMcpServer(service: TaskService): McpServer {
+export function createMcpServer(service: TaskService, defaultProject?: string): McpServer {
   const server = new McpServer(SERVER_INFO, SERVER_OPTIONS);
+
+  // Resolve the project id a call names, or the server default; a tool call with neither is refused.
+  // The id is opaque but becomes a cache path segment, so it is validated for traversal here.
+  const ctxOf = (args: { project?: string; branch?: string }): ProjectContext => {
+    const raw = args.project ?? defaultProject;
+    if (!raw) {
+      throw new Error(
+        "no project — pass `project`, or start the server with --project-id to set a default",
+      );
+    }
+    return { project: validateProjectId(raw), branch: args.branch };
+  };
 
   server.registerTool(
     "list_ready",

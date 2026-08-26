@@ -18,10 +18,11 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 /** One stateless MCP exchange: a fresh server + transport pair answers this POST and is torn down. */
 async function handleMcp(
   service: TaskService,
+  defaultProject: string | undefined,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const server = createMcpServer(service);
+  const server = createMcpServer(service, defaultProject);
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless
     enableJsonResponse: true, // plain JSON replies; a tools-only server never streams
@@ -34,8 +35,12 @@ async function handleMcp(
   return transport.handleRequest(req, res);
 }
 
-/** The MCP-over-HTTP server, not yet listening — the caller picks the port. */
-export function createHttpServer(service: TaskService = makeService()): Server {
+/** The MCP-over-HTTP server, not yet listening — the caller picks the port. `defaultProject` is the
+ *  --project-id a request uses when it omits `project`. */
+export function createHttpServer(
+  service: TaskService = makeService(),
+  defaultProject?: string,
+): Server {
   return createServer(async (req, res) => {
     const path = (req.url ?? "").split("?")[0];
 
@@ -49,7 +54,7 @@ export function createHttpServer(service: TaskService = makeService()): Server {
         res.writeHead(405, { allow: "POST" });
         return res.end();
       }
-      return handleMcp(service, req, res);
+      return handleMcp(service, defaultProject, req, res);
     }
 
     json(res, 404, { error: "not found" });
