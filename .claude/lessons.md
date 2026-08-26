@@ -10,8 +10,13 @@
 
 ## An assumption that broke
 
+- [2026-08-27 · BUILD](lessons/2026-08-27-vitest-4-moved-worker-node-flags-out-of-pooloptions.md) - Vitest 4 removed `poolOptions`; a worker node flag now goes in top-level `test.execArgv`, and the old shape is accepted and silently ignored. ×1
 - [2026-08-26 · PLANNING](lessons/2026-08-26-a-deleted-mechanism-outlived-its-deletion-in-the-docs.md) - a commit deleted a subsystem and left product memory describing it as live; counted claims read as verified and age silently. ×1
 - [2026-08-26 · PLANNING](lessons/2026-08-26-a-package-cannot-npx-itself.md) - the repository publishing a tool could not launch it, because npx resolves a package name against the local checkout first. ×1
+
+## A killed approach
+
+- [2026-08-27 · BUILD](lessons/2026-08-27-a-subprocess-that-imports-src-cannot-run-this-repos-typescript.md) - a child process that imports `src/*.ts` to prove a module is not loaded dies on Node's strip-only TS (parameter properties, unattributed JSON imports); the test runs in-process with `registerHooks` instead. ×1
 
 ## Legacy archive (pre-index prose)
 
