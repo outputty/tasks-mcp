@@ -7,9 +7,9 @@ version 0.21.0.
 npx -y @outputty/tasks-mcp [options] [command]
 ```
 
-With no command the binary runs the MCP server: stdio by default, or the HTTP server with `--http`.
-The subcommands drive the same core directly, with no MCP protocol involved. Every subcommand prints
-JSON, indented two spaces, to stdout.
+With no command the binary runs the MCP server: stdio by default, the HTTP server with `--http`, or the
+interactive [console](#the-console) with `--tui`. The subcommands drive the same core directly, with no
+MCP protocol involved. Every subcommand prints JSON, indented two spaces, to stdout.
 
 ## Global options
 
@@ -20,6 +20,7 @@ These are declared on the program, so they may appear before or after a subcomma
 | `-V`, `--version`        | —        | —                        | Print the package version and exit.                                                                     |
 | `-h`, `--help`           | —        | —                        | Print help for the program or a subcommand and exit.                                                    |
 | `--http`                 | —        | stdio                    | Run the standalone HTTP server instead of stdio.                                                        |
+| `--tui`                  | —        | stdio                    | Run the interactive [console](#the-console) instead of the server. Needs Node 26.4+.                    |
 | `--port <n>`             | integer  | `3917`                   | HTTP port. Only meaningful with `--http`.                                                               |
 | `--host <ip>`            | string   | `127.0.0.1`              | HTTP bind address. `--host 0.0.0.0` exposes the server to every interface, deliberately. `--http` only. |
 | `--provider <name>`      | string   | `github`                 | The remote layer backing each project.                                                                  |
@@ -137,6 +138,65 @@ $ tasks-mcp projects
 
 `tasks` counts every record the project holds, targets included, so it equals `open + in_progress +
 done`.
+
+Each cache file declares its own project id. A file written before that — a **pre-identity orphan**,
+left behind by an id change — carries no declared id and is **skipped**, so it never shows as a phantom
+project. To bring one back, run `sync` for that project (it rewrites the file with the id) or delete the
+old file; the orphan is only skipped, never touched on disk.
+
+## The console
+
+`tasks-mcp --tui` opens an interactive terminal over every tracker the console can reach. It needs Node
+26.4 or newer (its renderer is a native library) and is imported only under `--tui`, so a plain server
+spawn never loads it. It starts a tracker for itself on an ephemeral loopback port and connects to it as
+an MCP client — the same path a remote tracker uses — then lists the in-progress-or-ready work across
+every tracker in one queue, project as a column.
+
+```text
+┌─tasks-mcp — 3 items──────────────────────────────────────────────────┐
+│  PROJECT               TASK                        STATE       AGE   │
+│› outputty/laygo        run-phases-refactor         in progress —     │
+│  outputty/tasks-mcp    tui-docs                    in progress —     │
+│  outputty/tasks-mcp    tui-live-events             ready       —     │
+└─↑↓ move · ⏎ open · a add tracker · q quit────────────────────────────┘
+```
+
+The queue is `list_tasks` filtered to in-progress-or-ready work — not `list_ready` alone, which excludes
+`in_progress` and would hide the very builds the console exists to watch. Age is best-effort: it shows
+`—` for a healthy `in_progress` build, because the tracker exposes a claim's start time only once the
+claim has gone stale.
+
+### Keys
+
+| Screen | Key     | Does                                                                       |
+| ------ | ------- | -------------------------------------------------------------------------- |
+| queue  | `↑` `↓` | Move the selection.                                                        |
+| queue  | `⏎`     | Open the selected item.                                                    |
+| queue  | `a`     | Add a tracker by URL (probed before it is saved).                          |
+| queue  | `q`     | Quit.                                                                      |
+| detail | `e`     | Edit fields (`↑↓` field, `←→` cycle an enum, type a text field, `⏎` save). |
+| detail | `s`     | Change state — `s` start, `c` close, `r` send back to planning.            |
+| detail | `c`     | Add a trail comment.                                                       |
+| detail | `n`     | File a new task as an idea (`spec: drafting`).                             |
+| detail | `esc`   | Back to the queue.                                                         |
+
+Every write is an existing MCP tool — `edit_task`, `start_task`, `close_task`, `append_trail`,
+`add_task` — so the console has no write path of its own and can do nothing an agent cannot.
+
+### The tracker list
+
+The console watches its own in-process tracker plus any you add. Added trackers are saved to
+`<cacheDir>/console.yaml`, beside the task caches and never inside a repository:
+
+```yaml
+trackers:
+  - url: http://127.0.0.1:3917
+```
+
+The in-process tracker is implicit — it exists whether or not the file does, and is never written to it.
+The file is zod-parsed on read: an unknown key or a mistyped value fails loudly naming the file, and a
+missing file is empty, not an error. A tracker that is unreachable at startup is shown as unreachable and
+the console keeps running.
 
 ## `add <id>`
 

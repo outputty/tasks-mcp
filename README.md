@@ -11,7 +11,9 @@ altitudes.
 
 ## Requirements
 
-- Node 18 or newer.
+- **Node 26.4 or newer.** The floor moved up from Node 18 for the `--tui` console, whose renderer is a
+  native library that requires it. The MCP server and the library themselves still run on older Node,
+  but the package's `engines` floor tracks the console.
 - A github.com repository, named by the launch directory's `origin` remote or by a `repo` setting.
 - A GitHub token: `GITHUB_TOKEN`, `GH_TOKEN`, or a logged-in `gh` CLI. For the kanban board, grant the
   `project` scope once with `gh auth refresh -s project`; without it tasks still land as issues.
@@ -75,6 +77,30 @@ $ tasks-mcp ready
   "order-schema"
 ]
 ```
+
+## The console
+
+`tasks-mcp --tui` opens an interactive terminal over every tracker it can reach — the one it starts for
+itself, plus any you add — and lists the in-progress-or-ready work across all of them in one queue:
+
+```text
+┌─tasks-mcp — 3 items──────────────────────────────────────────────────┐
+│  PROJECT               TASK                        STATE       AGE   │
+│› outputty/laygo        run-phases-refactor         in progress —     │
+│  outputty/tasks-mcp    tui-docs                    in progress —     │
+│  outputty/tasks-mcp    tui-live-events             ready       —     │
+└─↑↓ move · ⏎ open · a add tracker · q quit────────────────────────────┘
+```
+
+`⏎` opens an item to read its trail and change it in place — `e` edit, `s` state, `c` comment, `n` new
+idea — and every write is an ordinary MCP tool, so the console can do nothing an agent cannot. `a` adds
+a tracker by URL, proven with a live `list_projects` before it is saved. Full key map and the
+tracker-list file: [the CLI reference](https://github.com/outputty/tasks-mcp/blob/main/docs/reference-cli.md#the-console).
+
+⚠ **The console makes the package larger.** Its renderer (`@opentui/core`) is a native library of
+roughly 20 MB, so an `npx -y` launch re-downloads it on a cold cache. A plain MCP server spawn never
+loads it — the console is imported only under `--tui` — but the dependency ships in the package either
+way, and it is why the Node floor moved to 26.4.
 
 ## Documentation
 
