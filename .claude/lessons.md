@@ -4,6 +4,19 @@
 > considered and dropped, so it is never re-proposed. Never features. Written at the merge step,
 > oldest first. Large: `grep` it by path or title rather than reading it whole.
 
+## Communication that broke down
+
+- [2026-08-26 · PLANNING](lessons/2026-08-26-deriving-a-project-id-from-a-provider-makes-that-provider-the-authority.md) - a design derived a system-wide key from one layer's data, silently promoting that layer to authority over every project. ×1
+
+## An assumption that broke
+
+- [2026-08-26 · PLANNING](lessons/2026-08-26-a-deleted-mechanism-outlived-its-deletion-in-the-docs.md) - a commit deleted a subsystem and left product memory describing it as live; counted claims read as verified and age silently. ×1
+- [2026-08-26 · PLANNING](lessons/2026-08-26-a-package-cannot-npx-itself.md) - the repository publishing a tool could not launch it, because npx resolves a package name against the local checkout first. ×1
+
+## Legacy archive (pre-index prose)
+
+Entries below predate the one-file-per-lesson convention and are kept verbatim.
+
 **The id-label died for the body block; issues went all-GraphQL (0.2.0).** *direction.* Beginning: every managed issue wore an id label, and issue CRUD mixed REST and GraphQL. Problem: the label was a second key to keep consistent, and creating one needed label node-ids before any issue could exist. End: the task id leads the hidden YAML body block (the block IS the management marker), and issues use GraphQL createIssue/updateIssue/ closeIssue/reopenIssue with node-id handles end to end. Cost discovered later: without a label, sync could no longer see hand-opened issues — fixed in 0.3.0 by adoption (import as gh-<number>, stamp the block). Commits 60820a3, 3d8a5b3.
 
 Files: `src/core/providers/github.ts`.
