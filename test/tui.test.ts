@@ -1,18 +1,15 @@
-// The console end to end: a real tracker (file-only stack) served over real node:http, read through a
-// real MCP client — the same client path a remote tracker uses — and drawn by OpenTUI's HEADLESS test
-// renderer (no TTY). The stdio-never-loads-the-renderer guarantee is in tui-isolation.test.ts, which
-// must stay free of a top-level @opentui/core import (this file has one, for the renderer).
+// The console's data path end to end: a real tracker (file-only stack) served over real node:http, read
+// through a real MCP client — the same client path a remote tracker uses. No renderer here (the render
+// and navigation tests are tui-app.test.ts / tui-format.test.ts); this file stays OpenTUI-free.
 
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test, expect } from "vitest";
-import { createTestRenderer } from "@opentui/core/testing";
 import { createHttpServer } from "../src/mcp/http.ts";
 import { TaskStack } from "../src/core/service.ts";
 import { FileProvider } from "../src/core/providers/file.ts";
 import { connectTracker, fetchQueues } from "../src/tui/tracker.ts";
-import { queueRows, type QueueRow } from "../src/tui/queue.ts";
-import { renderQueue } from "../src/tui/view.ts";
+import { queueRows } from "../src/tui/queue.ts";
 import { tmp, task } from "./helpers.ts";
 
 function fileStack(cacheDir: string): TaskStack {
@@ -71,30 +68,4 @@ test("the console's rows are in-progress-or-ready across projects, NOT list_read
   await client.close();
   await closeServer(server);
   cache.cleanup();
-});
-
-const SAMPLE: QueueRow = {
-  project: "outputty/tasks-mcp",
-  id: "tui-detail",
-  title: "Detail",
-  state: "in progress",
-  age: "41m",
-};
-
-test("renderQueue draws the rows through the headless renderer and q quits", async () => {
-  const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
-    width: 90,
-    height: 12,
-  });
-  let quit = false;
-  renderQueue(renderer, [SAMPLE], () => {
-    quit = true;
-  });
-  await renderOnce();
-  const frame = captureCharFrame();
-  expect(frame).toContain("tui-detail");
-  expect(frame).toContain("41m");
-  await mockInput.pressKey("q");
-  expect(quit).toBe(true);
-  renderer.destroy();
 });

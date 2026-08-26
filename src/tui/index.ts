@@ -11,9 +11,8 @@ import type { AddressInfo } from "node:net";
 import { createCliRenderer } from "@opentui/core";
 import { startHttpServer } from "../mcp/http.ts";
 import type { TaskService } from "../core/service.ts";
-import { connectTracker, fetchQueues } from "./tracker.ts";
-import { queueRows } from "./queue.ts";
-import { renderQueue } from "./view.ts";
+import { connectTracker } from "./tracker.ts";
+import { Console } from "./app.ts";
 
 const FFI_FLAG = "--experimental-ffi";
 const REEXEC_ENV = "TASKS_MCP_TUI_FFI";
@@ -28,14 +27,14 @@ export async function runTui(service: TaskService): Promise<void> {
   if (reexecedForFfi()) return;
   const server = startHttpServer(service, { port: 0 });
   const client = await connectTracker(await mcpUrl(server));
-  const rows = queueRows(await fetchQueues(client));
   const renderer = await createCliRenderer({ exitOnCtrlC: true });
-  renderQueue(renderer, rows, () => {
+  const app = new Console(renderer, client, () => {
     renderer.destroy();
     void client.close();
     server.close();
     process.exit(0);
   });
+  await app.start();
 }
 
 /**
