@@ -18,6 +18,12 @@ Two entry points:
 The package is ESM only and ships no `.d.ts` files, so TypeScript consumers get no types from it.
 Examples below are JavaScript.
 
+> **Breaking change.** A project is now an opaque, supplied id used verbatim as its cache filename, so
+> the three path-hashing and repo-resolution helpers that used to be exported (the ones that turned a
+> project path into a slug and resolved a worktree back to its primary checkout) are **removed**. There
+> is no replacement: pass whatever stable id you like as `project`, and validate it with the exported
+> `validateProjectId` if it might contain user input.
+
 ## Reason over a graph without any storage
 
 Every scheduling function is a pure function of an array of task objects. No service, no provider, no

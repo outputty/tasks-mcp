@@ -2,7 +2,7 @@
   "mcpServers": {
     "tasks": {
       "command": "node",
-      "args": ["dist/cli.js"]
+      "args": ["dist/cli.js", "--project-id", "outputty/tasks-mcp"]
     }
   }
 }

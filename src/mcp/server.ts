@@ -160,7 +160,7 @@ const result = <T extends Record<string, unknown>>(structured: T) => ({
  * is the server's --project-id: the id a tool call uses when it omits `project`, so a session need not
  * repeat it on every call.
  */
-// Deviation from the 24-line cap, justified: this is a declarative tool table — eighteen registerTool
+// Deviation from the 24-line cap, justified: this is a declarative tool table — twenty registerTool
 // calls that are schema data plus one-expression handlers. Splitting it into arbitrary function
 // groups would hide the surface, and every handler body is under the cap on its own.
 // oxlint-disable-next-line max-lines-per-function
