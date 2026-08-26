@@ -90,7 +90,7 @@ program
 
 program
   .command("planning")
-  .description("the tasks the planning stage owns")
+  .description("the tasks the planning stage owns, resubmitted (replan) ones first")
   .action(async () => out(planning(await service().list(ctx())).map((t) => t.id)));
 
 program

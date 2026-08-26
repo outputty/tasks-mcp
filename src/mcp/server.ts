@@ -266,7 +266,8 @@ export function createMcpServer(service: TaskService): McpServer {
     "list_planning",
     {
       description:
-        "The tasks the planning stage owns: never specced, or sent back by a build (replan).",
+        "The tasks the planning stage owns: never specced, or sent back by a build (replan). " +
+        "Resubmitted records come FIRST — a replan is a build already stalled, waiting on a spec.",
       inputSchema: { project: PROJECT, branch: BRANCH },
       outputSchema: { ids: z.array(z.string()), tasks: z.array(z.object(ROW)) },
     },
