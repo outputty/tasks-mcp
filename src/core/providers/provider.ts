@@ -9,7 +9,7 @@
 //     an empty, newly added layer backfills instead of erasing the world.
 //   - DELETIONS NEVER PROPAGATE: a task can close everywhere, but only vanishes by hand.
 
-import type { ProjectContext, Task, TrailEntry } from "../types.ts";
+import type { ProjectConfig, ProjectContext, Task, TrailEntry } from "../types.ts";
 import type { ServerOptions } from "../types.ts";
 import { ConfigProvider } from "./config.ts";
 import { FileProvider } from "./file.ts";
@@ -64,18 +64,35 @@ const REMOTES: Record<string, (config: ConfigProvider) => Provider> = {
 };
 
 /**
- * Build the stack for one remote, top-first: the file layer, then the named remote. Order is
- * authority order — the LAST layer is the source of truth. A pure builder: the caller (TaskStack)
- * owns memoization, and every remote layer shares the one ConfigProvider, so a preference set
- * centrally propagates to all of them.
+ * The ordered remote names backing a project, deepest last. A `providers` list wins; the singular
+ * `provider` is a one-element list, so a config written before multi-remote still resolves; absent,
+ * the default is `github`. This is the one place the singular/plural forms reconcile.
+ *
+ * `resolveRemotes({ providers: ["github", "linear"] })` → `["github", "linear"]`.
+ */
+export function resolveRemotes(config: ProjectConfig): string[] {
+  return config.providers ?? [config.provider ?? "github"];
+}
+
+/**
+ * Build the stack for an ordered list of remotes, top-first: the file layer, then each remote in
+ * order, so the LAST layer is the source of truth. An unknown name fails loudly, naming the bad entry
+ * and the known ones. A pure builder: the caller (TaskStack) owns memoization, and every remote layer
+ * shares the one ConfigProvider, so a preference set centrally propagates to all of them.
+ *
+ * `buildStack(["github"], opts, cfg).map(p => p.name)` → `["file", "github"]`.
  */
 export function buildStack(
-  remote: string,
+  remotes: string[],
   options: ServerOptions,
   config: ConfigProvider,
 ): Provider[] {
-  const make = REMOTES[remote];
-  if (!make)
-    throw new Error(`unknown provider '${remote}' (known: ${Object.keys(REMOTES).join(", ")})`);
-  return [new FileProvider(options), make(config)];
+  const layers = remotes.map((name) => {
+    const make = REMOTES[name];
+    if (!make) {
+      throw new Error(`unknown provider '${name}' (known: ${Object.keys(REMOTES).join(", ")})`);
+    }
+    return make(config);
+  });
+  return [new FileProvider(options), ...layers];
 }

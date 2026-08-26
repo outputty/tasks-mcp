@@ -10,7 +10,7 @@ import type { ProjectConfig, ProjectContext, Task, TaskPatch, TrailEntry } from 
 import type { Provider, ProviderState } from "./providers/provider.ts";
 import type { ServerOptions } from "./types.ts";
 import { ConfigProvider, defaultCacheDir, type ConfigSources } from "./providers/config.ts";
-import { buildStack } from "./providers/provider.ts";
+import { buildStack, resolveRemotes } from "./providers/provider.ts";
 import {
   assertTargetFields,
   assertTargetWhy,
@@ -78,15 +78,15 @@ export interface TaskService {
 export class TaskStack implements TaskService {
   // `options` carries the CLI-set knobs (cacheDir, provider, board…). A whole stack may be injected
   // for tests — ordered top-first, deepest layer last and most authoritative.
-  // One stack per remote name — layers cache their per-project init (repo, board, index), so handing
-  // out fresh instances would redo that remote work on every call.
+  // One stack per resolved provider LIST (keyed by the ordered names) — layers cache their per-project
+  // init (repo, board, index), so handing out fresh instances would redo that remote work on every
+  // call, and keying by the whole list keeps two projects with different provider sets apart.
   private readonly stacks = new Map<string, Provider[]>();
   // Every project this service has been asked about — the set the background loop reconciles. The
   // server has no cwd of its own, so a project is only knowable once a tool call names it.
   private readonly seen = new Set<string>();
-  // One claim ledger per project served. Keyed on the project path like everything else here; the
-  // store itself resolves that to the shared repo slug, so a worktree and its primary checkout write
-  // the same file.
+  // One claim ledger per project served, keyed on the project id like every other store — worktrees
+  // sharing one supplied id write one ledger, with no git resolution behind it.
   private readonly claimStores = new Map<string, ClaimStore>();
 
   constructor(
@@ -102,19 +102,20 @@ export class TaskStack implements TaskService {
   private layers(ctx: ProjectContext): Provider[] {
     this.seen.add(ctx.project);
     if (this.providers) return this.providers;
-    const remote = this.config.get(ctx.project).provider ?? "github";
-    let stack = this.stacks.get(remote);
+    const remotes = resolveRemotes(this.config.get(ctx.project));
+    const key = remotes.join(" ");
+    let stack = this.stacks.get(key);
     if (!stack) {
-      stack = buildStack(remote, this.options, this.config);
-      this.stacks.set(remote, stack);
+      stack = buildStack(remotes, this.options, this.config);
+      this.stacks.set(key, stack);
     }
     return stack;
   }
 
   stop(): void {}
 
-  /** This project's claim ledger, made once and reused — the repo-slug lookup behind its path shells
-   *  out to git, so a fresh store per call would pay for that on every write. */
+  /** This project's claim ledger, made once and reused — one store per id, keyed like every other
+   *  store, so worktrees sharing an id share the ledger. */
   private claims(project: string): ClaimStore {
     let store = this.claimStores.get(project);
     if (!store) {
@@ -231,7 +232,9 @@ export class TaskStack implements TaskService {
     return trail;
   }
 
-  /** The deepest layer that backs trails (GitHub owns the issue comments; the file cache has none). */
+  /** The DEEPEST layer that backs trails, chosen explicitly by walking the stack bottom-up: with
+   *  several remotes the deepest implementing one owns the thread (GitHub backs comments; the file
+   *  cache does not). */
   private async trailLayer(ctx: ProjectContext): Promise<Provider> {
     const layers = this.layers(ctx);
     for (let i = layers.length - 1; i >= 0; i--) {
@@ -439,7 +442,8 @@ function sameTask(a: Task, b: Task): boolean {
   return isDeepStrictEqual(withDefaults(a), withDefaults(b));
 }
 
-/** The production service: the file layer on top, the project's configured remote beneath it. */
+/** The production service: the file layer on top, the project's configured remotes beneath it, deepest
+ *  last. */
 export function makeService(options: ServerOptions = {}): TaskService {
   return new TaskStack(options);
 }

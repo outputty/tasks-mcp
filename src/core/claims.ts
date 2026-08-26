@@ -14,14 +14,16 @@
 // worker is merely slow would let a second worker claim the same task, which is the one race
 // `start_task` exists to prevent.
 //
-// The ledger is LOCAL and keyed on `repoSlug`, the same key the event spool uses: a build child claims
-// from inside its own worktree while the dispatcher sweeps from the primary checkout, so the two must
-// resolve to one file. It is deliberately not a task field — a heartbeat per layer would rewrite the
-// GitHub issue body on every beat, and liveness of a local process is not project truth.
+// The ledger is LOCAL and keyed on the PROJECT ID, like every other store: a build child claims from
+// inside its own worktree while the dispatcher sweeps from the primary checkout, and they resolve to
+// one file because they share one supplied id (the `--project-id` in the checked-in `.mcp.json`) —
+// no git resolution of a worktree back to its primary. It is deliberately not a task field: a
+// heartbeat per layer would rewrite the GitHub issue body on every beat, and liveness of a local
+// process is not project truth.
 
 import fs from "node:fs";
 import path from "node:path";
-import { repoSlug } from "./providers/config.ts";
+import { cachePath } from "./providers/config.ts";
 
 /** One live claim: who holds a task, and when it was last heard from. */
 export interface Claim {
@@ -46,7 +48,7 @@ export interface StaleClaim extends Claim {
 export const DEFAULT_STALE_MINUTES = 15;
 
 const claimFile = (cacheDir: string, project: string): string =>
-  path.join(cacheDir, "claims", `${repoSlug(project)}.json`);
+  cachePath(path.join(cacheDir, "claims"), project, ".json");
 
 /** Whole minutes between two instants, floored at zero — a clock that jumped back is not negative age. */
 export const minutesSince = (at: string, now: number): number => {

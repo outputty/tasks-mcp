@@ -47,13 +47,13 @@ const taskFiles = (cacheDir: string): string[] =>
 
 test("the file layer lives outside the repo, in the given cacheDir", async () => {
   const { svc, project, cacheDir, cleanup } = harness();
-  const ctx = { project };
+  const ctx = { project: "demo" }; // an opaque id now — no longer the repo path
   await svc.create(ctx, task({ id: "schema" }));
   await svc.create(ctx, task({ id: "api", deps: ["schema"] }));
 
   expect(fs.existsSync(`${project}/.claude/tasks.cache.yaml`)).toBe(false); // nothing in the repo
   const files = taskFiles(cacheDir);
-  expect(files).toHaveLength(1);
+  expect(files).toEqual(["demo.yaml"]); // one file, the id used verbatim
   expect(fs.readFileSync(`${cacheDir}/${files[0]}`, "utf8")).toContain("- schema");
   cleanup();
 });
@@ -126,8 +126,8 @@ test("sync adopts a hand-opened issue and stamps our block onto it", async () =>
 });
 
 test("a file written before the stack (with a refs key) still loads", async () => {
-  const { svc, project, cacheDir, cleanup } = harness();
-  const ctx = { project };
+  const { svc, cacheDir, cleanup } = harness();
+  const ctx = { project: "demo" };
   await svc.create(ctx, task({ id: "old" }));
   const file = `${cacheDir}/${taskFiles(cacheDir)[0]}`;
   fs.writeFileSync(
@@ -147,8 +147,8 @@ test("a mistyped config file fails loudly, naming the file and the key", async (
 });
 
 test("a corrupt task file is quarantined, not fatal, and sync rebuilds it", async () => {
-  const { svc, project, cacheDir, cleanup } = harness();
-  const ctx = { project };
+  const { svc, cacheDir, cleanup } = harness();
+  const ctx = { project: "demo" };
   await svc.create(ctx, task({ id: "api", title: "survives", tier: 2 }));
   const file = `${cacheDir}/${fs.readdirSync(cacheDir).find((f) => f.endsWith(".yaml"))}`;
   fs.writeFileSync(file, "tasks: [unclosed");
