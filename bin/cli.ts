@@ -2,12 +2,12 @@
 // The package entry, on commander. With no subcommand it runs the MCP server — stdio by default (for
 // `.mcp.json` -> `bunx @outputty/tasks-mcp`), or `--http` for the standalone HTTP server. The
 // subcommands drive the same core directly, no MCP involved: `add`, `add-target`, `edit`, `delete`,
-// `list`, `ready`, `roadmap`, `planning`, `schedule`, `prereqs`, `blockers`, `get`, `start`, `close`,
-// `trail`, `trail-add`, `sync`, `identify`.
+// `list`, `ready`, `roadmap`, `projects`, `planning`, `schedule`, `prereqs`, `blockers`, `get`,
+// `start`, `close`, `trail`, `trail-add`, `sync`, `identify`.
 
 import { Command } from "commander";
 import { runStdio } from "../src/mcp/stdio.ts";
-import { createHttpServer } from "../src/mcp/http.ts";
+import { startHttpServer } from "../src/mcp/http.ts";
 import { SERVER_INFO } from "../src/mcp/server.ts";
 import { makeService, startBackgroundSync } from "../src/core/service.ts";
 import { validateProjectId } from "../src/core/providers/config.ts";
@@ -32,6 +32,11 @@ const program = new Command()
   .version(SERVER_INFO.version)
   .option("--http", "run the standalone HTTP server instead of stdio")
   .option("--port <n>", "HTTP port (--http mode)", (v) => Number.parseInt(v, 10), 3917)
+  .option(
+    "--host <ip>",
+    "HTTP bind address (--http mode); default 127.0.0.1 (loopback only). `--host 0.0.0.0` exposes the " +
+      "server — and its full tool surface — to every interface, deliberately",
+  )
   .option("--provider <name>", "the remote layer backing each project (default github)")
   .option("--project-number <n>", "target an existing Projects v2 board", (v) =>
     Number.parseInt(v, 10),
@@ -96,6 +101,13 @@ program
       })),
     ),
   );
+
+program
+  .command("projects")
+  .description(
+    "every project the cache holds, with task counts — the one read that takes no --project",
+  )
+  .action(async () => out({ projects: await service().listProjects() }));
 
 program
   .command("planning")
@@ -278,10 +290,17 @@ program.action(async () => {
   const defaultProject = rawDefault === undefined ? undefined : validateProjectId(rawDefault);
   if (opts.syncInterval > 0) startBackgroundSync(svc, opts.syncInterval);
   if (!opts.http) return runStdio(svc, defaultProject);
-  console.error(
-    `tasks-mcp (http) listening on http://localhost:${opts.port}/mcp  (health: /health)`,
-  );
-  createHttpServer(svc, defaultProject).listen(opts.port);
+  // Bind loopback unless --host says otherwise, and log the address ACTUALLY bound — never a
+  // hardcoded `localhost` while the socket is on every interface.
+  startHttpServer(svc, {
+    port: opts.port,
+    host: opts.host,
+    defaultProject,
+    onListening: (addr) =>
+      console.error(
+        `tasks-mcp (http) listening on http://${addr.address}:${addr.port}/mcp  (events: /events, health: /health)`,
+      ),
+  });
 });
 
 await program.parseAsync(process.argv);

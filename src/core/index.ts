@@ -8,6 +8,8 @@ export {
   type TaskService,
   type SyncResult,
 } from "./service.ts";
+export { ChangeBus } from "./changes.ts";
+export { readProjectSummaries, type ProjectSummary } from "./projects.ts";
 export {
   ClaimStore,
   DEFAULT_STALE_MINUTES,

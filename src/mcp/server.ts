@@ -160,8 +160,8 @@ const result = <T extends Record<string, unknown>>(structured: T) => ({
  * is the server's --project-id: the id a tool call uses when it omits `project`, so a session need not
  * repeat it on every call.
  */
-// Deviation from the 24-line cap, justified: this is a declarative tool table — twenty registerTool
-// calls that are schema data plus one-expression handlers. Splitting it into arbitrary function
+// Deviation from the 24-line cap, justified: this is a declarative tool table — twenty-one
+// registerTool calls that are schema data plus one-expression handlers. Splitting it into arbitrary function
 // groups would hide the surface, and every handler body is under the cap on its own.
 // oxlint-disable-next-line max-lines-per-function
 export function createMcpServer(service: TaskService, defaultProject?: string): McpServer {
@@ -347,6 +347,35 @@ export function createMcpServer(service: TaskService, defaultProject?: string): 
     async (args) => {
       const tasks = await service.list(ctxOf(args));
       return result({ ids: tasks.map((t) => t.id), tasks });
+    },
+  );
+
+  server.registerTool(
+    "list_projects",
+    {
+      description:
+        "Every project this server's cache directory holds, each with its task counts by status and " +
+        "when the cache last changed. The ONE tool that takes no `project`: it answers about the " +
+        "server itself, not one project — so a console can list what to open without a human typing " +
+        "paths. Read-only and local: it never touches a provider or the network. `updated_at` is the " +
+        "cache file's mtime, so a project edited only on GitHub shows an older stamp until a sync. " +
+        "Rows are sorted by `project`.",
+      inputSchema: {},
+      outputSchema: {
+        projects: z.array(
+          z.object({
+            project: z.string(),
+            tasks: z.number(),
+            open: z.number(),
+            in_progress: z.number(),
+            done: z.number(),
+            updated_at: z.string(),
+          }),
+        ),
+      },
+    },
+    async () => {
+      return result({ projects: await service.listProjects() });
     },
   );
 
