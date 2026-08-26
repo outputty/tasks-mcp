@@ -6,68 +6,66 @@ What exists and how it works. The forward plan lives in the `tasks` MCP server (
 
 ## What we're building towards
 
-A project is what you call it, so one tracker holds every project it has been pointed at, an outside
-reader can list them and follow them live, and a project may be backed by more than one tracker.
+One console over every tracker you run, showing what is being built right now across all of them, and
+letting you change it without leaving the terminal.
 
-    // `project` is an opaque, supplied id — never derived, so no provider owns what a project is called
-    tasks-mcp --project-id outputty/tasks-mcp     // a session; .mcp.json carries this, so worktrees agree
-    tasks-mcp --http --port 3917                  // binds 127.0.0.1; --host is the explicit opt-in
+    tasks-mcp --tui        // the console. No flag still starts the MCP server; --http still serves it.
 
-    list_projects {}                              // every project this tracker holds
-    GET /events                                   // SSE — one line each time a project's graph moves
+`--tui` starts a tracker for itself on an ephemeral loopback port and connects to it as an MCP client,
+exactly as it connects to any tracker in its list. That is one code path, not two: the local tracker is
+just the first entry, so pointing the console at a remote one later is a list edit rather than a second
+implementation.
 
-Identity is the change everything rested on, and it has shipped. A project is an opaque, supplied id,
-never derived from a path or a provider. (Before this, a project was its **absolute path**, hashed into
-a slug, so every git worktree of one repository became a separate project holding its own stale copy of
-the graph; deriving the id from the GitHub repo would have fixed that while making GitHub the authority
-over the identity of projects that may not use it.) Nothing derives the id, and a project's stack is now
-free to hold as many remotes as it configures.
-
-Storage follows the id verbatim — `<cacheDir>/<id>.yaml`, nesting where the id contains `/` — so the
-directory is readable, and therefore enumerable. Where a remote lives is per-project *configuration*
-(`repo` for GitHub, defaulting to the launch cwd's `origin`), not a property of the name.
-
-Input: `list_projects`
-
-```json
-{}
-```
-
-Output: (real, observed 2026-08-26)
-
-```json
-{
-  "projects": [
-    {
-      "project": "outputty/tasks-mcp",
-      "tasks": 3,
-      "open": 1,
-      "in_progress": 1,
-      "done": 1,
-      "updated_at": "2026-08-26T19:12:32.494Z"
-    }
-  ]
-}
-```
-
-Output: `GET /events` (real, observed 2026-08-26)
+Output: the queue — every project's active work in one list, newest movement first (expected)
 
 ```
-event: changed
-data: {"project":"outputty/tasks-mcp","at":"2026-08-26T19:12:53.638Z"}
+┌ tasks-mcp ──────────────────────────────────────────────── 2 trackers ─┐
+│ PROJECT              TASK                        STATE        AGE      │
+│ outputty/laygo       run-phases-refactor         in progress   14m     │
+│ outputty/laygo       duckdb-appender-loader      in progress    2m     │
+│ outputty/tasks-mcp   tui-detail-and-edit         in progress   41m     │
+│ outputty/tasks-mcp   tui-trackers                ready          —      │
+└ ↑↓ move · ⏎ open · a add tracker · / filter · q quit ──────────────────┘
 ```
 
-The stream names which project moved, never what changed — a reader asks the graph, which is local and
-instant. `/mcp` is untouched: it still answers every non-POST with `405 + Allow`, which is what keeps the
-SDK from holding a GET open as an SSE stream of its own.
+The list is `list_tasks` filtered in the console, **not** `list_ready` — `list_ready` excludes
+`in_progress`, so a console built on it would hide the builds it exists to watch.
 
-The console — `tasks-mcp --tui`, shipped in this package — is then a thin client over what already
-exists. It holds a list of trackers, asks each `list_projects`, and drives the existing tools.
+Output: one item, opened (expected)
 
-⚠ Three boundaries this does not cross. `append_trail` writes only the remote's comment thread and
-touches no cache file, so a new trail entry raises no event. Nothing authenticates the HTTP transport —
-loopback is the whole defence, which is why exposing it has to be deliberate. And only `github` is
-registered in `REMOTES`: the stack becomes N-layer, but a second real provider is not part of this.
+```
+┌ tui-detail-and-edit ─────────────────────────── outputty/tasks-mcp ─┐
+│ state  in progress   tier 2   qa subagent   priority normal          │
+│ target tui-console-1787751801        deps  tui-prototype (done)      │
+│                                                                       │
+│ ## Problem                                                            │
+│ The console can list work but not act on it …                         │
+│                                                                       │
+│ TRAIL (4)                                                             │
+│ 19:49  decision  SPEC round 1 — the console's shape …                 │
+└ e edit · s state · c comment · n new idea · esc back ────────────────┘
+```
+
+Every write goes through the tools that already exist — `edit_task`, `start_task`, `close_task`,
+`append_trail`, `add_task`. The console adds no write path of its own.
+
+`a` adds a tracker: take a URL, test it by calling `list_projects`, show what came back, and only then
+write it to the console's tracker list. A tracker that does not answer is never saved.
+
+Live updates come from `GET /events`, one SSE connection per tracker. An event names which project moved
+and nothing more, so the console re-reads that project's graph — local and instant — rather than trusting
+a payload that is already stale by the time it is drawn.
+
+⚠ One tracker change comes first, and it is not cosmetic. `listProjects` reconstructs a project's id by
+relativising its cache file path, because the file carries only `tasks:`. So a path-shaped id comes back
+without its leading `/`, and a pre-identity orphan cannot be told from a live project — on this machine
+`tasks-mcp projects` returns 33 rows of which 32 are dead. The cache file will declare its own id, and
+`listProjects` will read it: orphans lack the key and are skipped, and the id round-trips verbatim.
+
+⚠ Boundaries this does not cross. `append_trail` writes only the remote's comment thread and raises no
+`/events` change, so the console re-reads a trail when it opens an item. Nothing authenticates the HTTP
+transport, so a remote tracker is only as safe as the network it is on. And dragging is out: the ready
+order is derived on every read, so a dragged permutation has nowhere to be stored.
 
 ## The provider stack
 
