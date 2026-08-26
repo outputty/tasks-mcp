@@ -12,9 +12,7 @@ import { z } from "zod";
 const TrackerEntrySchema = z.object({ url: z.string().min(1) }).strict();
 
 /** The console config file's shape — a list of tracker URLs, and nothing else. */
-export const ConsoleConfigSchema = z
-  .object({ trackers: z.array(TrackerEntrySchema).optional() })
-  .strict();
+const ConsoleConfigSchema = z.object({ trackers: z.array(TrackerEntrySchema).optional() }).strict();
 
 export type TrackerEntry = z.infer<typeof TrackerEntrySchema>;
 

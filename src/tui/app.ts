@@ -159,8 +159,7 @@ export class Console {
     if (key.name === "return") return this.addSubmit(mode);
     mode.probed = undefined; // editing the url invalidates a prior probe
     mode.error = undefined;
-    if (key.name === "backspace") mode.buffer = mode.buffer.slice(0, -1);
-    else if (printable(key)) mode.buffer += key.sequence;
+    mode.buffer = applyTextKey(mode.buffer, key);
   }
 
   /** First ⏎ probes the address; a second ⏎ (once it is proven) saves it. */
@@ -223,8 +222,7 @@ export class Console {
   private async promptKey(key: Key, mode: Mode & { kind: "prompt" }): Promise<void> {
     if (key.name === "escape") return void (this.mode = { kind: "detail", detail: mode.detail });
     if (key.name === "return") return this.submitPrompt(mode);
-    if (key.name === "backspace") mode.buffer = mode.buffer.slice(0, -1);
-    else if (printable(key)) mode.buffer += key.sequence;
+    mode.buffer = applyTextKey(mode.buffer, key);
   }
 
   private async submitPrompt(mode: Mode & { kind: "prompt" }): Promise<void> {
@@ -294,8 +292,15 @@ function cycle(mode: Mode & { kind: "edit" }, dir: 1 | -1): void {
 function typeInto(mode: Mode & { kind: "edit" }, key: Key): void {
   const field = EDIT_FIELDS[mode.field];
   if (FIELD_OPTIONS[field]) return;
-  if (key.name === "backspace") mode.fields[field] = mode.fields[field].slice(0, -1);
-  else if (printable(key)) mode.fields[field] += key.sequence;
+  mode.fields[field] = applyTextKey(mode.fields[field], key);
+}
+
+/** Apply one key to a text buffer: backspace removes the last character, a printable one appends, any
+ *  other key leaves it unchanged. The three text screens — a url, a comment, an edit field — share it. */
+function applyTextKey(current: string, key: Key): string {
+  if (key.name === "backspace") return current.slice(0, -1);
+  if (printable(key)) return current + key.sequence;
+  return current;
 }
 
 /** A single printable character (space included), not a control chord. */
