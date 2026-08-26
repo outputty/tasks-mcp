@@ -14,6 +14,9 @@ export interface QueueRow {
   title: string;
   state: "in progress" | "ready";
   age: string;
+  /** The id of the tracker this row came from — two trackers can hold the same project id, so a write
+   *  routes by this, not by project. Absent for a single-tracker console. */
+  tracker?: string;
 }
 
 /** One tracker's snapshot, assembled from three MCP reads: every task (`list_tasks`, so in_progress is
@@ -24,6 +27,8 @@ export interface ProjectQueue {
   tasks: Task[];
   readyIds: string[];
   claimedAt: Record<string, string>;
+  /** The tracker this snapshot came from, carried onto each row it produces. */
+  tracker?: string;
 }
 
 /**
@@ -43,7 +48,14 @@ export function queueRows(queues: ProjectQueue[], now: number = Date.now()): Que
       const state = rowState(task, ready);
       if (!state) continue;
       const age = state === "in progress" ? ageOf(q.claimedAt[task.id], now) : "—";
-      rows.push({ project: q.project, id: task.id, title: task.title, state, age });
+      rows.push({
+        project: q.project,
+        tracker: q.tracker,
+        id: task.id,
+        title: task.title,
+        state,
+        age,
+      });
     }
   }
   return rows.sort(byProjectThenState);

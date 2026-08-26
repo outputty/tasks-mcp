@@ -9,7 +9,7 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { createHttpServer } from "../src/mcp/http.ts";
 import { TaskStack } from "../src/core/service.ts";
 import { FileProvider } from "../src/core/providers/file.ts";
-import { connectTracker } from "../src/tui/tracker.ts";
+import { connectTracker, type Tracker } from "../src/tui/tracker.ts";
 import { Console } from "../src/tui/app.ts";
 import { tmp, task } from "./helpers.ts";
 
@@ -23,14 +23,13 @@ async function makeApp(svc: TaskStack) {
   });
   const server = createHttpServer(svc);
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
-  const client = await connectTracker(
-    `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`,
-  );
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const local: Tracker = { id: "local", url: base, client: await connectTracker(`${base}/mcp`) };
   let quit = false;
-  const app = new Console(renderer, client, () => (quit = true));
+  const app = new Console(renderer, [local], svc.cacheDir(), () => (quit = true));
   const close = async () => {
     renderer.destroy();
-    await client.close();
+    await local.client.close();
     await closeServer(server);
   };
   return { app, renderOnce, frame: captureCharFrame, quit: () => quit, close };

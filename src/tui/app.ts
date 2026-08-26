@@ -1,14 +1,21 @@
-// The interactive console — a small state machine over the queue and detail screens. It owns the
-// renderer, the MCP client, and the current screen; every keypress runs through `onKey`, which mutates
-// state, may call a write ACTION (all existing tools), and re-paints. Input is handled here rather than
-// through OpenTUI's focusable widgets, so one code path drives every screen and a test can feed keys
-// straight to `onKey` without a terminal.
+// The interactive console — a small state machine over the queue, detail and add-tracker screens. It
+// owns the renderer, the LIST of connected trackers, and the current screen; every keypress runs through
+// `onKey`, which mutates state, may call a write ACTION (all existing tools) on the tracker its row came
+// from, and re-paints. Input is handled here rather than through OpenTUI's focusable widgets, so one
+// code path drives every screen and a test can feed keys straight to `onKey` without a terminal.
 
 import type { CliRenderer } from "@opentui/core";
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { paint as paintScreen } from "./view.ts";
-import { fetchQueues } from "./tracker.ts";
-import { queueRows, type QueueRow } from "./queue.ts";
+import {
+  connectTracker,
+  fetchQueues,
+  mcpEndpoint,
+  probeTracker,
+  type ProbeResult,
+  type Tracker,
+} from "./tracker.ts";
+import { queueRows, type QueueRow, type ProjectQueue } from "./queue.ts";
+import { saveTracker } from "./config.ts";
 import {
   loadDetail,
   editFields,
@@ -25,6 +32,7 @@ import {
   detailLines,
   editLines,
   promptLines,
+  addTrackerLines,
   EDIT_FIELDS,
   FIELD_OPTIONS,
 } from "./format.ts";
@@ -40,6 +48,7 @@ export interface Key {
 
 type Mode =
   | { kind: "queue" }
+  | { kind: "add"; buffer: string; probed?: ProbeResult; error?: string }
   | { kind: "detail"; detail: Detail }
   | { kind: "state"; detail: Detail }
   | { kind: "edit"; detail: Detail; fields: EditFields; field: number }
@@ -48,16 +57,24 @@ type Mode =
 export class Console {
   private mode: Mode = { kind: "queue" };
   private rows: QueueRow[] = [];
+  private failures: string[] = [];
   private selected = 0;
+  private active: Tracker;
   private project = "";
   private error = "";
   private busy = false;
 
+  /** `trackers` starts with the in-process tracker; `cacheDir` is where a newly added tracker is saved;
+   *  `unreachable` is saved-tracker urls that failed to connect at startup, kept visible on the queue. */
   constructor(
     private readonly renderer: CliRenderer,
-    private readonly client: Client,
+    private readonly trackers: Tracker[],
+    private readonly cacheDir: string,
     private readonly quit: () => void,
-  ) {}
+    private readonly unreachable: string[] = [],
+  ) {
+    this.active = trackers[0];
+  }
 
   /** Wire the keyboard and draw the first frame. */
   async start(): Promise<void> {
@@ -66,10 +83,24 @@ export class Console {
     this.render();
   }
 
-  /** Re-read the queue — the one source both screens read, so a write never patches a local copy. */
+  /** Re-read every tracker's queue and merge — the one source both screens read, so a write never
+   *  patches a local copy. A tracker that fails is recorded in `failures`, not fatal. */
   async refresh(): Promise<void> {
-    this.rows = queueRows(await fetchQueues(this.client));
+    this.rows = queueRows(await this.fetchAll());
     if (this.selected >= this.rows.length) this.selected = Math.max(0, this.rows.length - 1);
+  }
+
+  private async fetchAll(): Promise<ProjectQueue[]> {
+    this.failures = [];
+    const all: ProjectQueue[] = [];
+    for (const t of this.trackers) {
+      try {
+        all.push(...(await fetchQueues(t.client, t.id)));
+      } catch {
+        this.failures.push(t.url); // unreachable at read time — its rows are absent, not a crash
+      }
+    }
+    return all;
   }
 
   /** Handle one key: dispatch by screen, surface any write error, re-paint. Serialized so a burst of
@@ -91,6 +122,7 @@ export class Console {
   private async dispatch(key: Key): Promise<void> {
     const mode = this.mode;
     if (mode.kind === "queue") return this.queueKey(key);
+    if (mode.kind === "add") return this.addKey(key, mode);
     if (mode.kind === "detail") return this.detailKey(key, mode.detail);
     if (mode.kind === "state") return this.stateKey(key, mode.detail);
     if (mode.kind === "edit") return this.editKey(key, mode);
@@ -99,6 +131,7 @@ export class Console {
 
   private async queueKey(key: Key): Promise<void> {
     if (key.name === "q") return this.quit();
+    if (key.name === "a") return void (this.mode = { kind: "add", buffer: "" });
     if (key.name === "up") this.selected = Math.max(0, this.selected - 1);
     if (key.name === "down") this.selected = Math.min(this.rows.length - 1, this.selected + 1);
     if (key.name === "return") await this.open();
@@ -107,8 +140,46 @@ export class Console {
   private async open(): Promise<void> {
     const row = this.rows[this.selected];
     if (!row) return;
+    this.active = this.trackerFor(row);
     this.project = row.project;
-    this.mode = { kind: "detail", detail: await loadDetail(this.client, row.project, row.id) };
+    this.mode = {
+      kind: "detail",
+      detail: await loadDetail(this.active.client, row.project, row.id),
+    };
+  }
+
+  /** The tracker a row's writes go to — matched by the id the fetch tagged it with, so two trackers that
+   *  share a project id stay distinct. Falls back to the local tracker for an untagged row. */
+  private trackerFor(row: QueueRow): Tracker {
+    return this.trackers.find((t) => t.id === row.tracker) ?? this.trackers[0];
+  }
+
+  private async addKey(key: Key, mode: Mode & { kind: "add" }): Promise<void> {
+    if (key.name === "escape") return void (this.mode = { kind: "queue" });
+    if (key.name === "return") return this.addSubmit(mode);
+    mode.probed = undefined; // editing the url invalidates a prior probe
+    mode.error = undefined;
+    if (key.name === "backspace") mode.buffer = mode.buffer.slice(0, -1);
+    else if (printable(key)) mode.buffer += key.sequence;
+  }
+
+  /** First ⏎ probes the address; a second ⏎ (once it is proven) saves it. */
+  private async addSubmit(mode: Mode & { kind: "add" }): Promise<void> {
+    if (mode.probed) return this.saveNew(mode.buffer);
+    try {
+      mode.probed = await probeTracker(mode.buffer);
+      mode.error = undefined;
+    } catch (e) {
+      mode.error = e instanceof Error ? e.message : String(e); // shown in the form; nothing is saved
+      mode.probed = undefined;
+    }
+  }
+
+  private async saveNew(url: string): Promise<void> {
+    saveTracker(this.cacheDir, url);
+    this.trackers.push({ id: url, url, client: await connectTracker(mcpEndpoint(url)) });
+    await this.refresh();
+    this.mode = { kind: "queue" };
   }
 
   private detailKey(key: Key, detail: Detail): void {
@@ -128,7 +199,7 @@ export class Console {
       | "replan"
       | undefined;
     if (!to) return;
-    await changeState(this.client, this.project, detail.task.id, to);
+    await changeState(this.active.client, this.project, detail.task.id, to);
     await this.refresh();
     this.mode = { kind: "queue" }; // a close drops the row; start/replan changed it — the queue is truth
   }
@@ -145,7 +216,7 @@ export class Console {
 
   private async saveEdit(mode: Mode & { kind: "edit" }): Promise<void> {
     const patch = editPatch(editFields(mode.detail.task), mode.fields);
-    await applyEdit(this.client, this.project, mode.detail.task.id, patch);
+    await applyEdit(this.active.client, this.project, mode.detail.task.id, patch);
     await this.reopen(mode.detail.task.id);
   }
 
@@ -158,8 +229,9 @@ export class Console {
 
   private async submitPrompt(mode: Mode & { kind: "prompt" }): Promise<void> {
     const id = mode.detail.task.id;
-    if (mode.purpose === "comment") await addComment(this.client, this.project, id, mode.buffer);
-    else await fileIdea(this.client, this.project, `idea-${Date.now()}`, mode.buffer);
+    if (mode.purpose === "comment")
+      await addComment(this.active.client, this.project, id, mode.buffer);
+    else await fileIdea(this.active.client, this.project, `idea-${Date.now()}`, mode.buffer);
     await this.reopen(id);
   }
 
@@ -167,7 +239,7 @@ export class Console {
    *  manual refresh (a trail write raises no /events, so this is the only way its new entry appears). */
   private async reopen(id: string): Promise<void> {
     await this.refresh();
-    this.mode = { kind: "detail", detail: await loadDetail(this.client, this.project, id) };
+    this.mode = { kind: "detail", detail: await loadDetail(this.active.client, this.project, id) };
   }
 
   private render(): void {
@@ -177,7 +249,9 @@ export class Console {
 
   private lines(): string[] {
     const mode = this.mode;
-    if (mode.kind === "queue") return queueLines(this.rows, this.selected);
+    if (mode.kind === "queue")
+      return [...queueLines(this.rows, this.selected), ...this.failureLines()];
+    if (mode.kind === "add") return addTrackerLines(mode.buffer, mode.probed, mode.error);
     if (mode.kind === "edit") return editLines(mode.fields, mode.field);
     if (mode.kind === "prompt") return promptLines(promptLabel(mode.purpose), mode.buffer);
     if (mode.kind === "state") {
@@ -186,15 +260,23 @@ export class Console {
     return detailLines(mode.detail);
   }
 
+  private failureLines(): string[] {
+    const urls = [...new Set([...this.unreachable, ...this.failures])];
+    return urls.map((url) => `⚠ unreachable: ${url}`);
+  }
+
   private title(): string {
     const mode = this.mode;
     if (mode.kind === "queue") return `tasks-mcp — ${count(this.rows.length)}`;
+    if (mode.kind === "add") return "add tracker";
     return `${mode.detail.task.id} — ${this.project}`;
   }
 
   private footer(): string {
-    if (this.mode.kind === "queue") return "↑↓ move · ⏎ open · q quit";
-    if (this.mode.kind === "detail") return "e edit · s state · c comment · n new idea · esc back";
+    const mode = this.mode;
+    if (mode.kind === "queue") return "↑↓ move · ⏎ open · a add tracker · q quit";
+    if (mode.kind === "detail") return "e edit · s state · c comment · n new idea · esc back";
+    if (mode.kind === "add") return addFooter(mode);
     return "esc cancel";
   }
 }
@@ -219,6 +301,11 @@ function typeInto(mode: Mode & { kind: "edit" }, key: Key): void {
 /** A single printable character (space included), not a control chord. */
 function printable(key: Key): boolean {
   return !key.ctrl && !key.meta && (key.sequence?.length ?? 0) === 1 && key.sequence! >= " ";
+}
+
+function addFooter(mode: Mode & { kind: "add" }): string {
+  if (mode.error) return "esc cancel";
+  return mode.probed ? "⏎ save · esc cancel" : "⏎ test · esc cancel";
 }
 
 function promptLabel(purpose: "comment" | "idea"): string {

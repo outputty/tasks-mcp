@@ -11,7 +11,8 @@ import type { AddressInfo } from "node:net";
 import { createCliRenderer } from "@opentui/core";
 import { startHttpServer } from "../mcp/http.ts";
 import type { TaskService } from "../core/service.ts";
-import { connectTracker } from "./tracker.ts";
+import { connectTracker, mcpEndpoint, type Tracker } from "./tracker.ts";
+import { readTrackers } from "./config.ts";
 import { Console } from "./app.ts";
 
 const FFI_FLAG = "--experimental-ffi";
@@ -26,15 +27,43 @@ const REEXEC_ENV = "TASKS_MCP_TUI_FFI";
 export async function runTui(service: TaskService): Promise<void> {
   if (reexecedForFfi()) return;
   const server = startHttpServer(service, { port: 0 });
-  const client = await connectTracker(await mcpUrl(server));
+  const cacheDir = service.cacheDir();
+  const base = await localBase(server);
+  const local: Tracker = {
+    id: "local",
+    url: base,
+    client: await connectTracker(mcpEndpoint(base)),
+  };
+  const { trackers, unreachable } = await connectSaved(cacheDir, local);
   const renderer = await createCliRenderer({ exitOnCtrlC: true });
-  const app = new Console(renderer, client, () => {
-    renderer.destroy();
-    void client.close();
-    server.close();
-    process.exit(0);
-  });
-  await app.start();
+  const quit = () => shutdown(renderer, server, trackers);
+  await new Console(renderer, trackers, cacheDir, quit, unreachable).start();
+}
+
+/** Tear everything down and exit: the renderer, every tracker's client, and the in-process server. */
+function shutdown(renderer: { destroy: () => void }, server: Server, trackers: Tracker[]): void {
+  renderer.destroy();
+  for (const t of trackers) void t.client.close();
+  server.close();
+  process.exit(0);
+}
+
+/** Connect the saved trackers alongside the local one; a tracker down at startup degrades — its url is
+ *  returned as unreachable (shown on the queue), and the console still runs. */
+async function connectSaved(
+  cacheDir: string,
+  local: Tracker,
+): Promise<{ trackers: Tracker[]; unreachable: string[] }> {
+  const trackers: Tracker[] = [local];
+  const unreachable: string[] = [];
+  for (const { url } of readTrackers(cacheDir)) {
+    try {
+      trackers.push({ id: url, url, client: await connectTracker(mcpEndpoint(url)) });
+    } catch {
+      unreachable.push(url);
+    }
+  }
+  return { trackers, unreachable };
 }
 
 /**
@@ -54,9 +83,9 @@ function reexecedForFfi(): boolean {
   process.exit(child.status ?? 1);
 }
 
-/** The `/mcp` URL of `server` once it is bound to its ephemeral loopback port. */
-async function mcpUrl(server: Server): Promise<string> {
+/** The base url of the in-process server once it is bound to its ephemeral loopback port. */
+async function localBase(server: Server): Promise<string> {
   if (!server.listening) await once(server, "listening");
   const addr = server.address() as AddressInfo;
-  return `http://127.0.0.1:${addr.port}/mcp`;
+  return `http://127.0.0.1:${addr.port}`;
 }

@@ -12,7 +12,8 @@ import { BoxRenderable, TextRenderable, type CliRenderer } from "@opentui/core";
  * `paint(renderer, "tasks-mcp", "q quit", ["PROJECT  TASK", "p  t"])` → a two-line box.
  */
 export function paint(renderer: CliRenderer, title: string, footer: string, lines: string[]): void {
-  for (const child of [...renderer.root.getChildren()]) {
+  while (renderer.root.getChildrenCount() > 0) {
+    const child = renderer.root.getChildren()[0];
     renderer.root.remove(child);
     child.destroyRecursively();
   }
