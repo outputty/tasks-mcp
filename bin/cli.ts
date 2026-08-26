@@ -3,13 +3,14 @@
 // `.mcp.json` -> `bunx @outputty/tasks-mcp`), or `--http` for the standalone HTTP server. The
 // subcommands drive the same core directly, no MCP involved: `add`, `add-target`, `edit`, `delete`,
 // `list`, `ready`, `roadmap`, `planning`, `schedule`, `prereqs`, `blockers`, `get`, `start`, `close`,
-// `trail`, `trail-add`, `sync`.
+// `trail`, `trail-add`, `sync`, `identify`.
 
 import { Command } from "commander";
 import { runStdio } from "../src/mcp/stdio.ts";
 import { createHttpServer } from "../src/mcp/http.ts";
 import { SERVER_INFO } from "../src/mcp/server.ts";
 import { makeService, startBackgroundSync } from "../src/core/service.ts";
+import { validateProjectId } from "../src/core/providers/config.ts";
 import type { ServerOptions } from "../src/core/types.ts";
 import type { ProjectContext, TrailEntry, TrailKind } from "../src/core/types.ts";
 import {
@@ -44,7 +45,11 @@ const program = new Command()
     (v) => Number.parseInt(v, 10),
     0,
   )
-  .option("--project <path>", "target repo for subcommands (default: cwd)");
+  .option(
+    "--project-id <id>",
+    "default project id for the MCP server and subcommands — an opaque, supplied string",
+  )
+  .option("--project <id>", "project id for subcommands (overrides --project-id)");
 
 /** The CLI-set knobs, in ServerOptions shape. `projects` is only carried when actually turned off. */
 function serverOptions(): ServerOptions {
@@ -59,7 +64,11 @@ function serverOptions(): ServerOptions {
   };
 }
 
-const ctx = (): ProjectContext => ({ project: program.opts().project || process.cwd() });
+// The project id a subcommand acts on: an explicit --project, else --project-id, else the cwd (a valid
+// opaque id for direct CLI use). Validated, never resolved against git or the filesystem.
+const projectId = (): string =>
+  validateProjectId(program.opts().project ?? program.opts().projectId ?? process.cwd());
+const ctx = (): ProjectContext => ({ project: projectId() });
 const service = () => makeService(serverOptions());
 const out = (value: unknown) => console.log(JSON.stringify(value, null, 2));
 
@@ -251,17 +260,28 @@ program
   .description("reconcile every layer of the stack, both ways")
   .action(async () => out(await service().sync(ctx())));
 
+program
+  .command("identify")
+  .description(
+    "echo the project id a call would use — opaque, validated, never resolved against git or the fs",
+  )
+  .action(() => out({ id: projectId() }));
+
 // No subcommand: run the MCP server on the chosen transport. One service instance backs both the
 // transport and the background loop, so the loop reconciles exactly the projects the server serves.
+// The --project-id (or --project) becomes the server's default project, filling a tool call that omits
+// one — validated up front so a bad default fails at launch, not on the first call.
 program.action(async () => {
   const opts = program.opts();
   const svc = makeService(serverOptions());
+  const rawDefault = opts.project ?? opts.projectId;
+  const defaultProject = rawDefault === undefined ? undefined : validateProjectId(rawDefault);
   if (opts.syncInterval > 0) startBackgroundSync(svc, opts.syncInterval);
-  if (!opts.http) return runStdio(svc);
+  if (!opts.http) return runStdio(svc, defaultProject);
   console.error(
     `tasks-mcp (http) listening on http://localhost:${opts.port}/mcp  (health: /health)`,
   );
-  createHttpServer(svc).listen(opts.port);
+  createHttpServer(svc, defaultProject).listen(opts.port);
 });
 
 await program.parseAsync(process.argv);

@@ -19,6 +19,11 @@ import { LABEL_FIELD_NAMES } from "../types.ts";
 export const ProjectConfigSchema = z
   .object({
     provider: z.string().min(1).optional().describe("The remote layer backing the project."),
+    repo: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("GitHub coordinates owner/repo; defaults to the launch cwd's origin."),
     projects: z.boolean().optional().describe("Projects v2 board sync on/off (default on)."),
     projectNumber: z.number().int().positive().optional().describe("Target an existing board."),
     board: z.string().min(1).optional().describe("Board title to find or create (default Tasks)."),
@@ -51,6 +56,22 @@ export interface ConfigSources {
 export function defaultCacheDir(): string {
   const base = process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
   return path.join(base, "tasks-mcp");
+}
+
+/**
+ * A supplied project id, checked. It is opaque — never resolved against a provider or the filesystem —
+ * but it becomes a path segment under the cache dir, so a `..` component would let it escape; that is
+ * refused. Everything else (an `owner/repo` id, or even an absolute path from a pre-id caller) is a
+ * valid id and nests harmlessly. Returns the id unchanged so a faithful echo round-trips.
+ *
+ * `validateProjectId("../../etc/passwd")` → throws; `validateProjectId("outputty/tasks-mcp")` → same.
+ */
+export function validateProjectId(id: string): string {
+  if (!id.trim()) throw new Error("a project id may not be empty");
+  if (id.split(/[/\\]/).includes("..")) {
+    throw new Error(`invalid project id '${id}' — an id may not contain path traversal`);
+  }
+  return id;
 }
 
 /** A project's stable file slug: `<basename>-<hash>`, keyed by the project's absolute path. */

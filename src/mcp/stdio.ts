@@ -5,6 +5,9 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { createMcpServer } from "./server.ts";
 import { makeService, type TaskService } from "../core/service.ts";
 
-export async function runStdio(service: TaskService = makeService()): Promise<void> {
-  await createMcpServer(service).connect(new StdioServerTransport());
+export async function runStdio(
+  service: TaskService = makeService(),
+  defaultProject?: string,
+): Promise<void> {
+  await createMcpServer(service, defaultProject).connect(new StdioServerTransport());
 }
