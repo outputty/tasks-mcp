@@ -16,12 +16,12 @@ reader can list them and follow them live, and a project may be backed by more t
     list_projects {}                              // every project this tracker holds
     GET /events                                   // SSE — one line each time a project's graph moves
 
-Identity is the change everything rests on. Today a project is its **absolute path**, hashed into
-`<basename>-<sha256(path)[0:8]>.yaml`, so every git worktree of one repository becomes a separate project
-holding its own stale copy of the graph. Naming it after its GitHub repo would fix that and entrench a
-worse problem — the seam exists for several remotes, so GitHub would become the authority over the
-identity of projects that may not use it. A supplied id fixes both: nothing derives it, and the stack is
-then free to hold as many remotes as the project configures.
+Identity is the change everything rested on, and it has shipped. A project is an opaque, supplied id,
+never derived from a path or a provider. (Before this, a project was its **absolute path**, hashed into
+a slug, so every git worktree of one repository became a separate project holding its own stale copy of
+the graph; deriving the id from the GitHub repo would have fixed that while making GitHub the authority
+over the identity of projects that may not use it.) Nothing derives the id, and a project's stack is now
+free to hold as many remotes as it configures.
 
 Storage follows the id verbatim — `<cacheDir>/<id>.yaml`, nesting where the id contains `/` — so the
 directory is readable, and therefore enumerable. Where a remote lives is per-project *configuration*
@@ -85,8 +85,9 @@ flowchart TB
 
 ### provider stack
 
-`TaskStack` orchestrates `Provider[]`, built by `buildStack(remote, options, config)` —
-`[FileProvider, GitHubProvider]` in production, three layers in the stack test suite. Order is
+`TaskStack` orchestrates `Provider[]`, built by `buildStack(remotes, options, config)` —
+`[FileProvider, ...remotes]` for a configured `providers` list (`[FileProvider, GitHubProvider]` by
+default; the singular `provider` is a one-element list), three layers in the stack test suite. Order is
 authority order: every read is answered by the top layer; the deepest layer wins any sync
 disagreement, and the merged truth is pushed back into each layer that lacks a task or
 disagrees.
@@ -110,8 +111,8 @@ only vanishes by hand.
 ### file layer
 
 `FileProvider`, the top of the stack: one YAML file per project under the OS cache dir
-(`XDG_CACHE_HOME` or `~/.cache/tasks-mcp`, overridable with `--cache-dir`), keyed
-`<basename>-<hash>.yaml` — never inside the user's repo. Every read tool (`list_ready`,
+(`XDG_CACHE_HOME` or `~/.cache/tasks-mcp`, overridable with `--cache-dir`), keyed on the project id
+verbatim (`<cacheDir>/<id>.yaml`, nesting on `/`) — never inside the user's repo. Every read tool (`list_ready`,
 `prereqs`, `blockers`, …) is answered here: instant, offline, no network.
 
 The file is disposable by design: `sync` reconstructs the full task, deps included, from the
@@ -688,9 +689,9 @@ The `ready-and-planning` example in `examples.md`.
 ### library
 
 The core is importable; the MCP layer is a wrapper, never a requirement. `.` exports
-`makeService`/`TaskStack`, `FileProvider`/`GitHubProvider`/`buildStack`, the pure graph
+`makeService`/`TaskStack`, `FileProvider`/`GitHubProvider`/`buildStack`/`resolveRemotes`, the pure graph
 functions (`ready`, `planning`, `schedule`, `prereqs`, `blockers`, `priorityOf`),
-`ConfigProvider`/`ProjectConfigSchema`/`projectSlug`, `DuplicateTaskError`, and the types.
+`ConfigProvider`/`ProjectConfigSchema`/`validateProjectId`, `DuplicateTaskError`, and the types.
 `./mcp` exports `createMcpServer`/`createHttpServer`/`runStdio`.
 
 #### Example
@@ -701,6 +702,8 @@ The `library-blockers` example in `examples.md` — real observed output: `schem
 
 - v0.7.0 broke this surface once: `CachedTaskService` → `TaskStack`, `stackFor` → `buildStack`
   (v0.8.0), `Cache`/`Refs`/`CacheEntry`/`providerFor` gone.
+- The identity change broke it again: `projectSlug`/`repoRoot`/`repoSlug` are gone (a project id is
+  supplied and used verbatim, so nothing hashes a path), replaced by `validateProjectId`.
 
 ### branch parameter unused
 
@@ -900,6 +903,10 @@ release; never create a release unprompted. On a yes: bump version, commit, push
 | branch parameter unused | limitation | Every tool accepts branch; nothing reads it — declared at the initial import, never implemented. |
 | trail store | feature | A task's trail IS its GitHub issue comment thread — every comment an entry, people's comments included. append_trail posts a comment; get_trail reads the whole thread. There is no separate trail store: the provider that owns the issue owns its comments. |
 | central config | feature | Preferences are configured through the server and stored beside the caches — never by files inside the user's repo. |
+| project identity | feature | A project is an opaque, supplied id — `--project-id` sets a server default, a tool call may override it — never derived from a path or a provider. Used verbatim as the cache filename (nesting on `/`), so worktrees sharing one checked-in id share one cache and one claim ledger. |
+| id containment | limitation | The supplied id becomes a cache path segment, so `cachePath` (`src/core/providers/config.ts`) refuses any id that would escape the cache dir. Probe: `node dist/cli.js identify --project ../../etc/passwd` must print `Error: invalid project id … an id may not contain path traversal`. |
+| coordinates are config | feature | GitHub `owner/repo` is the project's `repo` setting, else the launch cwd's `origin` — never the id. A server outside any repo with no `repo` errors naming `repo`. Probe: `cd /tmp && node dist/cli.js sync --project x` prints `Error: no GitHub repo for this project — set \`repo\` …`. |
+| multi-remote stack | feature | A project configures a `providers` list (deepest last); `buildStack` returns `[FileProvider, ...remotes]` for any length; the singular `provider` is the one-element form. Only `github` is registered, so a list can only repeat it; the N-layer semantics are proven with `MockProvider`. |
 | deployment flags | knob | How the server is deployed, as CLI flags in the .mcp.json args — distinct from user preferences. |
 | oxc toolchain with working-set caps | pattern | One toolchain end to end, with complexity budgets the build enforces. |
 | e2e tests nock at the wire | pattern | Tests drive the real stack — provider, service, protocol, transport — and fake only the wire. |
