@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ServerResponse } from "node:http";
 import type { ChangeBus } from "../core/changes.ts";
-import { walkProjectFiles, projectIdOf } from "../core/projects.ts";
+import { walkProjectFiles, projectIdOf, NON_PROJECT_DIRS } from "../core/projects.ts";
 
 /**
  * Stream `event: changed` to one SSE client for every project change, until it disconnects. The
@@ -31,10 +31,6 @@ export function handleEvents(bus: ChangeBus, res: ServerResponse): void {
     res.end();
   });
 }
-
-// The cache-root subdirectories that never hold a project file — the sibling stores are watched by no
-// one, and a fresh one appearing must not be adopted as a project folder.
-const NON_PROJECT_DIRS = new Set(["claims", "events"]);
 
 /**
  * Watch `cacheDir` and its project-id subfolders for ANY process's writes, calling `onChange(project)`

@@ -23,9 +23,10 @@ export interface ProjectSummary {
   updated_at: string;
 }
 
-// Directories under the cache root that never hold a project file — the sibling stores. Skipped so the
-// walk neither wastes reads on them nor mistakes one for a project.
-const NON_PROJECT_DIRS = new Set(["claims", "events"]);
+/** Directories under the cache root that never hold a project file — the sibling stores (`claims`, and
+ *  the legacy `events` spool). Both the walk here and the change watcher skip them, so they share one
+ *  definition rather than drifting. */
+export const NON_PROJECT_DIRS = new Set(["claims", "events"]);
 
 /**
  * Every project the cache directory holds, sorted by id so a console's list never reorders itself
