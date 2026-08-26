@@ -5,13 +5,14 @@ Every tool the server registers, its arguments, and what it returns. Generated f
 
 ## Common arguments
 
-Every tool takes these. The server has no working directory of its own, so `project` is required
-everywhere.
+Every tool takes these, except [`list_projects`](#list_projects), which asks about the server itself
+and takes no `project`. The server has no working directory of its own, so `project` names which one a
+call is about; omit it to use the server's `--project-id` default.
 
-| Argument  | Type     | Required | Meaning                                          |
-| --------- | -------- | -------- | ------------------------------------------------ |
-| `project` | `string` | yes      | Absolute path to the target repository root.     |
-| `branch`  | `string` | no       | Branch to scope to; the backend decides its use. |
+| Argument  | Type     | Required | Meaning                                                  |
+| --------- | -------- | -------- | -------------------------------------------------------- |
+| `project` | `string` | no       | The project id; omit to use the server's `--project-id`. |
+| `branch`  | `string` | no       | Branch to scope to; the backend decides its use.         |
 
 Each tool below lists only the arguments it adds. A list argument (`deps`, `scope`, `tags`, `clear`)
 accepts either a string array or a comma-separated string.
@@ -28,6 +29,7 @@ serialized into `content[0].text`.
 | [`list_planning`](#list_planning) | which records the planning stage still owns    | no     |
 | [`schedule`](#schedule)           | the open plan as dependency-ordered layers     | no     |
 | [`list_tasks`](#list_tasks)       | every record, full, open and done              | no     |
+| [`list_projects`](#list_projects) | every project the cache holds, with counts     | no     |
 | [`get_task`](#get_task)           | one record                                     | no     |
 | [`add_task`](#add_task)           | create a task                                  | yes    |
 | [`add_target`](#add_target)       | create a roadmap target                        | yes    |
@@ -238,6 +240,45 @@ Every record the top provider layer holds, full, open and done.
 No arguments beyond the common ones.
 
 Returns `ids` (`string[]`) and `tasks` — full [task records](reference-task-record.md).
+
+## `list_projects`
+
+Every project the server's cache directory holds — the one tool that takes **no** `project`, because it
+answers about the server itself rather than one project. Read-only and local: it never touches a
+provider or the network.
+
+No arguments (not even the common `project`).
+
+Returns `projects`, an array sorted by `project` of:
+
+| Field         | Type     | Meaning                                                                     |
+| ------------- | -------- | --------------------------------------------------------------------------- |
+| `project`     | `string` | The project id.                                                             |
+| `tasks`       | `number` | Total records the project holds, targets included.                          |
+| `open`        | `number` | Records with status `open`.                                                 |
+| `in_progress` | `number` | Records with status `in_progress`.                                          |
+| `done`        | `number` | Records with status `done`.                                                 |
+| `updated_at`  | `string` | ISO 8601 mtime of the cache file — when the CACHE last changed, not GitHub. |
+
+`tasks` equals `open + in_progress + done`. `updated_at` is the cache file's mtime, so a project edited
+only on GitHub reads an older stamp until the next `sync`. An unparseable or non-project file in the
+cache directory is skipped, so one bad file never takes the listing down; an empty cache directory
+returns `{ "projects": [] }`.
+
+```json
+{
+  "projects": [
+    {
+      "project": "outputty/tasks-mcp",
+      "tasks": 3,
+      "open": 1,
+      "in_progress": 1,
+      "done": 1,
+      "updated_at": "2026-08-26T19:12:32.494Z"
+    }
+  ]
+}
+```
 
 ## `get_task`
 

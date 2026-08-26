@@ -103,7 +103,7 @@ $ tasks-mcp ready
 ### Reference
 
 - [MCP tools](https://github.com/outputty/tasks-mcp/blob/main/docs/reference-mcp-tools.md) — all
-  twenty tools, their arguments, and their results.
+  twenty-one tools, their arguments, and their results.
 - [CLI](https://github.com/outputty/tasks-mcp/blob/main/docs/reference-cli.md) — every subcommand,
   flag, and printed shape.
 - [Task record](https://github.com/outputty/tasks-mcp/blob/main/docs/reference-task-record.md) — the
