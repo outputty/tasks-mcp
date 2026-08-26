@@ -3,6 +3,7 @@
 // stack is file-only, so nothing here touches the network and no nock is needed. The two-real-processes
 // rule (lessons.md, the false-positive channel probe) is why the cross-process test spawns `node`.
 
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
@@ -13,6 +14,7 @@ import { test, expect } from "vitest";
 import { createHttpServer, startHttpServer } from "../src/mcp/http.ts";
 import { TaskStack } from "../src/core/service.ts";
 import { FileProvider } from "../src/core/providers/file.ts";
+import { readProjectSummaries } from "../src/core/projects.ts";
 import { tmp, task } from "./helpers.ts";
 
 /** A file-only stack: the file layer alone, no remote, so create/update never reach the network. */
@@ -136,9 +138,10 @@ test("a write by a DIFFERENT process reaches a connected /events client", async 
   const client = connectEvents(base);
   await client.ready;
 
-  // A real second process writes a cache file — the same fs.writeFileSync the file layer performs.
+  // A real second process writes a cache file — the same fs.writeFileSync the file layer performs,
+  // declaring its id the way the file layer now does.
   const file = path.join(cache.dir, "other-proj.yaml");
-  const script = `require('fs').writeFileSync(process.argv[1], 'tasks:\\n  - id: a\\n    title: A\\n    status: open\\n')`;
+  const script = `require('fs').writeFileSync(process.argv[1], 'project: other-proj\\ntasks:\\n  - id: a\\n    title: A\\n    status: open\\n')`;
   const child = spawnSync(process.execPath, ["-e", script, file]);
   expect(child.status).toBe(0);
 
@@ -164,12 +167,68 @@ test("a DIFFERENT process creating a brand-new NESTED owner/repo project reaches
   const script =
     `const fs=require('fs'),path=require('path');const f=process.argv[1];` +
     `fs.mkdirSync(path.dirname(f),{recursive:true});` +
-    `fs.writeFileSync(f,'tasks:\\n  - id: a\\n    title: A\\n    status: open\\n')`;
+    `fs.writeFileSync(f,'project: acme/gadget\\ntasks:\\n  - id: a\\n    title: A\\n    status: open\\n')`;
   const child = spawnSync(process.execPath, ["-e", script, file]);
   expect(child.status).toBe(0);
 
   const evt = await client.waitFor("acme/gadget");
   expect(evt.project).toBe("acme/gadget");
+
+  client.close();
+  await closeServer(server);
+  cache.cleanup();
+});
+
+test("a path-shaped id's /events payload and its list_projects row carry the SAME string", async () => {
+  const cache = tmp();
+  const service = fileStack(cache.dir);
+  const server = createHttpServer(service);
+  const base = await listen(server);
+  const client = connectEvents(base);
+  await client.ready;
+
+  // The file nests at <cacheDir>/Users/x/repo.yaml (the leading slash collapses on join) but declares
+  // the absolute id. Both the stream and the reader must read the key, or the console — which compares
+  // one against the other — never matches.
+  const id = "/Users/x/repo";
+  const file = path.join(cache.dir, "Users", "x", "repo.yaml");
+  const script =
+    `const fs=require('fs'),path=require('path');const f=process.argv[1];` +
+    `fs.mkdirSync(path.dirname(f),{recursive:true});` +
+    `fs.writeFileSync(f,'project: /Users/x/repo\\ntasks:\\n  - id: a\\n    title: A\\n    status: open\\n')`;
+  expect(spawnSync(process.execPath, ["-e", script, file]).status).toBe(0);
+
+  const evt = await client.waitFor(id);
+  const [row] = readProjectSummaries(cache.dir);
+  expect(evt.project).toBe(id); // the stream kept the leading slash
+  expect(row.project).toBe(evt.project); // and it matches the reader exactly
+
+  client.close();
+  await closeServer(server);
+  cache.cleanup();
+});
+
+test("an orphan write (no project: key) raises no /events change; a real write beside it still does", async () => {
+  const cache = tmp();
+  const service = fileStack(cache.dir);
+  const server = createHttpServer(service);
+  const base = await listen(server);
+  const client = connectEvents(base);
+  await client.ready;
+
+  // An old-shape file with no declared id — the watcher cannot name it, so it must raise nothing.
+  const orphan = path.join(cache.dir, "legacy-6e668089.yaml");
+  const writeOrphan = `require('fs').writeFileSync(process.argv[1], 'tasks:\\n  - id: a\\n    status: open\\n')`;
+  expect(spawnSync(process.execPath, ["-e", writeOrphan, orphan]).status).toBe(0);
+
+  // A real project written after it — its event is the one that must arrive.
+  const real = path.join(cache.dir, "real-proj.yaml");
+  const writeReal = `require('fs').writeFileSync(process.argv[1], 'project: real-proj\\ntasks:\\n  - id: a\\n    status: open\\n')`;
+  expect(spawnSync(process.execPath, ["-e", writeReal, real]).status).toBe(0);
+
+  await client.waitFor("real-proj");
+  expect(client.changes.every((c) => c.project === "real-proj")).toBe(true); // no phantom orphan event
+  expect(fs.existsSync(orphan)).toBe(true); // and skipping is not deleting
 
   client.close();
   await closeServer(server);

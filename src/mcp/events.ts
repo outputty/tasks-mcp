@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ServerResponse } from "node:http";
 import type { ChangeBus } from "../core/changes.ts";
-import { walkProjectFiles, projectIdOf, NON_PROJECT_DIRS } from "../core/projects.ts";
+import { walkProjectFiles, declaredProjectId, NON_PROJECT_DIRS } from "../core/projects.ts";
 
 /**
  * Stream `event: changed` to one SSE client for every project change, until it disconnects. The
@@ -95,13 +95,16 @@ function subdirsOf(dir: string): string[] {
   }
 }
 
-/** Every project file's mtime keyed by project id — the snapshot a re-scan diffs to find what moved,
- *  independent of the watcher event's (unreliable, platform-specific) filename. */
+/** Every project file's mtime keyed by the id the file DECLARES — the snapshot a re-scan diffs to find
+ *  what moved, independent of the watcher event's (unreliable, platform-specific) filename. A file with
+ *  no `project:` key is a pre-identity orphan: the watcher cannot name it, so it raises no change. */
 function statAll(cacheDir: string): Map<string, number> {
   const out = new Map<string, number>();
   for (const file of walkProjectFiles(cacheDir)) {
+    const id = declaredProjectId(file);
+    if (id === null) continue; // an orphan or unparseable file cannot be named — raise nothing
     try {
-      out.set(projectIdOf(cacheDir, file), fs.statSync(file).mtimeMs);
+      out.set(id, fs.statSync(file).mtimeMs);
     } catch {
       // vanished between the walk and the stat — skip
     }

@@ -14,7 +14,9 @@ import { createHttpServer } from "../src/mcp/http.ts";
 import { TaskStack } from "../src/core/service.ts";
 import { FileProvider } from "../src/core/providers/file.ts";
 import { GitHubProvider } from "../src/core/providers/github.ts";
+import { parse } from "yaml";
 import { ConfigProvider, validateProjectId, cachePath } from "../src/core/providers/config.ts";
+import { readProjectSummaries } from "../src/core/projects.ts";
 import { buildStack, resolveRemotes } from "../src/core/providers/provider.ts";
 import { task, tmp } from "./helpers.ts";
 import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
@@ -174,6 +176,37 @@ test("a nested id, a top-level id, and the id `claims` each key without collidin
   // The top-level id `claims` is the FILE claims.yaml, distinct from the claims/ ledger DIRECTORY.
   expect(fs.statSync(path.join(cache.dir, "claims.yaml")).isFile()).toBe(true);
   expect(fs.statSync(path.join(cache.dir, "claims")).isDirectory()).toBe(true);
+  cache.cleanup();
+});
+
+test("a file-layer write declares its id, and an absolute-path id round-trips exactly through the projects row", async () => {
+  const cache = tmp();
+  const id = "/Users/x/Documents/repo"; // an absolute path is a perfectly ordinary opaque id
+  await fileStack(cache.dir).create({ project: id }, task({ id: "t1", title: "one" }));
+
+  // contract 2: the cache file carries a `project:` key holding the id verbatim.
+  const file = cachePath(cache.dir, id, ".yaml");
+  expect((parse(fs.readFileSync(file, "utf8")) as { project?: string }).project).toBe(id);
+
+  // contract 1: `identify` echoes validateProjectId(id) and the projects row reads the declared key —
+  // the SAME string, leading separator included, where before they differed by the stripped `/`.
+  const [row] = readProjectSummaries(cache.dir);
+  expect(row.project).toBe(validateProjectId(id));
+  expect(row.project).toBe(id);
+  cache.cleanup();
+});
+
+test("load reads a file's tasks whether or not it declares an id (both build directions)", async () => {
+  const cache = tmp();
+  // A NEW file (declares `project:`) — a new build reads its tasks through the declared-id key.
+  await fileStack(cache.dir).create({ project: "acme/new" }, task({ id: "a", title: "A" }));
+  expect((await fileStack(cache.dir).get({ project: "acme/new" }, "a"))?.title).toBe("A");
+  // An OLD file (no `project:` key, as a pre-key build wrote it) — tryParse ignores the missing key
+  // and still reads the tasks, so a new build reads an old file unchanged.
+  const old = path.join(cache.dir, "acme", "old.yaml");
+  fs.mkdirSync(path.dirname(old), { recursive: true });
+  fs.writeFileSync(old, "tasks:\n  - id: b\n    title: B\n    status: open\n");
+  expect((await fileStack(cache.dir).get({ project: "acme/old" }, "b"))?.title).toBe("B");
   cache.cleanup();
 });
 
