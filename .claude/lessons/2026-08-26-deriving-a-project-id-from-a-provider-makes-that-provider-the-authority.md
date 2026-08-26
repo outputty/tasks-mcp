@@ -85,15 +85,33 @@ into the repository, so every worktree inherits the same `--project-id` with not
 5. The same session found the reciprocal gap: `buildStack` returns exactly two layers, so the N-remote
    promise is unkept in the builder as well. Folded into the same target.
 
-×1 in this archive. The shape to watch is broader than identity: **any key derived from one layer's
-coordinates silently promotes that layer**, and the promotion is invisible while only one layer exists.
+6. **The same mistake reappeared one build later, in the opposite direction.** The identity work
+   shipped, and `listProjects` (`src/core/service.ts:121`) re-derived each project's id by relativising
+   its cache file path — because `FileProvider.save` never recorded the id it already had. Two defects,
+   one cause: a path-shaped id came back stripped of its leading `/` (`identify` says
+   `/Users/…/tasks-mcp`, `list_projects` and `/events` say `Users/…/tasks-mcp`), and a pre-identity
+   orphan became indistinguishable from a live project — `tasks-mcp projects` returned **33 rows of
+   which 32 were dead**. Fixed by `cache-declares-id-1787773896`: the file declares its own id.
+
+×2 in this archive, and the second run is the more general one. The first was *derived from a provider*;
+the second was *derived from a filename by a reader who could have been told*. The shape to watch is
+broader than identity: **any key one component derives, rather than being told, is a key that can be
+derived differently somewhere else** — and while only one derivation exists, the divergence is
+invisible.
 
 ## 5. How to prevent it
 
-**When a design proposes deriving a system-wide key from a layer's data, name the layer that would be
-demoted, and check whether the seam claims to support more than one.** Do this at the point the
-derivation is proposed, not at review — the derivation looked free precisely because only one
-implementation existed to test it against.
+**An identity is recorded by whoever mints it, and read by everyone else. Never re-derived.** Both runs
+of this lesson are the same act: a component that could have been *told* an id instead computed one, and
+the computation was lossy in a way nothing detected until a second reader disagreed.
+
+Two checks, at the moment a derivation is proposed rather than at review:
+
+1. **Does something upstream already know this value?** If the writer knew the id, the reader is not
+   allowed to infer it — record it and read it back.
+2. **If it must be derived, which component does the deriving make authoritative?** Name the one that
+   would be demoted, and check whether the seam claims to support more than one. The derivation looks
+   free precisely because only one implementation exists to test it against.
 
 The concrete rule for this repository, now in `product.md`'s Language:
 
