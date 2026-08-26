@@ -44,8 +44,23 @@ test("planning: owns drafting and replan, disjoint from ready", () => {
     task({ id: "b", spec: "settled" }),
     task({ id: "c", spec: "replan" }),
   ];
-  expect(planning(tasks).map((x) => x.id)).toEqual(["a", "c"]);
+  expect(planning(tasks).map((x) => x.id)).toEqual(["c", "a"]); // the replan leads
   expect(ready(tasks).map((x) => x.id)).toEqual(["b"]);
+});
+
+test("planning ranks a resubmitted task above one that was never specced", () => {
+  const tasks = [
+    task({ id: "never-specced", spec: "drafting" }),
+    task({ id: "sent-back", spec: "replan" }),
+    task({ id: "also-drafting", spec: "drafting" }),
+    task({ id: "also-sent-back", spec: "replan" }),
+  ];
+  expect(planning(tasks).map((x) => x.id)).toEqual([
+    "sent-back",
+    "also-sent-back",
+    "never-specced",
+    "also-drafting",
+  ]);
 });
 
 test("specSettled: absent means settled", () => {

@@ -44,7 +44,7 @@ Check it:
 
 ```console
 $ tasks-mcp --version
-0.20.0
+0.21.0
 ```
 
 ## Step 3: file the target

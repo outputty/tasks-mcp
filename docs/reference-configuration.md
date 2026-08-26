@@ -1,7 +1,7 @@
 # Configuration reference
 
 The settings, the four layers that resolve them, and the files they live in. Generated from
-`src/core/providers/config.ts` for version 0.20.0.
+`src/core/providers/config.ts` for version 0.21.0.
 
 Configuration is stored beside the task caches, never in your repository. Nothing here is read from a
 file inside the project.

@@ -39,7 +39,7 @@ The same snippet is in `.mcp.json.example` at the repository root.
 
 ```console
 $ curl -s http://localhost:3917/health
-{"ok":true,"server":{"name":"tasks-mcp","version":"0.20.0"}}
+{"ok":true,"server":{"name":"tasks-mcp","version":"0.21.0"}}
 ```
 
 There are exactly two routes. `POST /mcp` carries the protocol; `GET /health` answers the block above.

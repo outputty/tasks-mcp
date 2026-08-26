@@ -1,7 +1,7 @@
 # CLI reference
 
 Every option and subcommand of the `tasks-mcp` binary. Generated from `bin/cli.ts` and `--help` for
-version 0.20.0.
+version 0.21.0.
 
 ```bash
 npx -y @outputty/tasks-mcp [options] [command]
@@ -41,7 +41,7 @@ and never reach the config surface. `github` is the only registered remote; any 
 | `list`         | —        | Every record, full, straight from the top layer.              |
 | `ready`        | —        | The ids ready to build right now, best first.                 |
 | `roadmap`      | —        | Every target: `id`, `summary`, `status`, `progress`, `ready`. |
-| `planning`     | —        | The ids the planning stage owns.                              |
+| `planning`     | —        | The ids the planning stage owns, resubmitted ones first.      |
 | `schedule`     | —        | The whole open plan as an array of layers of ids.             |
 | `prereqs <id>` | task id  | The open prerequisites as an array of layers of ids.          |
 | `blockers`     | —        | Each blocker: `id`, `blocks`, `blocked`, `priority`.          |

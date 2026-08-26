@@ -65,13 +65,23 @@ export function ready(tasks: Task[]): Task[] {
   );
 }
 
+/** Whether a record was handed BACK by a build rather than never specced. */
+const resubmitted = (task: Task): boolean => task.spec === "replan";
+
 /**
  * The tasks the planning stage owns: never specced, or sent back by a build. Disjoint from `ready` by
  * construction. Targets belong here too — a roadmap row whose spec is still drafting is exactly what
  * planning owns — so this is a mirror of `ready` only across the non-target records.
+ *
+ * A RESUBMITTED record comes first. A `replan` is work a build already started and walked away from:
+ * its worker is gone, its branch is scratched, and everything downstream of it waits on a spec that
+ * used to exist. A `drafting` record has never cost anyone a build, so it is the cheaper thing to
+ * leave in the queue. Within each group the order the records came in is kept (the sort is stable).
  */
 export function planning(tasks: Task[]): Task[] {
-  return tasks.filter((t) => t.status === "open" && !specSettled(t));
+  return tasks
+    .filter((t) => t.status === "open" && !specSettled(t))
+    .sort((a, b) => Number(resubmitted(b)) - Number(resubmitted(a)));
 }
 
 /** A task's validated tier, defaulting to 3 (the build baseline). */

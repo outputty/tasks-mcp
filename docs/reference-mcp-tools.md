@@ -1,7 +1,7 @@
 # MCP tool reference
 
 Every tool the server registers, its arguments, and what it returns. Generated from the zod schemas in
-`src/mcp/server.ts` for version 0.20.0.
+`src/mcp/server.ts` for version 0.21.0.
 
 ## Common arguments
 
@@ -203,6 +203,10 @@ targets falls back to the order the records came in; the cycle error belongs to 
 
 The records whose spec is `drafting` or `replan`, and whose status is `open`. Targets are included.
 Disjoint from `list_ready` by construction.
+
+Ordered `replan` first, then `drafting`; inside each group the records keep the order they came in. A
+`replan` is a build that already stalled on an unclear spec, so specifying it again restarts work that
+is stopped, while a `drafting` record has never cost anyone a build.
 
 No arguments beyond the common ones.
 

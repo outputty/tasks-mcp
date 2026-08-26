@@ -1,7 +1,7 @@
 # Task record reference
 
 The fields a record carries, their value domains, and where each one lives on GitHub. Generated from
-`src/core/types.ts` and `src/core/providers/github.ts` for version 0.20.0.
+`src/core/types.ts` and `src/core/providers/github.ts` for version 0.21.0.
 
 One record type covers both altitudes. A record whose `type` is `target` is a roadmap row; anything
 else is a task. See [About the two altitudes](explanation-two-altitudes.md).
@@ -63,7 +63,8 @@ A record is offered by `list_ready` when all four hold:
 | every dep is `done`    | Measured across the whole graph.       |
 
 `list_planning` takes the mirror: `status` is `open` and `spec` is not `settled`. Targets are included
-there, because a roadmap row still being drafted is exactly what planning owns.
+there, because a roadmap row still being drafted is exactly what planning owns. It leads with the
+`replan` records — the ones a build handed back — before the ones that were never specced.
 
 ## Where each field lives on GitHub
 

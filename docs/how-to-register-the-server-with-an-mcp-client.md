@@ -76,7 +76,7 @@ A healthy server answers on one line:
   "result": {
     "protocolVersion": "2025-06-18",
     "capabilities": { "tools": { "listChanged": true } },
-    "serverInfo": { "name": "tasks-mcp", "version": "0.20.0" },
+    "serverInfo": { "name": "tasks-mcp", "version": "0.21.0" },
     "instructions": "A task tracker. …"
   },
   "jsonrpc": "2.0",
