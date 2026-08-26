@@ -8,14 +8,17 @@ import { test, expect } from "vitest";
 import { readProjectSummaries } from "../src/core/projects.ts";
 import { tmp } from "./helpers.ts";
 
-/** Write a cache file at `rel` under `dir`, nesting folders as an `owner/repo` id would. */
-function writeProject(dir: string, rel: string, statuses: string[]): void {
+/** Write a cache file at `rel` under `dir`, nesting folders as an `owner/repo` id would. The file
+ *  declares its own id (the file layer writes it verbatim), derived from `rel` unless `id` overrides it
+ *  — the override lets a test place a file whose declared id disagrees with its location. */
+function writeProject(dir: string, rel: string, statuses: string[], id?: string): void {
   const file = path.join(dir, rel);
   fs.mkdirSync(path.dirname(file), { recursive: true });
+  const project = id ?? rel.slice(0, -".yaml".length).split(path.sep).join("/");
   const body = statuses
     .map((s, i) => `  - id: t${i}\n    title: T${i}\n    status: ${s}`)
     .join("\n");
-  fs.writeFileSync(file, `tasks:\n${body}\n`);
+  fs.writeFileSync(file, `project: ${project}\ntasks:\n${body}\n`);
 }
 
 test("a missing cache directory is not an error — it lists nothing", () => {
@@ -84,5 +87,36 @@ test("the claims and events sibling stores are never mistaken for projects", () 
   fs.mkdirSync(path.join(cache.dir, "events", "real"), { recursive: true });
   const rows = readProjectSummaries(cache.dir);
   expect(rows.map((r) => r.project)).toEqual(["real"]);
+  cache.cleanup();
+});
+
+test("a cache file with no `project:` key is a pre-identity orphan: skipped, and left on disk", () => {
+  const cache = tmp();
+  writeProject(cache.dir, "live.yaml", ["open"]);
+  // The old shape — only `tasks:`, no declared id. A hashed slug is a legal id, so no filename rule
+  // can separate an orphan from a live project; the absence of the key is the only evidence.
+  const orphan = path.join(cache.dir, "feature-anti-slop-6e668089.yaml");
+  fs.writeFileSync(orphan, "tasks:\n  - id: t0\n    title: T0\n    status: done\n");
+  const rows = readProjectSummaries(cache.dir);
+  expect(rows.map((r) => r.project)).toEqual(["live"]); // the orphan does not appear
+  expect(fs.existsSync(orphan)).toBe(true); // skipping is not deleting — the file is untouched
+  cache.cleanup();
+});
+
+test("a path-shaped id is listed verbatim, its leading separator kept", () => {
+  const cache = tmp();
+  // The file nests at <cacheDir>/Users/x/repo.yaml (join collapses the leading slash), but the id it
+  // DECLARES is the absolute path — the reader reads the key, so the slash survives.
+  writeProject(cache.dir, path.join("Users", "x", "repo.yaml"), ["open"], "/Users/x/repo");
+  const [row] = readProjectSummaries(cache.dir);
+  expect(row.project).toBe("/Users/x/repo");
+  cache.cleanup();
+});
+
+test("the declared id is trusted over the file's location — a moved file is not repaired", () => {
+  const cache = tmp();
+  writeProject(cache.dir, path.join("acme", "widgets.yaml"), ["open"], "totally/different");
+  const [row] = readProjectSummaries(cache.dir);
+  expect(row.project).toBe("totally/different"); // the key wins, not the path
   cache.cleanup();
 });

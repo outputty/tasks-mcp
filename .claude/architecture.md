@@ -9,6 +9,11 @@ What exists and how it works. The forward plan lives in the `tasks` MCP server (
 One console over every tracker you run, showing what is being built right now across all of them, and
 letting you change it without leaving the terminal.
 
+The first slice has **shipped** (`tasks-mcp --tui`): it boots, connects, renders the queue, opens and
+edits items, and adds trackers — the mechanics below marked ✓. Two pieces are deferred and on the
+graph: live `/events` refresh (`tui-live-events-…`) and per-claim age for a healthy `in_progress` build
+(`expose-active-claim-age-…`). See the feature index below for what exists.
+
     tasks-mcp --tui        // the console. No flag still starts the MCP server; --http still serves it.
 
 `--tui` starts a tracker for itself on an ephemeral loopback port and connects to it as an MCP client,
@@ -25,11 +30,13 @@ Output: the queue — every project's active work in one list, newest movement f
 │ outputty/laygo       duckdb-appender-loader      in progress    2m     │
 │ outputty/tasks-mcp   tui-detail-and-edit         in progress   41m     │
 │ outputty/tasks-mcp   tui-trackers                ready          —      │
-└ ↑↓ move · ⏎ open · a add tracker · / filter · q quit ──────────────────┘
+└ ↑↓ move · ⏎ open · a add tracker · q quit ─────────────────────────────┘
 ```
 
 The list is `list_tasks` filtered in the console, **not** `list_ready` — `list_ready` excludes
-`in_progress`, so a console built on it would hide the builds it exists to watch.
+`in_progress`, so a console built on it would hide the builds it exists to watch. ✓ shipped. (Age is
+best-effort: a healthy `in_progress` build shows `—` until its claim goes stale, pending
+`expose-active-claim-age-…`. A `/ filter` key is not built.)
 
 Output: one item, opened (expected)
 
@@ -47,20 +54,23 @@ Output: one item, opened (expected)
 ```
 
 Every write goes through the tools that already exist — `edit_task`, `start_task`, `close_task`,
-`append_trail`, `add_task`. The console adds no write path of its own.
+`append_trail`, `add_task`. The console adds no write path of its own. ✓ shipped.
 
-`a` adds a tracker: take a URL, test it by calling `list_projects`, show what came back, and only then
-write it to the console's tracker list. A tracker that does not answer is never saved.
+`a` adds a tracker: take a URL, prove it by calling `list_projects` (the MCP handshake, not `/health`),
+show what came back, and only then write it to the console's tracker list (`<cacheDir>/console.yaml`). A
+refused, timed-out, or non-MCP address reads distinctly and is never saved. ✓ shipped.
 
-Live updates come from `GET /events`, one SSE connection per tracker. An event names which project moved
-and nothing more, so the console re-reads that project's graph — local and instant — rather than trusting
-a payload that is already stale by the time it is drawn.
+Live updates are the next step (`tui-live-events-…`): the console will follow `GET /events` per tracker,
+each event naming which project moved so it re-reads that project's graph — local and instant — rather
+than trusting a payload already stale by the time it is drawn. Today the console re-reads on startup,
+after a write, and on returning to the queue; it opens no SSE yet.
 
-⚠ One tracker change comes first, and it is not cosmetic. `listProjects` reconstructs a project's id by
-relativising its cache file path, because the file carries only `tasks:`. So a path-shaped id comes back
-without its leading `/`, and a pre-identity orphan cannot be told from a live project — on this machine
-`tasks-mcp projects` returns 33 rows of which 32 are dead. The cache file will declare its own id, and
-`listProjects` will read it: orphans lack the key and are skipped, and the id round-trips verbatim.
+The tracker change that came first: `list_projects` and the `/events` watcher used to reconstruct a
+project's id by relativising its cache file path, because the file carried only `tasks:`. A path-shaped
+id then came back without its leading `/`, and a pre-identity orphan could not be told from a live
+project (`tasks-mcp projects` once returned 33 rows, 32 of them dead). ✓ The cache file now declares its
+own id, and both readers read it: an orphan lacks the key and is skipped (never deleted), and the id
+round-trips verbatim.
 
 ⚠ Boundaries this does not cross. `append_trail` writes only the remote's comment thread and raises no
 `/events` change, so the console re-reads a trail when it opens an item. Nothing authenticates the HTTP
@@ -822,7 +832,9 @@ streams. Two hard edges:
 
 - `npm test`, **never `bun test`**: nock needs Node's fetch and cannot intercept Bun's.
 - tsdown loads its TS config via the optional `unrun` peer on Nodes without native type
-  stripping; `unrun` needs `Promise.withResolvers`, so CI runs Node 24.
+  stripping; `unrun` needs `Promise.withResolvers`. CI runs Node 26 (the floor the `--tui`
+  console's renderer needs — `@opentui/core`'s FFI wants Node 26.4+, and `engines` now says
+  `>=26.4.0`); vitest passes `--experimental-ffi` to its workers via `vitest.config.ts`.
 
 ### publish pipeline
 
@@ -900,8 +912,10 @@ release; never create a release unprompted. On a yes: bump version, commit, push
 | ready / planning / schedule | feature | The working set: what can be built now, what planning still owns, and the whole plan in layers. |
 | MCP server | feature | The primary surface: 21 typed tools on the official SDK, over stdio (default) or stateless HTTP. Task CRUD is add/get/edit/amend/close/delete; plus the graph queries, trails, sync, and config. |
 | CLI | feature | The same tracker as shell commands for humans and scripts; no MCP involved. |
+| console (`--tui`) | feature | An interactive terminal (`src/tui/`, on `@opentui/core`) over every tracker: it starts one for itself on a loopback port, connects as an MCP client (same path a remote tracker uses), and lists in-progress-or-ready work across all of them. Opens an item to read its trail and edit it — every write an existing tool. `a` adds a tracker, proven by `list_projects` before saving to `<cacheDir>/console.yaml`. Lazily imported ONLY under `--tui`, so a server spawn never loads the renderer. |
+| console runtime floor | limitation | `@opentui/core`'s renderer reaches native code over Node FFI: it needs **Node 26.4+** and `--experimental-ffi`. So `engines` moved to `>=26.4.0` (the MCP server itself runs on older Node), and `tasks-mcp --tui` re-execs once under the flag so the bin works without it. Probe: `node -e "import('@opentui/core/testing').then(m=>m.createTestRenderer({width:9,height:3}))"` throws "FFI is not available" without `--experimental-ffi`, resolves with it. |
 | library | feature | The core is importable; the MCP layer is a wrapper, never a requirement. |
-| list_projects | feature | The one read that takes no `project`: it walks the cache directory and reports every project with its task counts by status (targets included) and the cache mtime. Local only — no provider, no network. `tasks-mcp projects` on the CLI. |
+| list_projects | feature | The one read that takes no `project`: it walks the cache directory and reports every project with its task counts by status (targets included) and the cache mtime. Each cache file DECLARES its own id (a `project:` key); a file without one is a pre-identity orphan and is SKIPPED (never deleted) — `sync` or deleting the file heals it. The `/events` watcher reads the same declared id, so a stream event and a `list_projects` row carry the byte-identical project string. Local only — no provider, no network. `tasks-mcp projects` on the CLI. |
 | change stream | feature | `GET /events` is an SSE stream (`src/mcp/events.ts`) that emits `event: changed` naming which project moved, fed by the server's own writes (a `ChangeBus`) and a cache-dir watcher for other processes. The watcher re-scans and diffs mtimes on any event — never trusting the `fs.watch` filename. |
 | loopback bind default | feature | `--http` binds `127.0.0.1`; `--host 0.0.0.0` is the explicit opt-in that exposes the full tool surface. The startup log prints the address actually bound. A BREAKING change from the earlier bind-every-interface behaviour. |
 | own writes stream twice | limitation | With an `/events` client attached, a write this server makes emits once directly (the ChangeBus) and again when its cache-dir watcher re-scans the just-written file. Harmless — the event is a re-read hint and the reader is idempotent — but a consumer that counts events must expect duplicates. |

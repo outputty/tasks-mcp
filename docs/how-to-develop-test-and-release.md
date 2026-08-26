@@ -11,8 +11,10 @@ cd tasks-mcp
 npm install
 ```
 
-CI runs on Node 24. The published package targets Node 18, which is what `engines` and the tsdown
-build declare — do not reach for a syntax or an API newer than that in `src/` or `bin/`.
+CI runs on Node 26, the floor the `--tui` console's renderer (`@opentui/core`) needs — its native FFI
+wants Node 26.4+, and vitest passes `--experimental-ffi` to its workers (see `vitest.config.ts`). That
+floor is what `engines` now declares (`>=26.4.0`); the tsdown build still targets a lower baseline for
+the server and library, which run on older Node.
 
 The toolchain is oxc end to end: **oxlint** for linting, **oxfmt** for formatting, **tsdown**
 (Rolldown + oxc) for bundling, plus **TypeScript 7** for typechecking and **vitest** for tests.

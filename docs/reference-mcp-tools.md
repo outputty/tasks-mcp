@@ -265,6 +265,11 @@ only on GitHub reads an older stamp until the next `sync`. An unparseable or non
 cache directory is skipped, so one bad file never takes the listing down; an empty cache directory
 returns `{ "projects": [] }`.
 
+Each cache file declares its own project id. A file written before that — a **pre-identity orphan**, left
+behind by an id change — has no declared id and is **skipped**, so a dead file never lists as a phantom
+project. It is only skipped, never touched on disk: to bring a project back, run `sync` for it (which
+rewrites the file with its id) or delete the old file.
+
 ```json
 {
   "projects": [

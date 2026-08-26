@@ -39,7 +39,7 @@ export const NON_PROJECT_DIRS = new Set(["claims", "events"]);
 export function readProjectSummaries(cacheDir: string): ProjectSummary[] {
   const rows: ProjectSummary[] = [];
   for (const file of walkProjectFiles(cacheDir)) {
-    const row = summarize(cacheDir, file);
+    const row = summarize(file);
     if (row) rows.push(row);
   }
   return rows.sort((a, b) => (a.project < b.project ? -1 : 1));
@@ -67,14 +67,26 @@ export function* walkProjectFiles(dir: string): Generator<string> {
   }
 }
 
-/** The project id for a cache file: its path under `cacheDir` with `.yaml` dropped and separators
- *  normalised, so `<cacheDir>/acme/widgets.yaml` → `acme/widgets`. */
-export function projectIdOf(cacheDir: string, file: string): string {
-  return path.relative(cacheDir, file).slice(0, -".yaml".length).split(path.sep).join("/");
+/**
+ * The project id a cache file declares, or null when the file has no `project:` key (a pre-identity
+ * orphan) or cannot be read or parsed. The project reader and the change watcher both call this, so
+ * both skip the same files; the id is trusted verbatim even where it disagrees with the file's own
+ * location, because a moved or hand-edited file is not a corruption.
+ *
+ * `declaredProjectId("<cacheDir>/acme/widgets.yaml")` → `"acme/widgets"`; an old-shape file → `null`.
+ */
+export function declaredProjectId(file: string): string | null {
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return null; // vanished between the walk and the read — skip
+  }
+  return parseProjectDoc(text)?.project ?? null;
 }
 
-/** One file's summary, or null if it is unreadable, unparseable, or not a project file. */
-function summarize(cacheDir: string, file: string): ProjectSummary | null {
+/** One file's summary, or null if it is unreadable, unparseable, or not a live project file. */
+function summarize(file: string): ProjectSummary | null {
   let text: string;
   let mtimeMs: number;
   try {
@@ -83,24 +95,27 @@ function summarize(cacheDir: string, file: string): ProjectSummary | null {
   } catch {
     return null; // vanished between the walk and the read — skip, the listing survives
   }
-  const tasks = parseTasks(text);
-  if (!tasks) return null;
+  const doc = parseProjectDoc(text);
+  if (!doc) return null;
   const counts = { open: 0, in_progress: 0, done: 0 };
-  for (const t of tasks) {
+  for (const t of doc.tasks) {
     if (t.status === "open" || t.status === "in_progress" || t.status === "done")
       counts[t.status]++;
   }
   return {
-    project: projectIdOf(cacheDir, file),
-    tasks: tasks.length,
+    project: doc.project,
+    tasks: doc.tasks.length,
     ...counts,
     updated_at: new Date(mtimeMs).toISOString(),
   };
 }
 
-/** The file's task records, or null when it is not a project file — the `tasks:` key must be present
- *  AND an array. A config file (no `tasks:`) and malformed YAML both return null and are skipped. */
-function parseTasks(text: string): Array<{ status?: Status }> | null {
+/** A cache file's declared id and its task records, or null when it is not a live project file — the
+ *  `project:` key (a pre-identity orphan lacks it) AND the `tasks:` array must both be present. A
+ *  config file (no `tasks:`) and malformed YAML both return null and are skipped. */
+function parseProjectDoc(
+  text: string,
+): { project: string; tasks: Array<{ status?: Status }> } | null {
   let parsed: unknown;
   try {
     parsed = parse(text);
@@ -108,6 +123,8 @@ function parseTasks(text: string): Array<{ status?: Status }> | null {
     return null;
   }
   if (!parsed || typeof parsed !== "object") return null;
-  const tasks = (parsed as { tasks?: unknown }).tasks;
-  return Array.isArray(tasks) ? (tasks as Array<{ status?: Status }>) : null;
+  const { project, tasks } = parsed as { project?: unknown; tasks?: unknown };
+  if (typeof project !== "string" || project.length === 0) return null;
+  if (!Array.isArray(tasks)) return null;
+  return { project, tasks: tasks as Array<{ status?: Status }> };
 }

@@ -12,7 +12,8 @@ Allow about fifteen minutes.
 
 ## What you need
 
-- **Node 18 or newer.** Check with `node --version`.
+- **Node 26.4 or newer.** Check with `node --version`. (The floor moved up for the `--tui` console's
+  native renderer; the server itself runs on older Node, but the package's floor tracks the console.)
 - **The GitHub CLI**, logged in and holding two extra scopes. Two commands set that up:
 
   ```bash

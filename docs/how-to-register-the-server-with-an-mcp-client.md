@@ -25,7 +25,8 @@ one shared task cache — see [the project id](reference-cli.md#the-project-id).
 `owner/repo` is a convenient convention, not a requirement.
 
 Nothing is cloned or installed ahead of time — `npx -y` fetches the package the first time the client
-launches it. Use `bunx` in place of `npx` if you prefer bun; the package runs on Node 18 or newer.
+launches it. Use `bunx` in place of `npx` if you prefer bun; the package's floor is Node 26.4 (moved up
+for the `--tui` console's native renderer), though the MCP server itself runs on older Node.
 
 Restart the client so it picks the file up.
 

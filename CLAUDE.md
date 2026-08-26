@@ -49,7 +49,11 @@ to npm. It is split so the MCP layer wraps the core, never the reverse:
   decide — e.g. the board is best-effort, so board errors are caught and logged at the orchestration
   seam while issue errors always propagate.
 - **No imports inside functions.** All imports sit at the top of the module — no lazy
-  `await import(...)` to shave startup or dodge a dependency in tests.
+  `await import(...)` to shave startup or dodge a dependency in tests. **One exception: `bin/cli.ts`
+  lazy-imports `src/tui/` only under `--tui`.** A top-level import would load `@opentui/core` (a native
+  TUI renderer that reaches Node's FFI, ~20 MB) on every stdio/HTTP server spawn, which is the common
+  case; the console is not. The dynamic import keeps the renderer off the server path, and a test pins
+  that a server start never loads `@opentui/core`.
 - **Configuration is a provider of its own, configured through the server** (user ruling
   2026-08-17). `ConfigProvider` is one class; preferences are set via the `get_config`/`set_config`
   MCP tools and stored beside the caches — a global spec for all repos, overridden per repo

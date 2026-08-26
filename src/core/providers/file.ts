@@ -96,7 +96,9 @@ export class FileProvider implements Provider {
     const file = this.fileFor(project);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const sorted = [...tasks].sort((a, b) => (a.id < b.id ? -1 : 1));
-    const body = stringify({ tasks: sorted });
+    // The file declares its own id, so a reader reads it verbatim rather than reconstructing it from
+    // the path — an inference that stripped a leading `/` and could not tell an orphan from a project.
+    const body = stringify({ project, tasks: sorted });
     fs.writeFileSync(file, HEADER + (body.endsWith("\n") ? body : body + "\n"));
   }
 }

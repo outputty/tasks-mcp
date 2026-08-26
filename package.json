@@ -48,6 +48,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@opentui/core": "^0.5.8",
     "commander": "^15.0.0",
     "graphology": "^0.26.0",
     "graphology-dag": "^0.4.1",
@@ -68,6 +69,6 @@
     "vitest": "^4.1.10"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=26.4.0"
   }
 }

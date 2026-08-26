@@ -31,6 +31,10 @@ const program = new Command()
   .description("outputty's task tracker — MCP server by default, direct subcommands for humans")
   .version(SERVER_INFO.version)
   .option("--http", "run the standalone HTTP server instead of stdio")
+  .option(
+    "--tui",
+    "run the interactive console (starts an in-process tracker) instead of the server",
+  )
   .option("--port <n>", "HTTP port (--http mode)", (v) => Number.parseInt(v, 10), 3917)
   .option(
     "--host <ip>",
@@ -289,6 +293,12 @@ program.action(async () => {
   const rawDefault = opts.project ?? opts.projectId;
   const defaultProject = rawDefault === undefined ? undefined : validateProjectId(rawDefault);
   if (opts.syncInterval > 0) startBackgroundSync(svc, opts.syncInterval);
+  if (opts.tui) {
+    // Lazy import, deliberately: --tui is the only path that loads @opentui/core, so a stdio or HTTP
+    // server spawn never pulls a native TUI framework. The exception is recorded in CLAUDE.md.
+    const { runTui } = await import("../src/tui/index.ts");
+    return runTui(svc);
+  }
   if (!opts.http) return runStdio(svc, defaultProject);
   // Bind loopback unless --host says otherwise, and log the address ACTUALLY bound — never a
   // hardcoded `localhost` while the socket is on every interface.
