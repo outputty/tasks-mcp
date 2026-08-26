@@ -3,6 +3,8 @@
 // MCP default/override and the provider's repo resolution are driven e2e (real SDK transport, real
 // provider, nock at the wire); `validateProjectId` is a pure function checked directly.
 
+import fs from "node:fs";
+import path from "node:path";
 import { test, expect, beforeEach, afterAll } from "vitest";
 import nock from "nock";
 import { Octokit } from "octokit";
@@ -12,9 +14,13 @@ import { createHttpServer } from "../src/mcp/http.ts";
 import { TaskStack } from "../src/core/service.ts";
 import { FileProvider } from "../src/core/providers/file.ts";
 import { GitHubProvider } from "../src/core/providers/github.ts";
-import { ConfigProvider, validateProjectId } from "../src/core/providers/config.ts";
-import { tmp } from "./helpers.ts";
+import { ConfigProvider, validateProjectId, cachePath } from "../src/core/providers/config.ts";
+import { task, tmp } from "./helpers.ts";
 import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
+
+/** A file-only stack over one cacheDir — isolates the id-keyed storage, no remote involved. */
+const fileStack = (cacheDir: string) =>
+  new TaskStack({ cacheDir }, [new FileProvider({ cacheDir })]);
 
 beforeEach(() => {
   nock.cleanAll();
@@ -126,4 +132,67 @@ test("with no `repo` set and a launch cwd outside any git repo, the provider err
   await expect(provider.pull({ project: "acme/widgets" })).rejects.toThrow(/`repo`/);
 
   cache.cleanup();
+});
+
+// --- identity-storage: tasks, config and claims key on the id, used verbatim as the filename ---------
+
+test("two stacks over one cacheDir and one id share a single, verbatim-named cache file", async () => {
+  const cache = tmp();
+  const id = "acme/widgets";
+  // Two independent stacks — no sync between them, as two worktrees launched from one .mcp.json.
+  await fileStack(cache.dir).create({ project: id }, task({ id: "t1", title: "one" }));
+  const other = await fileStack(cache.dir).get({ project: id }, "t1");
+  expect(other?.title).toBe("one");
+
+  // The file is exactly <cacheDir>/acme/widgets.yaml — the id verbatim, nested on `/`, no hash.
+  expect(fs.existsSync(path.join(cache.dir, "acme", "widgets.yaml"))).toBe(true);
+  const stray = fs.readdirSync(cache.dir).filter((f) => /-[0-9a-f]{8}\.yaml$/.test(f));
+  expect(stray).toEqual([]); // no legacy <basename>-<hash>.yaml
+  cache.cleanup();
+});
+
+test("the per-project config override lands under the id and a second reader sees it", () => {
+  const cache = tmp();
+  const id = "acme/widgets";
+  new ConfigProvider({ cacheDir: cache.dir }).set(id, "repo", { board: "Roadmap" });
+  expect(new ConfigProvider({ cacheDir: cache.dir }).get(id).board).toBe("Roadmap");
+  expect(fs.existsSync(path.join(cache.dir, "acme", "widgets.config.yaml"))).toBe(true);
+  cache.cleanup();
+});
+
+test("a nested id, a top-level id, and the id `claims` each key without colliding with the claims ledger", async () => {
+  const cache = tmp();
+  for (const id of ["acme/widgets", "widgets", "claims"]) {
+    const svc = fileStack(cache.dir);
+    await svc.create({ project: id }, task({ id: "t", title: id }));
+    await svc.start({ project: id }, "t"); // writes a claim ledger under claims/<id>.json
+    expect((await svc.get({ project: id }, "t"))?.title).toBe(id);
+    expect((await svc.staleClaims({ project: id })).length).toBe(0); // ledger is readable, not stale yet
+  }
+  // The top-level id `claims` is the FILE claims.yaml, distinct from the claims/ ledger DIRECTORY.
+  expect(fs.statSync(path.join(cache.dir, "claims.yaml")).isFile()).toBe(true);
+  expect(fs.statSync(path.join(cache.dir, "claims")).isDirectory()).toBe(true);
+  cache.cleanup();
+});
+
+test("an unparseable <id>.yaml is quarantined to .corrupt and the layer reads empty, under the new filename", async () => {
+  const cache = tmp();
+  const id = "acme/widgets";
+  const file = path.join(cache.dir, "acme", "widgets.yaml");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "tasks: [unterminated");
+  expect(await fileStack(cache.dir).list({ project: id })).toEqual([]);
+  expect(fs.existsSync(`${file}.corrupt`)).toBe(true);
+  cache.cleanup();
+});
+
+test("cachePath refuses an id that would escape the cache directory, and nests an absolute-path id instead", () => {
+  expect(() => cachePath("/cache", "../../etc/passwd", ".yaml")).toThrow(
+    /escape the cache directory/,
+  );
+  expect(() => cachePath("/cache", "../sibling", ".yaml")).toThrow(/escape/);
+  // An absolute path from a pre-id caller nests under the cache dir rather than escaping it.
+  expect(cachePath("/cache", "/Users/x/repo", ".yaml")).toBe(
+    path.join("/cache", "/Users/x/repo.yaml"),
+  );
 });

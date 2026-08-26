@@ -84,9 +84,8 @@ export class TaskStack implements TaskService {
   // Every project this service has been asked about — the set the background loop reconciles. The
   // server has no cwd of its own, so a project is only knowable once a tool call names it.
   private readonly seen = new Set<string>();
-  // One claim ledger per project served. Keyed on the project path like everything else here; the
-  // store itself resolves that to the shared repo slug, so a worktree and its primary checkout write
-  // the same file.
+  // One claim ledger per project served, keyed on the project id like every other store — worktrees
+  // sharing one supplied id write one ledger, with no git resolution behind it.
   private readonly claimStores = new Map<string, ClaimStore>();
 
   constructor(
@@ -113,8 +112,8 @@ export class TaskStack implements TaskService {
 
   stop(): void {}
 
-  /** This project's claim ledger, made once and reused — the repo-slug lookup behind its path shells
-   *  out to git, so a fresh store per call would pay for that on every write. */
+  /** This project's claim ledger, made once and reused — one store per id, keyed like every other
+   *  store, so worktrees sharing an id share the ledger. */
   private claims(project: string): ClaimStore {
     let store = this.claimStores.get(project);
     if (!store) {

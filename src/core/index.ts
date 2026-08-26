@@ -20,9 +20,6 @@ export {
   ProjectConfigSchema,
   defaultCacheDir,
   validateProjectId,
-  projectSlug,
-  repoRoot,
-  repoSlug,
   type ConfigSources,
 } from "./providers/config.ts";
 export {

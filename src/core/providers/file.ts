@@ -8,7 +8,7 @@ import path from "node:path";
 import { parse, stringify } from "yaml";
 import type { ProjectContext, Task } from "../types.ts";
 import type { ServerOptions } from "../types.ts";
-import { defaultCacheDir, projectSlug } from "./config.ts";
+import { defaultCacheDir, cachePath } from "./config.ts";
 import { withDefaults } from "../graph.ts";
 import type { Provider, ProviderState } from "./provider.ts";
 
@@ -63,9 +63,10 @@ export class FileProvider implements Provider {
     if (kept.length !== all.length) this.save(ctx.project, kept);
   }
 
-  /** The file for a project: `<cacheDir>/<basename>-<hash>.yaml`, keyed by the project's path. */
+  /** The file for a project: `<cacheDir>/<id>.yaml`, the id used verbatim so the dir is readable
+   *  and enumerable (an id with `/` nests into folders). */
   private fileFor(project: string): string {
-    return path.join(this.options.cacheDir ?? defaultCacheDir(), `${projectSlug(project)}.yaml`);
+    return cachePath(this.options.cacheDir ?? defaultCacheDir(), project, ".yaml");
   }
 
   private load(project: string): Task[] {
