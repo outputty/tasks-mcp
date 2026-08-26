@@ -16,7 +16,15 @@ import { LABEL_FIELD_NAMES } from "../types.ts";
 /** The config schema — the ONE definition of what may be configured; the MCP tools reuse its shape. */
 export const ProjectConfigSchema = z
   .object({
-    provider: z.string().min(1).optional().describe("The remote layer backing the project."),
+    provider: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("The remote layer backing the project (singular)."),
+    providers: z
+      .array(z.string().min(1))
+      .optional()
+      .describe("Remote layers backing the project, deepest last (default [provider ?? github])."),
     repo: z
       .string()
       .min(1)

@@ -62,6 +62,11 @@ export type {
   TrailEntry,
   TrailKind,
 } from "./types.ts";
-export { buildStack, type Provider, type ProviderState } from "./providers/provider.ts";
+export {
+  buildStack,
+  resolveRemotes,
+  type Provider,
+  type ProviderState,
+} from "./providers/provider.ts";
 export { FileProvider } from "./providers/file.ts";
 export { GitHubProvider } from "./providers/github.ts";

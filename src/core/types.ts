@@ -161,8 +161,16 @@ export type LabelFieldName = (typeof LABEL_FIELD_NAMES)[number];
 
 /** User preferences, resolved by ConfigProvider (defaults < flags < global spec < per-repo). */
 export interface ProjectConfig {
-  /** Which provider backs this project. Default "github". A future value is "linear". */
+  /** Which provider backs this project. Default "github". A future value is "linear". The singular
+   *  form of `providers`; a one-element list. */
   provider?: string;
+  /**
+   * The remote layers backing this project, deepest last — the stack rules (deepest wins, absence is
+   * not a claim, deletions never propagate) apply across all of them. A one-element list equals the
+   * singular `provider`; absent falls back to `[provider]`, then `["github"]`. Only `github` is
+   * registered today.
+   */
+  providers?: string[];
   /**
    * The GitHub coordinates (`owner/repo`) backing this project. A project id is opaque and never a
    * path, so the repo is configuration, not something derived from the id. Absent means fall back to
