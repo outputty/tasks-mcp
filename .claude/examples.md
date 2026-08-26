@@ -26,10 +26,10 @@ Input:
 Output:
 
 ```
-20 tools registered (REAL OBSERVED 2026-08-26, counted in src/mcp/server.ts): list_ready,
-roadmap, list_planning, schedule, list_tasks, get_task, add_task, add_target, amend_task,
-edit_task, start_task, close_task, delete_task, get_trail, append_trail, sync, prereqs,
-blockers, get_config, set_config.
+21 tools registered (REAL OBSERVED 2026-08-26, counted in src/mcp/server.ts): list_ready,
+roadmap, list_planning, schedule, list_tasks, list_projects, get_task, add_task, add_target,
+amend_task, edit_task, start_task, close_task, delete_task, get_trail, append_trail, sync,
+prereqs, blockers, get_config, set_config.
 ```
 
 ## prereqs
@@ -297,7 +297,8 @@ Error: invalid project id '../../etc/passwd' — an id may not contain path trav
 
 ## list-projects
 
-⚠ EXPECTED — not yet built. Target #52.
+REAL OBSERVED 2026-08-26 — `tasks-mcp projects` against a one-project cache. `tasks` counts every
+record (targets included), so it equals `open + in_progress + done`; `updated_at` is the cache mtime.
 
 Input:
 
@@ -312,11 +313,11 @@ Output:
   "projects": [
     {
       "project": "outputty/tasks-mcp",
-      "tasks": 12,
-      "open": 10,
-      "in_progress": 2,
-      "done": 0,
-      "updated_at": "2026-08-26T16:43:52.000Z"
+      "tasks": 3,
+      "open": 1,
+      "in_progress": 1,
+      "done": 1,
+      "updated_at": "2026-08-26T19:12:32.494Z"
     }
   ]
 }
@@ -324,7 +325,8 @@ Output:
 
 ## events-stream
 
-⚠ EXPECTED — not yet built. Target #52.
+REAL OBSERVED 2026-08-26 — one frame captured from `GET /events` while a write landed. The event names
+which project moved and nothing else; the reader re-reads the graph.
 
 Input:
 
@@ -336,5 +338,5 @@ Output:
 
 ```
 event: changed
-data: {"project":"outputty/tasks-mcp","at":"2026-08-26T16:43:52.412Z"}
+data: {"project":"outputty/tasks-mcp","at":"2026-08-26T19:12:53.638Z"}
 ```
