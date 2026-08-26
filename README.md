@@ -12,7 +12,7 @@ altitudes.
 ## Requirements
 
 - Node 18 or newer.
-- A git repository with a github.com `origin` remote.
+- A github.com repository, named by the launch directory's `origin` remote or by a `repo` setting.
 - A GitHub token: `GITHUB_TOKEN`, `GH_TOKEN`, or a logged-in `gh` CLI. For the kanban board, grant the
   `project` scope once with `gh auth refresh -s project`; without it tasks still land as issues.
 
@@ -26,11 +26,23 @@ demand:
   "mcpServers": {
     "tasks": {
       "command": "npx",
-      "args": ["-y", "@outputty/tasks-mcp", "--sync-interval", "60"]
+      "args": [
+        "-y",
+        "@outputty/tasks-mcp",
+        "--project-id",
+        "outputty/tasks-mcp",
+        "--sync-interval",
+        "60"
+      ]
     }
   }
 }
 ```
+
+A **project** is an opaque, supplied id — never derived from a path. `--project-id` is the default a
+tool call uses when it omits `project`; because `.mcp.json` is checked in, every git worktree of the
+repo shares that id and one task cache. GitHub's `owner/repo` comes from the launch directory's `origin`
+or a `repo` setting, not from the id. See [the project id](https://github.com/outputty/tasks-mcp/blob/main/docs/reference-cli.md#the-project-id).
 
 Or drive the same graph from a shell:
 
