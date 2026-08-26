@@ -81,6 +81,7 @@ test("initialize reports the package's own name and version", async () => {
 // The surface tools/list must advertise. Kept beside the test so adding a tool is a one-line change.
 const TOOL_NAMES = [
   "list_tasks",
+  "list_projects",
   "list_ready",
   "list_planning",
   "schedule",
@@ -103,6 +104,26 @@ test("tools/list advertises the whole surface, and project is optional (a --proj
   expect(tools.map((t) => t.name)).toEqual(expect.arrayContaining(TOOL_NAMES));
   // `project` is no longer required: an omitted one resolves to the server's --project-id default.
   for (const t of tools) expect(t.inputSchema.required ?? []).not.toContain("project");
+  await cleanup();
+});
+
+test("list_projects lists the served project with counts, from the cache alone (no GitHub call)", async () => {
+  const { client, project, cleanup } = await harness();
+  const call = (name: string, args: Record<string, unknown> = {}) =>
+    client.callTool({ name, arguments: { project, ...args } });
+  await call("add_task", { id: "a" });
+  await call("add_task", { id: "b" });
+  await call("add_task", { id: "c" });
+  await call("close_task", { id: "a" }); // done
+  await call("start_task", { id: "b" }); // in_progress
+
+  // The one tool that takes NO project — it asks about the server itself.
+  const { projects } = structured(await client.callTool({ name: "list_projects", arguments: {} }));
+  expect(projects).toHaveLength(1);
+  expect(projects[0]).toMatchObject({ tasks: 3, open: 1, in_progress: 1, done: 1 });
+  expect(projects[0].updated_at).toBeTypeOf("string");
+  // No interceptor is armed for a GitHub call here and net is disabled, so a network read would have
+  // thrown — reaching this line proves the answer came from the cache directory alone.
   await cleanup();
 });
 

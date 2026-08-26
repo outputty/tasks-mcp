@@ -22,6 +22,8 @@ import {
   withDefaults,
 } from "./graph.ts";
 import { ClaimStore, DEFAULT_STALE_MINUTES, type StaleClaim } from "./claims.ts";
+import { ChangeBus } from "./changes.ts";
+import { readProjectSummaries, type ProjectSummary } from "./projects.ts";
 
 export interface SyncResult {
   pulled: number;
@@ -63,6 +65,16 @@ export interface TaskService {
   appendTrail(ctx: ProjectContext, id: string, entry: TrailEntry): Promise<TrailEntry[]>;
   /** Every layer of the configuration for this project, plus the effective result. */
   getConfig(ctx: ProjectContext): Promise<ConfigSources>;
+  /** Every project the file layer's cache directory holds, with task counts by status — the one read
+   *  that answers about the server itself, not one project. Local only: no provider, no network. */
+  listProjects(): Promise<ProjectSummary[]>;
+  /** The in-process change bus a long-running transport subscribes to, so an idle reader learns a
+   *  project moved. The service emits on it for its own writes; other processes' writes reach it
+   *  through the transport's file watcher. */
+  changes(): ChangeBus;
+  /** Where the file layer keeps its task caches — what a transport watches for other processes'
+   *  writes, and what `listProjects` walks. */
+  cacheDir(): string;
   /** Release any per-project resources. Nothing holds the process open today, so this is a no-op an
    *  embedder may still call; it stays on the interface so a future layer that does hold one has a
    *  place to release it. */
@@ -88,6 +100,9 @@ export class TaskStack implements TaskService {
   // One claim ledger per project served, keyed on the project id like every other store — worktrees
   // sharing one supplied id write one ledger, with no git resolution behind it.
   private readonly claimStores = new Map<string, ClaimStore>();
+  // The change bus for this service's own writes. Emitting on a bus with no subscribers is a no-op,
+  // so a stdio server (no /events reader) carries it for free.
+  private readonly bus = new ChangeBus();
 
   constructor(
     private readonly options: ServerOptions = {},
@@ -95,8 +110,16 @@ export class TaskStack implements TaskService {
     private readonly config: ConfigProvider = new ConfigProvider(options),
   ) {}
 
-  private cacheDir(): string {
+  cacheDir(): string {
     return this.options.cacheDir ?? defaultCacheDir();
+  }
+
+  changes(): ChangeBus {
+    return this.bus;
+  }
+
+  async listProjects(): Promise<ProjectSummary[]> {
+    return readProjectSummaries(this.cacheDir());
   }
 
   private layers(ctx: ProjectContext): Provider[] {
@@ -174,6 +197,7 @@ export class TaskStack implements TaskService {
     assertTargetFields(task);
     assertTargetWhy(task); // a target exists only once someone has written down why
     await this.fanDown(ctx, task);
+    this.bus.emit(ctx.project); // the local cache changed — wake any idle reader
     return task;
   }
 
@@ -185,6 +209,7 @@ export class TaskStack implements TaskService {
     assertEdit(known, merged, patch);
     await this.fanDown(ctx, merged);
     this.trackClaim(ctx, merged);
+    this.bus.emit(ctx.project); // the local cache changed — wake any idle reader
     return merged;
   }
 
@@ -218,6 +243,7 @@ export class TaskStack implements TaskService {
     for (const layer of [...layers].reverse()) {
       if (layer.delete) await layer.delete(ctx, id);
     }
+    this.bus.emit(ctx.project); // the local cache changed — wake any idle reader
   }
 
   async getTrail(ctx: ProjectContext, id: string): Promise<TrailEntry[]> {
@@ -258,6 +284,9 @@ export class TaskStack implements TaskService {
     );
     const merged = mergeStack(pulls);
     const pushed = await this.reconcile(ctx, layers[0], pulls, merged);
+    // Emit only when the sync changed the LOCAL cache (a pull brought in or corrected a task) — a
+    // console reads the top layer, so a push to a deeper layer alone is nothing for it to re-read.
+    if (topChanged(pulls[0][1], merged)) this.bus.emit(ctx.project);
     return { pulled: merged.size, pushed, conflicts: conflictCount(pulls) };
   }
 
@@ -428,6 +457,15 @@ function conflictCount(pulls: Array<[Provider, Map<string, ProviderState>]>): nu
     for (const [id, state] of states) if (state.conflict) ids.add(id);
   }
   return ids.size;
+}
+
+/** Whether the sync changed the top (cache) layer — any merged task the top layer lacked or disagreed
+ *  with. This is what a local reader would see change, so it is what wakes an idle console. */
+function topChanged(top: Map<string, ProviderState>, merged: Map<string, Task>): boolean {
+  for (const task of merged.values()) {
+    if (needsPush(top.get(task.id), task)) return true;
+  }
+  return false;
 }
 
 /** A layer needs the merged task pushed when it lacks it, flagged it reconcile, or disagrees. */
