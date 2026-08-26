@@ -35,6 +35,7 @@ a free migration and losing the local copy loses nothing.
 ## Language
 
 - **task** — One tracked unit — id, title, status, deps, scope, execution properties, brief/contract prose; one issue on GitHub.
+- **project id** — A project's identity: an opaque, provider-agnostic string the user supplies (`--project-id`), never derived. It keys the task cache, the config override and the claim ledger, so every worktree launched from one checked-in `.mcp.json` is ONE project. Deriving it from a remote was rejected: it would make one provider the authority over projects that may not use it. (replaces: project slug, path-as-identity, `<basename>-<hash>`)
 - **layer** — One provider in the stack — a class implementing the seam, owning its own storage and handles. (replaces: backend, sync target, adapter)
 - **stack** — The ordered provider list a project's tasks live in — file layer first, remotes beneath; order is authority order. (replaces: cache+provider pair)
 - **seam** — The whole Provider interface — init / pull / upsert (+ optional upsertMany); create-vs-update is the layer's call. (replaces: port)

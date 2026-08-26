@@ -26,10 +26,10 @@ Input:
 Output:
 
 ```
-21 tools registered (REAL OBSERVED 2026-08-20, counted in src/mcp/server.ts): list_ready,
+20 tools registered (REAL OBSERVED 2026-08-26, counted in src/mcp/server.ts): list_ready,
 roadmap, list_planning, schedule, list_tasks, get_task, add_task, add_target, amend_task,
 edit_task, start_task, close_task, delete_task, get_trail, append_trail, sync, prereqs,
-blockers, notify, get_config, set_config.
+blockers, get_config, set_config.
 ```
 
 ## prereqs
@@ -249,4 +249,92 @@ Output:
 #35  "Product memory stops duplicating the graph"  labels ["type:target"]
      subIssues [36]   subIssuesSummary { total: 1, completed: 0, percentCompleted: 0 }
 #36  "Teach the outputty plugin that roadmap is why, not what"  parent 35
+```
+
+## identify
+
+⚠ EXPECTED — not yet built. Target #54.
+
+Input:
+
+```
+tasks-mcp identify --project outputty/tasks-mcp
+```
+
+Output:
+
+```json
+{ "id": "outputty/tasks-mcp" }
+```
+
+The id is opaque and never resolved against a provider or the filesystem, so any non-empty string works:
+
+Input:
+
+```
+tasks-mcp identify --project my-thing
+```
+
+Output:
+
+```json
+{ "id": "my-thing" }
+```
+
+An id that would escape the cache directory is refused:
+
+Input:
+
+```
+tasks-mcp identify --project ../../etc/passwd
+```
+
+Output:
+
+```
+Error: invalid project id '../../etc/passwd' — an id may not contain path traversal
+```
+
+## list-projects
+
+⚠ EXPECTED — not yet built. Target #52.
+
+Input:
+
+```
+tasks-mcp projects
+```
+
+Output:
+
+```json
+{
+  "projects": [
+    {
+      "project": "outputty/tasks-mcp",
+      "tasks": 12,
+      "open": 10,
+      "in_progress": 2,
+      "done": 0,
+      "updated_at": "2026-08-26T16:43:52.000Z"
+    }
+  ]
+}
+```
+
+## events-stream
+
+⚠ EXPECTED — not yet built. Target #52.
+
+Input:
+
+```
+curl -N http://127.0.0.1:3917/events
+```
+
+Output:
+
+```
+event: changed
+data: {"project":"outputty/tasks-mcp","at":"2026-08-26T16:43:52.412Z"}
 ```
