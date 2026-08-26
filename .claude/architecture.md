@@ -33,28 +33,28 @@ Input: `list_projects`
 {}
 ```
 
-Output: (expected)
+Output: (real, observed 2026-08-26)
 
 ```json
 {
   "projects": [
     {
       "project": "outputty/tasks-mcp",
-      "tasks": 12,
-      "open": 10,
-      "in_progress": 2,
-      "done": 0,
-      "updated_at": "2026-08-26T16:43:52.000Z"
+      "tasks": 3,
+      "open": 1,
+      "in_progress": 1,
+      "done": 1,
+      "updated_at": "2026-08-26T19:12:32.494Z"
     }
   ]
 }
 ```
 
-Output: `GET /events` (expected)
+Output: `GET /events` (real, observed 2026-08-26)
 
 ```
 event: changed
-data: {"project":"outputty/tasks-mcp","at":"2026-08-26T16:43:52.412Z"}
+data: {"project":"outputty/tasks-mcp","at":"2026-08-26T19:12:53.638Z"}
 ```
 
 The stream names which project moved, never what changed — a reader asks the graph, which is local and
@@ -632,8 +632,8 @@ over the same `TaskStack`. What the tools DO belongs to [graph engine](#the-grap
 
 ```mermaid
 flowchart TB
-    agent["MCP client"] -->|"stdio (default) or\nStreamable HTTP :3917/mcp"| mcp["createMcpServer\n20 tools, zod in+out"]
-    human["shell"] --> cli["bin/cli.ts (commander)\nlist·ready·planning·schedule·prereqs·blockers·get·\nadd·edit·close·delete·trail·trail-add·config·sync"]
+    agent["MCP client"] -->|"stdio (default) or\nStreamable HTTP :3917 /mcp · /events"| mcp["createMcpServer\n21 tools, zod in+out"]
+    human["shell"] --> cli["bin/cli.ts (commander)\nlist·ready·roadmap·projects·planning·schedule·prereqs·\nblockers·get·add·edit·close·delete·trail·trail-add·config·sync"]
     code["your program"] --> lib["import '@outputty/tasks-mcp'\nmakeService·TaskStack·graph fns"]
     mcp --> stack["TaskStack"]
     cli --> stack
@@ -643,17 +643,19 @@ flowchart TB
 ### MCP server
 
 The primary surface: `createMcpServer` on the official `@modelcontextprotocol/sdk` — never a
-hand-rolled JSON-RPC handler. 20 tools (`list_ready`, `roadmap`, `list_planning`, `schedule`,
-`list_tasks`, `get_task`, `add_task`, `add_target`, `amend_task`, `edit_task`, `start_task`,
-`close_task`, `delete_task`, `get_trail`, `append_trail`, `sync`, `prereqs`, `blockers`,
+hand-rolled JSON-RPC handler. 21 tools (`list_ready`, `roadmap`, `list_planning`, `schedule`,
+`list_tasks`, `list_projects`, `get_task`, `add_task`, `add_target`, `amend_task`, `edit_task`,
+`start_task`, `close_task`, `delete_task`, `get_trail`, `append_trail`, `sync`, `prereqs`, `blockers`,
 `get_config`, `set_config`), each declaring zod input AND output schemas and
-returning `structuredContent`. Every tool takes `project` — the absolute repo path — because the
-server has no working directory of its own.
+returning `structuredContent`. Every tool takes `project` — an opaque, supplied id, optional because a
+`--project-id` default fills an omitted one — except `list_projects`, which takes none and answers about
+the server itself.
 
 Transports: `StdioServerTransport` (default) and stateless Streamable HTTP (JSON responses) on
 plain `node:http` — no framework; the server itself answers non-POST `/mcp` with `405 + Allow`
-so the SDK transport can never hold a GET open as SSE. `SERVER_INFO` reads name/version from
-`package.json` at build time.
+so the SDK transport can never hold a GET open as SSE. A third route, `GET /events`, is the one
+held-open connection: an SSE change stream (see the change stream below). `--http` binds `127.0.0.1`
+unless `--host` opts out. `SERVER_INFO` reads name/version from `package.json` at build time.
 
 #### Example
 
@@ -669,11 +671,11 @@ The `mcp-registration` example in `examples.md`.
 ### CLI
 
 `bin/cli.ts` on commander (user ruling: a real CLI library, never homebrew argv parsing). With
-no command it runs the MCP server; subcommands drive the core directly: `list`, `ready`,
-`planning`, `schedule`, `prereqs <id>`, `blockers`, `get <id>`, `add <id>`, `edit <id>`,
-`close <id>`, `delete <id>`, `trail <id>`, `trail-add <id>`, `config`, `sync`. `--project` defaults
-to cwd; the deployment
-flags work on every command.
+no command it runs the MCP server; subcommands drive the core directly: `list`, `ready`, `roadmap`,
+`projects`, `planning`, `schedule`, `prereqs <id>`, `blockers`, `get <id>`, `add <id>`, `edit <id>`,
+`close <id>`, `delete <id>`, `trail <id>`, `trail-add <id>`, `config`, `sync`, `identify`. `projects`
+takes no `--project` (it asks about the server); `--project` otherwise defaults to cwd, and the
+deployment flags work on every command.
 
 #### Example
 
@@ -691,8 +693,9 @@ The `ready-and-planning` example in `examples.md`.
 The core is importable; the MCP layer is a wrapper, never a requirement. `.` exports
 `makeService`/`TaskStack`, `FileProvider`/`GitHubProvider`/`buildStack`/`resolveRemotes`, the pure graph
 functions (`ready`, `planning`, `schedule`, `prereqs`, `blockers`, `priorityOf`),
-`ConfigProvider`/`ProjectConfigSchema`/`validateProjectId`, `DuplicateTaskError`, and the types.
-`./mcp` exports `createMcpServer`/`createHttpServer`/`runStdio`.
+`ConfigProvider`/`ProjectConfigSchema`/`validateProjectId`, `DuplicateTaskError`,
+`ChangeBus`/`readProjectSummaries`, and the types.
+`./mcp` exports `createMcpServer`/`createHttpServer`/`startHttpServer`/`runStdio`.
 
 #### Example
 
@@ -897,9 +900,14 @@ release; never create a release unprompted. On a yes: bump version, commit, push
 | prereqs | feature | "I want to start on X — what has to be done first?", answered as dependency-ordered layers. |
 | blockers | feature | "What holds up the most work?", ranked by transitive downstream impact. |
 | ready / planning / schedule | feature | The working set: what can be built now, what planning still owns, and the whole plan in layers. |
-| MCP server | feature | The primary surface: 20 typed tools on the official SDK, over stdio (default) or stateless HTTP. Task CRUD is add/get/edit/amend/close/delete; plus the graph queries, trails, sync, and config. |
+| MCP server | feature | The primary surface: 21 typed tools on the official SDK, over stdio (default) or stateless HTTP. Task CRUD is add/get/edit/amend/close/delete; plus the graph queries, trails, sync, and config. |
 | CLI | feature | The same tracker as shell commands for humans and scripts; no MCP involved. |
 | library | feature | The core is importable; the MCP layer is a wrapper, never a requirement. |
+| list_projects | feature | The one read that takes no `project`: it walks the cache directory and reports every project with its task counts by status (targets included) and the cache mtime. Local only — no provider, no network. `tasks-mcp projects` on the CLI. |
+| change stream | feature | `GET /events` is an SSE stream (`src/mcp/events.ts`) that emits `event: changed` naming which project moved, fed by the server's own writes (a `ChangeBus`) and a cache-dir watcher for other processes. The watcher re-scans and diffs mtimes on any event — never trusting the `fs.watch` filename. |
+| loopback bind default | feature | `--http` binds `127.0.0.1`; `--host 0.0.0.0` is the explicit opt-in that exposes the full tool surface. The startup log prints the address actually bound. A BREAKING change from the earlier bind-every-interface behaviour. |
+| own writes stream twice | limitation | With an `/events` client attached, a write this server makes emits once directly (the ChangeBus) and again when its cache-dir watcher re-scans the just-written file. Harmless — the event is a re-read hint and the reader is idempotent — but a consumer that counts events must expect duplicates. |
+| a foreign delete raises no change | limitation | The watcher's mtime diff only iterates files that still exist, so another process DELETING a project's cache file emits no `/events` change (this server's own `delete` does emit). Acceptable: deletions are a hand operation and never propagate. |
 | branch parameter unused | limitation | Every tool accepts branch; nothing reads it — declared at the initial import, never implemented. |
 | trail store | feature | A task's trail IS its GitHub issue comment thread — every comment an entry, people's comments included. append_trail posts a comment; get_trail reads the whole thread. There is no separate trail store: the provider that owns the issue owns its comments. |
 | central config | feature | Preferences are configured through the server and stored beside the caches — never by files inside the user's repo. |
