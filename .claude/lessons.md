@@ -6,10 +6,12 @@
 
 ## Communication that broke down
 
+- [2026-08-27 · PLANNING](lessons/2026-08-27-a-clarifying-question-got-a-mechanism-instead-of-an-answer.md) - a scoped question about how something works today was answered by designing a new mechanism for it, which was then discarded. ×1
 - [2026-08-26 · PLANNING](lessons/2026-08-26-deriving-a-project-id-from-a-provider-makes-that-provider-the-authority.md) - a design derived a system-wide key from one layer's data, silently promoting that layer to authority over every project. ×1
 
 ## An assumption that broke
 
+- [2026-08-27 · PLANNING](lessons/2026-08-27-a-feature-kept-across-a-deletion-was-built-on-the-deleted-layer.md) - a feature the plan promised to keep across a deletion was built entirely on the deleted layer (the `--tui` console is an MCP client), so keeping it is a task, not a freebie. ×1
 - [2026-08-27 · BUILD](lessons/2026-08-27-a-failed-mcp-server-notice-can-be-a-redundant-server.md) - a failed tasks-server notice (`plugin:outputty:tasks`) reads as the tracker being down, but the repo's own `tasks` server was connected with its tools present as deferred tools; nearly a false halt. ×2
 - [2026-08-27 · BUILD](lessons/2026-08-27-a-cache-file-off-its-id-path-is-listed-but-holds-no-tasks.md) - a cache file not at its id's `cachePath` is listed by `list_projects` (which walks and reads declared ids) yet holds no tasks for `list_tasks` (which derives the path from the id). ×1
 - [2026-08-27 · BUILD](lessons/2026-08-27-vitest-4-moved-worker-node-flags-out-of-pooloptions.md) - Vitest 4 removed `poolOptions`; a worker node flag now goes in top-level `test.execArgv`, and the old shape is accepted and silently ignored. ×1
@@ -18,6 +20,7 @@
 
 ## A killed approach
 
+- [2026-08-27 · PLANNING](lessons/2026-08-27-a-shared-daemon-was-designed-to-carry-state-the-filesystem-already-shared.md) - a shared always-on server was designed to unify state that per-invocation processes already shared through the cache dir and the remote; it added a lifecycle and a connection race for a saved process spawn. ×1
 - [2026-08-27 · BUILD](lessons/2026-08-27-a-subprocess-that-imports-src-cannot-run-this-repos-typescript.md) - a child process that imports `src/*.ts` to prove a module is not loaded dies on Node's strip-only TS (parameter properties, unattributed JSON imports); the test runs in-process with `registerHooks` instead. ×1
 
 ## Legacy archive (pre-index prose)

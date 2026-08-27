@@ -6,78 +6,50 @@ What exists and how it works. The forward plan lives in the `tasks` MCP server (
 
 ## What we're building towards
 
-One console over every tracker you run, showing what is being built right now across all of them, and
-letting you change it without leaving the terminal.
+A task **CLI** you run inside a repo, and a **library** you import — no MCP server. Deleting the MCP
+layer removes the daemon, the HTTP/stdio transports, per-connection project resolution, and the change
+stream it fed. Agents drive the CLI through a skill; humans keep the local `--tui`.
 
-The console has **shipped** (`tasks-mcp --tui`): it boots, connects, renders the queue, opens and edits
-items, adds trackers, shows a real age for every live build, and redraws itself as work moves — the
-mechanics below marked ✓. See the feature index below for what exists.
+    tasks-mcp ready                              // in a repo, run the command — that is the whole interface
+    tasks-mcp start <id>
+    tasks-mcp add <id> --title ... --brief ...
+    tasks-mcp --tui                              // the local console, reading the core directly
 
-    tasks-mcp --tui        // the console. No flag still starts the MCP server; --http still serves it.
+Run in the repo, the CLI resolves both the project id and the GitHub repo from where it runs, so the
+cross-repo question MCP made hard is gone: to file into another repo, run the CLI there.
 
-`--tui` starts a tracker for itself on an ephemeral loopback port and connects to it as an MCP client,
-exactly as it connects to any tracker in its list. That is one code path, not two: the local tracker is
-just the first entry, so pointing the console at a remote one later is a list edit rather than a second
-implementation.
+A repo declares its project in a `tasks.config.yaml` at its root — the same `ProjectConfig` shape the
+core parses, so one file names the id, the providers, and each provider's own config (expected):
 
-Output: the queue — every project's active work in one list, newest movement first (expected)
+    project: outputty/tasks-mcp
+    providers:                                   # ordered; read top->bottom = descending into the stack
+      - github: { repo: outputty/tasks-mcp }     # last = deepest = authority (deepest wins)
 
-```
-┌ tasks-mcp ──────────────────────────────────────────────── 2 trackers ─┐
-│ PROJECT              TASK                        STATE        AGE      │
-│ outputty/laygo       run-phases-refactor         in progress   14m     │
-│ outputty/laygo       duckdb-appender-loader      in progress    2m     │
-│ outputty/tasks-mcp   tui-detail-and-edit         in progress   41m     │
-│ outputty/tasks-mcp   tui-trackers                ready          —      │
-└ ↑↓ move · ⏎ open · a add tracker · q quit ─────────────────────────────┘
-```
+Project-id resolution, first match wins (expected):
 
-The list is `list_tasks` filtered in the console, **not** `list_ready` — `list_ready` excludes
-`in_progress`, so a console built on it would hide the builds it exists to watch. ✓ shipped. (The AGE
-column shows how long each in-progress task has been claimed: `list_ready` reports every claim's start
-time in `claims`, so a healthy build reads a real, growing age and `—` means a ready task. A `/ filter`
-key is not built.)
+    --project <id>            explicit, per call
+    --project-id <id>         explicit, per invocation
+    tasks.config.yaml in cwd  the repo's declaration
+                              -> otherwise fail, naming the flag
 
-Output: one item, opened (expected)
+The console (`--tui`) stays, rebuilt to read the core `TaskService` directly and **scoped to the current
+repo's project** — no cross-project dashboard, no remote trackers. Run in a repo, it shows that project's
+queue using that repo's config and its one ambient credential, exactly like every CLI command. A single
+long-running process holds one credential, so a project-scoped console is the honest shape.
 
-```
-┌ tui-detail-and-edit ─────────────────────────── outputty/tasks-mcp ─┐
-│ state  in progress   tier 2   qa subagent   priority normal          │
-│ target tui-console-1787751801        deps  tui-prototype (done)      │
-│                                                                       │
-│ ## Problem                                                            │
-│ The console can list work but not act on it …                         │
-│                                                                       │
-│ TRAIL (4)                                                             │
-│ 19:49  decision  SPEC round 1 — the console's shape …                 │
-└ e edit · s state · c comment · n new idea · esc back ────────────────┘
-```
+Credentials resolve env-first (`GITHUB_TOKEN`/`GH_TOKEN`), then `<cacheDir>/credentials.yaml` (mode 0600,
+never the repo), then `gh auth token` — whose result is cached back to that file so repeated commands are
+cheap, and reauthed on a 401. `tasks.config.yaml` may name the account; the secret only ever lives in the
+cache dir.
 
-Every write goes through the tools that already exist — `edit_task`, `start_task`, `close_task`,
-`append_trail`, `add_task`. The console adds no write path of its own. ✓ shipped.
+⚠ What this deletes, deliberately: the MCP server and both transports (`src/mcp/`), the
+`@modelcontextprotocol/sdk` dependency, the `/events` change stream and its `ChangeBus`, and the
+`repo`/`board`/label fields at the top level of the config — they move inside the `github` provider
+entry. The stack merge is untouched: deepest still wins, absence is still not a claim.
 
-`a` adds a tracker: take a URL, prove it by calling `list_projects` (the MCP handshake, not `/health`),
-show what came back, and only then write it to the console's tracker list (`<cacheDir>/console.yaml`). A
-refused, timed-out, or non-MCP address reads distinctly and is never saved. ✓ shipped.
-
-Live updates have shipped (`tui-live-events-…`): the console follows `GET /events` per tracker, each
-event naming which project moved so it re-reads that tracker — local and instant — rather than trusting
-a payload already stale by the time it is drawn. One stream per tracker, debounced and closed on quit; a
-dropped stream shows `stream lost` and the console keeps running for its other trackers. Two edges it
-does not cover: a trail comment raises no `/events` change (the detail view re-reads it on its own), and
-a foreign delete of a cache file needs a manual refresh. ✓ shipped.
-
-The tracker change that came first: `list_projects` and the `/events` watcher used to reconstruct a
-project's id by relativising its cache file path, because the file carried only `tasks:`. A path-shaped
-id then came back without its leading `/`, and a pre-identity orphan could not be told from a live
-project (`tasks-mcp projects` once returned 33 rows, 32 of them dead). ✓ The cache file now declares its
-own id, and both readers read it: an orphan lacks the key and is skipped (never deleted), and the id
-round-trips verbatim.
-
-⚠ Boundaries this does not cross. `append_trail` writes only the remote's comment thread and raises no
-`/events` change, so the console re-reads a trail when it opens an item. Nothing authenticates the HTTP
-transport, so a remote tracker is only as safe as the network it is on. And dragging is out: the ready
-order is derived on every read, so a dragged permutation has nowhere to be stored.
+Out of scope, each its own target: the outputty plugin flow's rewrite from `mcp__tasks__*` calls to CLI
+commands (with the driving skill, in the `claude-plugin` repo), and any rename of the
+`@outputty/tasks-mcp` package now that "mcp" is a misnomer.
 
 ## The provider stack
 

@@ -19,6 +19,20 @@ roadmap itself moving into the graph, and the product docs shedding everything t
 
 ## Live
 
+### tasks-mcp becomes a CLI + library; the MCP layer is deleted
+
+[#102](https://github.com/outputty/tasks-mcp/issues/102)
+
+The MCP server was the agent interface, and forcing it into a shared, always-on server bred an HTTP
+daemon, per-connection project resolution, and a startup race between the daemon and the client that
+connects to it — complexity with no payoff, because the CLI that layer wrapped already drives the same
+core. Worth doing now because `src/mcp/` is imported only by the CLI entry and the console, so the blast
+radius is small and known: run in a repo, the CLI resolves the project id and the GitHub repo from where
+it runs, agents drive it through a skill, and the console survives as a local `--tui`. The original
+cross-repo problem that surfaced this — filing a task into another repo — dissolves: you run the CLI
+there. The plugin-flow rewrite (its `mcp__tasks__*` calls become CLI commands, with the driving skill,
+in the `claude-plugin` repo) and any rename of the `@outputty/tasks-mcp` package are separate targets.
+
 ### The roadmap becomes a second altitude in the graph
 
 [#34](https://github.com/outputty/tasks-mcp/issues/34)
