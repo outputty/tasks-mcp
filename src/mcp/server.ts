@@ -47,7 +47,8 @@ const SERVER_OPTIONS = {
     "genuinely free to build, RANKED by score (reach x priority, at the task AND roadmap-target " +
     "altitudes) as a starting order rather than a decision — call `roadmap` and read your own " +
     "roadmap before choosing. Tasks a worker claimed with `start_task` are excluded; `scope` draws " +
-    "a lane; `stale_claims` reports a claim whose holder went quiet. Nothing here pushes: re-read " +
+    "a lane; `claims` reports every claim with its age, so a reader tells a live build from a quiet " +
+    "one. Nothing here pushes: re-read " +
     "`list_ready` when you want the truth.",
 };
 
@@ -128,8 +129,9 @@ const readyRow = (entry: Eligible) => ({
   ...(entry.roadmap ? { roadmap: entry.roadmap } : {}),
 });
 
-// A claim whose holder has gone quiet past the threshold — what a dispatcher sweeps between waves.
-const STALE_CLAIM = z.object({
+// A claim the project holds, with its age — whole minutes since the last heartbeat. An age, not a
+// verdict: the reader decides what counts as stale.
+const CLAIM = z.object({
   id: z.string(),
   claimed_at: z.string(),
   heartbeat_at: z.string(),
@@ -190,11 +192,12 @@ export function createMcpServer(service: TaskService, defaultProject?: string): 
         "roadmap row is clear. Each row carries the `roadmap` standing that ranked it. The rank is " +
         "a starting order, not a decision. A task a worker has marked in progress (start_task) is " +
         "NOT listed, so this is safe to dispatch straight from.\n\n" +
-        "`stale_claims` reports work held by a claim nobody has refreshed inside the threshold " +
-        "(default 15 minutes, `claimStaleMinutes` to change it) — a worker that died still holding " +
-        "a task, which would otherwise narrow this list silently and forever. It is a REPORT, not a " +
-        "release: freeing a claim whose worker is merely slow would let a second worker take the " +
-        'same task. Release one deliberately with `edit_task { spec: "replan" }`.\n\n' +
+        "`claims` reports every claim the project holds — one row per in-progress task, each with " +
+        "its `stale_for_minutes` (whole minutes since the last heartbeat). It is an age, not a " +
+        "verdict: a healthy build shows a small number and a worker that died still holding a task " +
+        "shows a growing one, so a console displays the age and a dispatcher sweeps the quiet ones " +
+        "with `claims.filter((c) => c.stale_for_minutes >= claimStaleMinutes)` (default 15). A claim " +
+        'is never auto-released — release one deliberately with `edit_task { spec: "replan" }`.\n\n' +
         "`scope` draws a LANE: only tasks whose folders touch it are listed, so two dispatchers can " +
         "run side by side without ever writing the same files. Folder containment counts either way " +
         "(`src` covers `src/orders`), a task with no scope is in every lane, and no filter means " +
@@ -216,7 +219,7 @@ export function createMcpServer(service: TaskService, defaultProject?: string): 
       outputSchema: {
         ids: z.array(z.string()),
         tasks: z.array(z.object(READY_ROW)),
-        stale_claims: z.array(STALE_CLAIM),
+        claims: z.array(CLAIM),
       },
     },
     async (args) => {
@@ -225,7 +228,7 @@ export function createMcpServer(service: TaskService, defaultProject?: string): 
       return result({
         ids: ranked.map((e) => e.task.id),
         tasks: ranked.map(readyRow),
-        stale_claims: await service.staleClaims(ctx),
+        claims: await service.claims(ctx),
       });
     },
   );

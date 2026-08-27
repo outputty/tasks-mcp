@@ -547,14 +547,16 @@ test("the scope filter draws a lane, and overlap still crosses it", async () => 
   await cleanup();
 });
 
-test("list_ready reports stale claims and nothing else releases them", async () => {
+test("list_ready reports every claim with its age, and only a deliberate release drops one", async () => {
   const { client, project, cleanup } = await harness();
   await client.callTool({ name: "add_task", arguments: { project, id: "csv-export" } });
   await client.callTool({ name: "start_task", arguments: { project, id: "csv-export" } });
 
   const held = structured(await client.callTool({ name: "list_ready", arguments: { project } }));
   expect(held.ids).toEqual([]); // claimed, so not offered
-  expect(held.stale_claims).toEqual([]); // and fresh, so not flagged
+  expect(held.claims).toHaveLength(1); // …but the live claim is reported, fresh
+  expect(held.claims[0].id).toBe("csv-export");
+  expect(held.claims[0].stale_for_minutes).toBe(0); // an age, not a verdict
 
   // The deliberate release: the same exit a build takes when it cannot proceed.
   await client.callTool({
@@ -567,6 +569,6 @@ test("list_ready reports stale claims and nothing else releases them", async () 
   });
   const freed = structured(await client.callTool({ name: "list_ready", arguments: { project } }));
   expect(freed.ids).toEqual(["csv-export"]);
-  expect(freed.stale_claims).toEqual([]);
+  expect(freed.claims).toEqual([]); // released, so gone from the ledger
   await cleanup();
 });

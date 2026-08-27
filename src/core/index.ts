@@ -15,7 +15,7 @@ export {
   DEFAULT_STALE_MINUTES,
   minutesSince,
   type Claim,
-  type StaleClaim,
+  type AgedClaim,
 } from "./claims.ts";
 export {
   ConfigProvider,

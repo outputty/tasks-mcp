@@ -34,16 +34,18 @@ export interface Claim {
   heartbeat_at: string;
 }
 
-/** A claim past the staleness threshold, with the age that makes it one. */
-export interface StaleClaim extends Claim {
+/** A claim with its age: whole minutes since the last heartbeat. An age, not a verdict — the caller
+ *  applies whatever staleness threshold it wants. */
+export interface AgedClaim extends Claim {
   /** Whole minutes since the last heartbeat. */
   stale_for_minutes: number;
 }
 
 /**
- * How long a claim may go unheard before it is reported stale. A build writes a trail note per layer
- * and a layer under an hour is ordinary, so this threshold says "quiet", never "slow" — which is why
- * crossing it flags rather than releases.
+ * The default minutes of silence past which a reader treats a claim as stale. A build writes a trail
+ * note per layer and a layer under an hour is ordinary, so this threshold says "quiet", never "slow" —
+ * which is why crossing it flags rather than releases. The service reports the age and applies no
+ * threshold; a dispatcher filters by this (or by `claimStaleMinutes`) itself.
  */
 export const DEFAULT_STALE_MINUTES = 15;
 
@@ -101,11 +103,12 @@ export class ClaimStore {
     this.write(claims);
   }
 
-  /** The claims nobody has refreshed inside the threshold, oldest silence first. */
-  stale(minutes: number = DEFAULT_STALE_MINUTES, now: number = Date.now()): StaleClaim[] {
+  /** Every claim with its age in whole minutes since the last heartbeat, longest silence first. No
+   *  threshold is applied here — a fresh claim comes back with `stale_for_minutes: 0`, and the caller
+   *  decides what counts as stale. */
+  aged(now: number = Date.now()): AgedClaim[] {
     return this.all()
       .map((claim) => ({ ...claim, stale_for_minutes: minutesSince(claim.heartbeat_at, now) }))
-      .filter((claim) => claim.stale_for_minutes >= minutes)
       .sort((a, b) => b.stale_for_minutes - a.stale_for_minutes);
   }
 

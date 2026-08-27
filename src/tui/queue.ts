@@ -6,8 +6,8 @@
 import type { Task } from "../core/types.ts";
 
 /** One line in the console's flat queue: which tracker/project it belongs to, the task, its state, and
- *  an age for in_progress work. `age` is `—` when unknown (a ready task, or an active claim whose start
- *  time the tracker does not expose yet). */
+ *  an age for in_progress work. `age` is `—` when unknown (a ready task, or an in_progress task with no
+ *  claim row — a ledger the tracker lost). */
 export interface QueueRow {
   project: string;
   id: string;
@@ -21,7 +21,7 @@ export interface QueueRow {
 
 /** One tracker's snapshot, assembled from three MCP reads: every task (`list_tasks`, so in_progress is
  *  included), the ids the tracker itself calls ready (`list_ready`), and the claim start times it
- *  exposes (`list_ready`'s `stale_claims`). The console never reaches past this tool surface. */
+ *  exposes (`list_ready`'s `claims`). The console never reaches past this tool surface. */
 export interface ProjectQueue {
   project: string;
   tasks: Task[];

@@ -105,32 +105,40 @@ test("spec:replan releases a stale claim and returns the task to the ready set",
   cleanup();
 });
 
-test("a fresh claim is never stale; a quiet one is, with its age", async () => {
+test("a fresh claim reports age 0; a quiet one reports its minutes of silence", async () => {
   const { svc, ctx, cacheDir, cleanup } = harness();
   await svc.create(ctx, task({ id: "csv-export" }));
   await svc.start(ctx, "csv-export");
 
-  expect(await svc.staleClaims(ctx)).toEqual([]);
+  const fresh = await svc.claims(ctx);
+  expect(fresh).toHaveLength(1);
+  expect(fresh[0].id).toBe("csv-export");
+  expect(fresh[0].stale_for_minutes).toBe(0); // just claimed — reported, not filtered out
 
-  // Twenty minutes of silence, past the fifteen-minute default. Reading through a second store is
-  // also the cross-session case: a dispatcher sweeping from the primary checkout sees the claim a
-  // worker took from inside its worktree.
+  // Twenty minutes of silence, past the fifteen-minute default a dispatcher sweeps by. Reading
+  // through a second store is also the cross-session case: a dispatcher sweeping from the primary
+  // checkout sees the claim a worker took from inside its worktree.
   const store = new ClaimStore(cacheDir, ctx.project);
-  const twenty = store.stale(DEFAULT_STALE_MINUTES, Date.now() + 20 * 60_000);
-  expect(twenty).toHaveLength(1);
-  expect(twenty[0].id).toBe("csv-export");
-  expect(twenty[0].stale_for_minutes).toBe(20);
+  const aged = store.aged(Date.now() + 20 * 60_000);
+  expect(aged).toHaveLength(1);
+  expect(aged[0].id).toBe("csv-export");
+  expect(aged[0].stale_for_minutes).toBe(20);
+  expect(aged[0].stale_for_minutes).toBeGreaterThanOrEqual(DEFAULT_STALE_MINUTES); // a dispatcher flags it
   cleanup();
 });
 
-test("the threshold is configurable per project", async () => {
+test("claimStaleMinutes stays configurable — the reader's threshold, not the service's filter", async () => {
   const { svc, ctx, cleanup } = harness();
   await svc.create(ctx, task({ id: "csv-export" }));
   await svc.start(ctx, "csv-export");
   await svc.setConfig(ctx, "repo", { claimStaleMinutes: 1 });
 
-  // Still not stale at zero elapsed — the threshold moved, the clock did not.
-  expect(await svc.staleClaims(ctx)).toEqual([]);
+  // The service reports the claim with its age and applies no threshold of its own; the configured
+  // threshold round-trips through the config layer for a dispatcher to filter by.
+  const claims = await svc.claims(ctx);
+  expect(claims).toHaveLength(1);
+  expect(claims[0].stale_for_minutes).toBe(0);
+  expect((await svc.getConfig(ctx)).effective.claimStaleMinutes).toBe(1);
   cleanup();
 });
 
