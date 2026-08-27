@@ -31,8 +31,10 @@ enumerate, and it made the detector the property of one particular orchestrator 
 graph.
 
 So liveness moved onto the claim itself. A claim carries two stamps: when it was taken, and when it
-was last heard from. A claim nobody has refreshed inside the threshold — 15 minutes by default — is
-reported in `stale_claims`, on the same `list_ready` call that returns the queue.
+was last heard from. `list_ready` reports every claim in `claims`, each carrying its `stale_for_minutes`
+— an age, not a verdict — on the same call that returns the queue. A reader treats a claim quiet longer
+than the threshold (15 minutes by default) as stale; the tool computes the age and leaves that judgement
+to the reader.
 
 ## Why the heartbeat is not a separate call
 
@@ -53,12 +55,13 @@ This is the design decision people push back on, so it is worth stating plainly:
 package ever releases a claim automatically.**
 
 `stale_for_minutes` means _quiet_, not _dead_. Fifteen minutes is tuned to a build that writes a note
-per layer, and a layer that takes an hour is ordinary work, not a crash. If the server freed a claim
-on crossing the threshold, it would sometimes free one out from under a worker that was merely slow —
-and a second worker on live work is precisely the race `start_task` exists to prevent. Auto-release
-would trade a visible, recoverable problem for an invisible, destructive one.
+per layer, and a layer that takes an hour is ordinary work, not a crash. If the tool freed a claim on
+crossing a threshold, it would sometimes free one out from under a worker that was merely slow — and a
+second worker on live work is precisely the race `start_task` exists to prevent. Auto-release would
+trade a visible, recoverable problem for an invisible, destructive one. So the tool does not even hold a
+threshold: it reports the age, the reader applies its own.
 
-So the threshold flags, and a person or an orchestrator decides. Recovery is two deliberate edits:
+So the reader flags, and a person or an orchestrator decides. Recovery is two deliberate edits:
 `spec: replan` hands the task back and returns it to `open`, and settling it again returns it to the
 build queue. See
 [how to recover work from a dead worker](how-to-recover-work-from-a-dead-worker.md).
@@ -110,4 +113,4 @@ from a stale claim, which is the one moment you most want to dispatch it.
 ## Related
 
 - [Task record reference](reference-task-record.md#claim) — the claim's exact fields.
-- [MCP tool reference](reference-mcp-tools.md#list_ready) — where `stale_claims` is reported.
+- [MCP tool reference](reference-mcp-tools.md#list_ready) — where `claims` is reported.

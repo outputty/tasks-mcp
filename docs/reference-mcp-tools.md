@@ -98,16 +98,16 @@ Returned by `get_trail` and `append_trail`.
 | `author` | `string` | GitHub login of the comment's author.                             |
 | `at`     | `string` | ISO 8601 timestamp from GitHub.                                   |
 
-### Stale claim
+### Claim
 
-Returned inside `list_ready`.
+Returned inside `list_ready` — one row per in-progress task, every claim, not only the quiet ones.
 
-| Field               | Type     | Meaning                                     |
-| ------------------- | -------- | ------------------------------------------- |
-| `id`                | `string` | The claimed task.                           |
-| `claimed_at`        | `string` | ISO 8601; when `start_task` took the claim. |
-| `heartbeat_at`      | `string` | ISO 8601; when the holder last wrote.       |
-| `stale_for_minutes` | `number` | Whole minutes since the last heartbeat.     |
+| Field               | Type     | Meaning                                                                                         |
+| ------------------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `id`                | `string` | The claimed task.                                                                               |
+| `claimed_at`        | `string` | ISO 8601; when `start_task` took the claim.                                                     |
+| `heartbeat_at`      | `string` | ISO 8601; when the holder last wrote.                                                           |
+| `stale_for_minutes` | `number` | Whole minutes since the last heartbeat — an age, not a verdict. The reader picks the threshold. |
 
 ---
 
@@ -120,14 +120,16 @@ first. A task marked in progress is not listed.
 | -------- | ---------------------- | -------- | ---------------------------------------------------- |
 | `scope`  | `string[]` or `string` | no       | Folders that draw a lane. Omit for every ready task. |
 
-Returns `ids` (`string[]`), `tasks` ([ready rows](#ready-row)), and `stale_claims`
-([stale claims](#stale-claim)).
+Returns `ids` (`string[]`), `tasks` ([ready rows](#ready-row)), and `claims` ([claims](#claim)).
 
 Lane rules: folder containment counts either way, so `src` covers `src/orders` and `src/orders` sits
 inside a lane drawn at `src`. Matching is path-segment-wise, so `src/orders` never matches
 `src/orders-legacy`. A task with no scope is in every lane. An empty filter means everything.
 
-`stale_claims` is a report. Nothing here releases a claim; see
+`claims` reports every in-progress task's claim with its age; nothing here releases one. It is an age,
+not a verdict — a dispatcher sweeping for a dead worker filters it itself,
+`claims.filter((c) => c.stale_for_minutes >= threshold)`, with `threshold` its configured
+`claimStaleMinutes` (default 15). See
 [how to recover work from a dead worker](how-to-recover-work-from-a-dead-worker.md).
 
 ```json
@@ -171,9 +173,13 @@ inside a lane drawn at `src`. Matching is path-segment-wise, so `src/orders` nev
       "overlap": []
     }
   ],
-  "stale_claims": []
+  "claims": []
 }
 ```
+
+`claims` is empty here because both tasks are ready — a task appears in `claims` only while it is in
+progress. For a populated example, see
+[how to recover work from a dead worker](how-to-recover-work-from-a-dead-worker.md).
 
 Sort order: a row whose `roadmap.waiting` is true sorts below every row whose roadmap standing is
 clear; then by `score` descending; then by `blocks` descending; then by id.

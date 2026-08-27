@@ -34,7 +34,7 @@ layer), so no client changes its call pattern.
 ```text
 start_task  { project, id }                      -> claim stamped with claimed_at + heartbeat_at
 append_trail / close_task / edit_task (by claim holder) -> heartbeat_at refreshed as a side effect
-list_ready  { project }                          -> stale claims surface instead of hiding
+list_ready  { project }                          -> every claim surfaces with its age
 edit_task   { project, id, spec: "replan" }      -> releases the claim (existing behaviour, unchanged)
 ```
 
@@ -44,12 +44,12 @@ Input - a claim goes quiet:
 { "id": "csv-export", "status": "in_progress", "heartbeat_at": "2026-08-23T02:14:00Z" }
 ```
 
-Output shape - `list_ready` 20 minutes later:
+Output shape - `list_ready` 20 minutes later (`claims` reports every claim; a reader filters by age):
 
 ```json
 {
-  "ready": [],
-  "stale_claims": [
+  "ids": [],
+  "claims": [
     { "id": "csv-export", "claimed_at": "<iso>", "heartbeat_at": "<iso>", "stale_for_minutes": 20 }
   ]
 }
@@ -68,8 +68,8 @@ Output shape - `list_ready` 20 minutes later:
 1. `append_trail` refreshes the heartbeat: claim a task, append one trail entry (the `examples.md`
    trail example, verbatim - `kind: "decision"`, the streaming note), read the task -> `heartbeat_at`
    is newer than `claimed_at`.
-2. A claim with no heartbeat for longer than the threshold appears in `list_ready`'s `stale_claims`
-   with its age; a fresh claim never does.
+2. Every claim appears in `list_ready`'s `claims` with its `stale_for_minutes` age; a reader filters
+   those past the threshold, and a fresh claim reads `stale_for_minutes: 0`.
 3. `edit_task { spec: "replan" }` on a stale claim releases it and the task returns to `ready` - the
    existing release path, proven still to work against the new fields.
 4. No new tool: `tools/list` gains nothing. Heartbeat is a side effect of existing writes only.

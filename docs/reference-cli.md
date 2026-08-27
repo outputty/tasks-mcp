@@ -155,16 +155,23 @@ every tracker in one queue, project as a column.
 ```text
 ┌─tasks-mcp — 3 items──────────────────────────────────────────────────┐
 │  PROJECT               TASK                        STATE       AGE   │
-│› outputty/laygo        run-phases-refactor         in progress —     │
-│  outputty/tasks-mcp    tui-docs                    in progress —     │
+│› outputty/laygo        run-phases-refactor         in progress 3m    │
+│  outputty/tasks-mcp    tui-docs                    in progress 12m   │
 │  outputty/tasks-mcp    tui-live-events             ready       —     │
 └─↑↓ move · ⏎ open · a add tracker · q quit────────────────────────────┘
 ```
 
 The queue is `list_tasks` filtered to in-progress-or-ready work — not `list_ready` alone, which excludes
-`in_progress` and would hide the very builds the console exists to watch. Age is best-effort: it shows
-`—` for a healthy `in_progress` build, because the tracker exposes a claim's start time only once the
-claim has gone stale.
+`in_progress` and would hide the very builds the console exists to watch. The AGE column is how long each
+in-progress task has been claimed: the tracker reports every claim's start time in `list_ready`'s
+`claims`, so a healthy build reads a real, growing age and `—` means a ready task (or an in-progress one
+whose claim ledger was lost).
+
+The queue redraws itself. The console opens one `/events` change stream per connected tracker and, when a
+tracker reports that a project moved, re-reads that tracker alone and repaints — no keypress. A stream
+that drops shows a `stream lost` line while the console keeps running for its other trackers. Two edges
+it does not cover: a trail comment raises no `/events` change (the detail view re-reads it on its own),
+and a project whose cache file another process deletes stays until a manual refresh.
 
 ### Keys
 

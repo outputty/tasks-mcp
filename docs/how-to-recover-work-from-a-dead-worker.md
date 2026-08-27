@@ -9,39 +9,52 @@ Nothing releases a claim on its own. That is deliberate — see
 
 ## Find the stranded work
 
-Over MCP, `list_ready` reports it in the same call that gives you the queue:
+Over MCP, `list_ready` reports every claim in the same call that gives you the queue — `claims`, one row
+per in-progress task, each with a `stale_for_minutes` age:
 
 ```jsonc
 // list_ready { "project": "/abs/repo" }
 {
   "ids": ["export-endpoint"],
   "tasks": [ … ],
-  "stale_claims": [
+  "claims": [
     {
       "id": "flaky-login",
-      "claimed_at": "2026-08-24T11:42:28.233Z",
-      "heartbeat_at": "2026-08-24T11:42:28.233Z",
+      "claimed_at": "2026-08-27T08:09:20.312Z",
+      "heartbeat_at": "2026-08-27T08:09:20.312Z",
       "stale_for_minutes": 22
     }
   ]
 }
 ```
 
-A claim shows up here once nobody has written through the server on its behalf for longer than the
-threshold — 15 minutes by default.
+`stale_for_minutes` is an age, not a verdict: the tool reports every claim and leaves the threshold to
+you. A dispatcher sweeping for dead workers filters the list itself —
 
-From the shell there is no `stale_claims` output; the CLI's `ready` prints ids only. Look for the
-status instead:
-
-```bash
-tasks-mcp list | grep -B4 in_progress
+```js
+claims.filter((c) => c.stale_for_minutes >= threshold); // threshold = claimStaleMinutes, default 15
 ```
 
-Or read the ledger, one JSON file per repository:
+— so a claim quiet longer than your threshold, like `flaky-login` at 22 minutes above, is the one to
+look at.
+
+From the shell there is no `claims` output; the CLI's `ready` prints ids only. Look for the status
+instead:
+
+```console
+$ tasks-mcp list | grep -A5 in_progress
+    "status": "in_progress",
+    "deps": [],
+    "scope": [],
+    "title": "Fix the flaky login redirect",
+    "id": "flaky-login",
+```
+
+Or read the ledger, one JSON file per project, keyed on the project id:
 
 ```bash
 ls ~/.cache/tasks-mcp/claims/
-cat ~/.cache/tasks-mcp/claims/<your-repo>-<hash>.json
+cat ~/.cache/tasks-mcp/claims/<project-id>.json
 ```
 
 ## Check the worker is actually gone
@@ -90,7 +103,8 @@ Closing also drops the claim.
 ```console
 $ tasks-mcp ready
 [
-  "flaky-login"
+  "flaky-login",
+  "export-endpoint"
 ]
 ```
 
@@ -102,8 +116,10 @@ across every lane. Non-empty means re-dispatching would put two workers over the
 
 ## Tune the threshold
 
-Fifteen minutes suits a build that writes a trail note per layer. Raise it if your layers are longer,
-so a slow worker is not reported as a dead one:
+The threshold is yours to pick — the tool reports every claim's age and never filters. Fifteen minutes
+is the default a dispatcher sweeps by, tuned to a build that writes a trail note per layer;
+`claimStaleMinutes` stores a different one for a dispatcher to read. Raise it if your layers are longer,
+so a slow worker is not swept as a dead one:
 
 ```jsonc
 // set_config

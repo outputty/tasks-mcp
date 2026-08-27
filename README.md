@@ -86,16 +86,26 @@ itself, plus any you add — and lists the in-progress-or-ready work across all 
 ```text
 ┌─tasks-mcp — 3 items──────────────────────────────────────────────────┐
 │  PROJECT               TASK                        STATE       AGE   │
-│› outputty/laygo        run-phases-refactor         in progress —     │
-│  outputty/tasks-mcp    tui-docs                    in progress —     │
+│› outputty/laygo        run-phases-refactor         in progress 3m    │
+│  outputty/tasks-mcp    tui-docs                    in progress 12m   │
 │  outputty/tasks-mcp    tui-live-events             ready       —     │
 └─↑↓ move · ⏎ open · a add tracker · q quit────────────────────────────┘
 ```
+
+The queue redraws itself. Each tracker's change stream (`GET /events`) tells the console when a project
+moves — a build claiming, closing, or editing a task anywhere it watches — and the console re-reads only
+that tracker and repaints, with no keypress. The AGE column is how long each in-progress task has been
+claimed, so a live build reads a growing number and a dead one stands out.
 
 `⏎` opens an item to read its trail and change it in place — `e` edit, `s` state, `c` comment, `n` new
 idea — and every write is an ordinary MCP tool, so the console can do nothing an agent cannot. `a` adds
 a tracker by URL, proven with a live `list_projects` before it is saved. Full key map and the
 tracker-list file: [the CLI reference](https://github.com/outputty/tasks-mcp/blob/main/docs/reference-cli.md#the-console).
+
+Two edges the live redraw does not cover: a trail comment (`append_trail`) touches only the remote's
+comment thread and raises no `/events` change, so the detail view re-reads a comment on its own; and a
+project whose cache file another process deletes stays on the queue until the next manual refresh,
+because the change watcher only walks files that still exist.
 
 ⚠ **The console makes the package larger.** Its renderer (`@opentui/core`) is a native library of
 roughly 20 MB, so an `npx -y` launch re-downloads it on a cold cache. A plain MCP server spawn never
