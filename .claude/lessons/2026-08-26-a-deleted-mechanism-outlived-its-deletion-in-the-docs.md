@@ -72,16 +72,31 @@ history rather than from the document, whether it was proposing a feature or rev
    two separate causes.
 6. `.claude/lessons.md` still references `src/core/channel.ts` in four `Files:` lines. Left as-is: the
    archive records what was true when written, and rewriting history there would be wrong.
+7. `bin/cli.ts` removed the `?? process.cwd()` project-id fallback (BUILD, 2026-08-27, PR #100). The
+   build's claim-surface sweep covered `docs/`, `src/`, `bin/` and `README.md` but **not `.claude/`**,
+   and master QA caught two survivors: `architecture.md`'s CLI section still said `--project` "defaults
+   to cwd", and `examples.md`'s `identify` example still said the id is "never resolved against … the
+   filesystem" and carried a "not yet built" marker. Both described the exact behaviour the diff removed,
+   in the same two files as items 2-5. Fixed in `e150101` on the salvage round.
 
-×1 as an event, but **five distinct false claims** from it, and the tool count had already drifted once
-on its own. The pattern is the counted or enumerated claim: it reads as verified, ages silently, and
-nothing fails when it is wrong.
+×2 as events — a deletion (`0a940dd`) and a behaviour change (the cwd-fallback removal) — the first alone
+yielding **five distinct false claims**, and the tool count had already drifted once on its own. The
+pattern is any claim a diff falsifies — a count, an enumeration, or a described behaviour: it reads as
+verified, ages silently, and nothing fails when it is wrong. Both events left the same two files stale
+(`architecture.md`, `examples.md`), and in the second a sweep that skipped `.claude/` is what let it through.
 
 ## 5. How to prevent it
 
 **A commit that deletes a mechanism deletes its feature-index row and its prose section in the same
 commit — the deletion is not finished while the docs still describe it.** The feature index is the
 checklist: if a row names something the diff removed, the row goes with it.
+
+**The claim-surface sweep after a code change includes `.claude/` product memory, not only `docs/`,
+`src/` and `bin/`.** `architecture.md` and `examples.md` describe behaviour a diff can falsify, and every
+session reads them on plan, build and review — a stale line there re-plants the removed misconception in
+the place the next session reads first. Grep the changed symbol, path and behaviour across `.claude/` in
+the same sweep that covers the code, then run the done-condition (`rg '<the removed behaviour>' .claude/`
+returns nothing).
 
 **A count in product memory carries the command that produces it, beside the number.** A bare "21 tools"
 cannot be checked without knowing how it was counted; a stamped one is worse, because the stamp reads as
