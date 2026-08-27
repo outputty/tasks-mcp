@@ -9,10 +9,9 @@ What exists and how it works. The forward plan lives in the `tasks` MCP server (
 One console over every tracker you run, showing what is being built right now across all of them, and
 letting you change it without leaving the terminal.
 
-The first slice has **shipped** (`tasks-mcp --tui`): it boots, connects, renders the queue, opens and
-edits items, and adds trackers — the mechanics below marked ✓. Two pieces are deferred and on the
-graph: live `/events` refresh (`tui-live-events-…`) and per-claim age for a healthy `in_progress` build
-(`expose-active-claim-age-…`). See the feature index below for what exists.
+The console has **shipped** (`tasks-mcp --tui`): it boots, connects, renders the queue, opens and edits
+items, adds trackers, shows a real age for every live build, and redraws itself as work moves — the
+mechanics below marked ✓. See the feature index below for what exists.
 
     tasks-mcp --tui        // the console. No flag still starts the MCP server; --http still serves it.
 
@@ -34,9 +33,10 @@ Output: the queue — every project's active work in one list, newest movement f
 ```
 
 The list is `list_tasks` filtered in the console, **not** `list_ready` — `list_ready` excludes
-`in_progress`, so a console built on it would hide the builds it exists to watch. ✓ shipped. (Age is
-best-effort: a healthy `in_progress` build shows `—` until its claim goes stale, pending
-`expose-active-claim-age-…`. A `/ filter` key is not built.)
+`in_progress`, so a console built on it would hide the builds it exists to watch. ✓ shipped. (The AGE
+column shows how long each in-progress task has been claimed: `list_ready` reports every claim's start
+time in `claims`, so a healthy build reads a real, growing age and `—` means a ready task. A `/ filter`
+key is not built.)
 
 Output: one item, opened (expected)
 
@@ -60,10 +60,12 @@ Every write goes through the tools that already exist — `edit_task`, `start_ta
 show what came back, and only then write it to the console's tracker list (`<cacheDir>/console.yaml`). A
 refused, timed-out, or non-MCP address reads distinctly and is never saved. ✓ shipped.
 
-Live updates are the next step (`tui-live-events-…`): the console will follow `GET /events` per tracker,
-each event naming which project moved so it re-reads that project's graph — local and instant — rather
-than trusting a payload already stale by the time it is drawn. Today the console re-reads on startup,
-after a write, and on returning to the queue; it opens no SSE yet.
+Live updates have shipped (`tui-live-events-…`): the console follows `GET /events` per tracker, each
+event naming which project moved so it re-reads that tracker — local and instant — rather than trusting
+a payload already stale by the time it is drawn. One stream per tracker, debounced and closed on quit; a
+dropped stream shows `stream lost` and the console keeps running for its other trackers. Two edges it
+does not cover: a trail comment raises no `/events` change (the detail view re-reads it on its own), and
+a foreign delete of a cache file needs a manual refresh. ✓ shipped.
 
 The tracker change that came first: `list_projects` and the `/events` watcher used to reconstruct a
 project's id by relativising its cache file path, because the file carried only `tasks:`. A path-shaped
@@ -912,7 +914,7 @@ release; never create a release unprompted. On a yes: bump version, commit, push
 | ready / planning / schedule | feature | The working set: what can be built now, what planning still owns, and the whole plan in layers. |
 | MCP server | feature | The primary surface: 21 typed tools on the official SDK, over stdio (default) or stateless HTTP. Task CRUD is add/get/edit/amend/close/delete; plus the graph queries, trails, sync, and config. |
 | CLI | feature | The same tracker as shell commands for humans and scripts; no MCP involved. |
-| console (`--tui`) | feature | An interactive terminal (`src/tui/`, on `@opentui/core`) over every tracker: it starts one for itself on a loopback port, connects as an MCP client (same path a remote tracker uses), and lists in-progress-or-ready work across all of them. Opens an item to read its trail and edit it — every write an existing tool. `a` adds a tracker, proven by `list_projects` before saving to `<cacheDir>/console.yaml`. Lazily imported ONLY under `--tui`, so a server spawn never loads the renderer. |
+| console (`--tui`) | feature | An interactive terminal (`src/tui/`, on `@opentui/core`) over every tracker: it starts one for itself on a loopback port, connects as an MCP client (same path a remote tracker uses), and lists in-progress-or-ready work across all of them. Opens an item to read its trail and edit it — every write an existing tool. `a` adds a tracker, proven by `list_projects` before saving to `<cacheDir>/console.yaml`. It follows `GET /events` per tracker (one stream each, debounced, closed on quit) and redraws itself as work moves; a dropped stream shows `stream lost` and the console keeps running for its other trackers. The AGE column shows how long each in-progress task has been claimed. Lazily imported ONLY under `--tui`, so a server spawn never loads the renderer. |
 | console runtime floor | limitation | `@opentui/core`'s renderer reaches native code over Node FFI: it needs **Node 26.4+** and `--experimental-ffi`. So `engines` moved to `>=26.4.0` (the MCP server itself runs on older Node), and `tasks-mcp --tui` re-execs once under the flag so the bin works without it. Probe: `node -e "import('@opentui/core/testing').then(m=>m.createTestRenderer({width:9,height:3}))"` throws "FFI is not available" without `--experimental-ffi`, resolves with it. |
 | library | feature | The core is importable; the MCP layer is a wrapper, never a requirement. |
 | list_projects | feature | The one read that takes no `project`: it walks the cache directory and reports every project with its task counts by status (targets included) and the cache mtime. Each cache file DECLARES its own id (a `project:` key); a file without one is a pre-identity orphan and is SKIPPED (never deleted) — `sync` or deleting the file heals it. The `/events` watcher reads the same declared id, so a stream event and a `list_projects` row carry the byte-identical project string. Local only — no provider, no network. `tasks-mcp projects` on the CLI. |
@@ -934,6 +936,7 @@ release; never create a release unprompted. On a yes: bump version, commit, push
 | delete semantics | feature | An explicit deepest-first removal, distinct from sync's absence rule; refused for a target that still holds tasks. |
 | publish pipeline | feature | Pushing code never publishes; publishing a GitHub Release does — tokenless, with provenance. |
 | in_progress | feature | A third status a worker sets on pickup, so a task being built leaves list_ready. |
+| claim reporting | feature | `list_ready` returns `claims`: every in-progress task's claim with `claimed_at`, `heartbeat_at`, and `stale_for_minutes` (whole minutes since the last heartbeat — an age, not a verdict; no threshold applied). The reader picks the threshold — the console shows the age, a dispatcher sweeps `claims.filter((c) => c.stale_for_minutes >= claimStaleMinutes)`. A claim is reported, never auto-released. The ledger is local (`<cacheDir>/claims/<id>.json`), keyed on the project id, and off the task record — a heartbeat per layer would rewrite the issue body, and local process liveness is not project truth. |
 | target | feature | A roadmap item as a graph node: groups tasks, never dispatched, progress derived from them. A name and a why, both required; no build fields; one altitude. |
 | roadmap-aware ranking | feature | list_ready ranks by the task AND the roadmap row it serves; a target waiting on an unshipped target sorts its work below every clear row. |
 | sub-issue edge | feature | A task's target IS its issue's parent on GitHub — free to read, and re-parenting in the UI flows back. |
