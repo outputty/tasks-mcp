@@ -6,76 +6,64 @@ What exists and how it works. The forward plan lives in the `tasks` MCP server (
 
 ## What we're building towards
 
-One console over every tracker you run, showing what is being built right now across all of them, and
-letting you change it without leaving the terminal.
+The console tells the truth about what is happening, without being asked. A build moving on any tracker
+redraws the queue, and every live build shows how long it has been running.
 
-The first slice has **shipped** (`tasks-mcp --tui`): it boots, connects, renders the queue, opens and
-edits items, and adds trackers — the mechanics below marked ✓. Two pieces are deferred and on the
-graph: live `/events` refresh (`tui-live-events-…`) and per-claim age for a healthy `in_progress` build
-(`expose-active-claim-age-…`). See the feature index below for what exists.
+    tasks-mcp --tui        // no flag still starts the MCP server; --http still serves it
 
-    tasks-mcp --tui        // the console. No flag still starts the MCP server; --http still serves it.
-
-`--tui` starts a tracker for itself on an ephemeral loopback port and connects to it as an MCP client,
-exactly as it connects to any tracker in its list. That is one code path, not two: the local tracker is
-just the first entry, so pointing the console at a remote one later is a list edit rather than a second
-implementation.
-
-Output: the queue — every project's active work in one list, newest movement first (expected)
+Output: the queue, redrawing itself as builds move (expected)
 
 ```
 ┌ tasks-mcp ──────────────────────────────────────────────── 2 trackers ─┐
 │ PROJECT              TASK                        STATE        AGE      │
 │ outputty/laygo       run-phases-refactor         in progress   14m     │
 │ outputty/laygo       duckdb-appender-loader      in progress    2m     │
-│ outputty/tasks-mcp   tui-detail-and-edit         in progress   41m     │
-│ outputty/tasks-mcp   tui-trackers                ready          —      │
-└ ↑↓ move · ⏎ open · a add tracker · q quit ─────────────────────────────┘
+│ outputty/tasks-mcp   tui-live-events             in progress   41m     │
+│ outputty/tasks-mcp   expose-active-claim-age     ready          —      │
+└ ↑↓ move · ⏎ open · a add tracker · / filter · q quit ──────────────────┘
 ```
 
-The list is `list_tasks` filtered in the console, **not** `list_ready` — `list_ready` excludes
-`in_progress`, so a console built on it would hide the builds it exists to watch. ✓ shipped. (Age is
-best-effort: a healthy `in_progress` build shows `—` until its claim goes stale, pending
-`expose-active-claim-age-…`. A `/ filter` key is not built.)
+Two gaps close, and they are the same gap seen from each end: the queue is a snapshot of a moving
+thing, and it neither refreshes nor says how old anything is.
 
-Output: one item, opened (expected)
+**It refreshes itself.** One `/events` subscription per connected tracker — the in-process one and each
+saved one. A `changed` event names a project; the console debounces and re-reads that tracker. Every
+subscription closes on quit. ⚠ Node has no `EventSource` (verified absent on 26.5.0), so the stream is
+consumed with `fetch` and a `ReadableStream` reader, splitting frames on a blank line:
 
 ```
-┌ tui-detail-and-edit ─────────────────────────── outputty/tasks-mcp ─┐
-│ state  in progress   tier 2   qa subagent   priority normal          │
-│ target tui-console-1787751801        deps  tui-prototype (done)      │
-│                                                                       │
-│ ## Problem                                                            │
-│ The console can list work but not act on it …                         │
-│                                                                       │
-│ TRAIL (4)                                                             │
-│ 19:49  decision  SPEC round 1 — the console's shape …                 │
-└ e edit · s state · c comment · n new idea · esc back ────────────────┘
+$ curl -N http://127.0.0.1:3917/events
+: connected
+
+event: changed
+data: {"project":"/Users/ringolds/Documents/Outputty/tasks-mcp","at":"2026-08-27T07:05:38.290Z"}
 ```
 
-Every write goes through the tools that already exist — `edit_task`, `start_task`, `close_task`,
-`append_trail`, `add_task`. The console adds no write path of its own. ✓ shipped.
+**It knows how old a build is.** The claim ledger already records `claimed_at` and `heartbeat_at` for
+every in-progress task, and `list_ready` already reports the *stale* subset as `stale_claims` — which
+the console already fetches for exactly this column. It gains `claims`, the whole set:
 
-`a` adds a tracker: take a URL, prove it by calling `list_projects` (the MCP handshake, not `/health`),
-show what came back, and only then write it to the console's tracker list (`<cacheDir>/console.yaml`). A
-refused, timed-out, or non-MCP address reads distinctly and is never saved. ✓ shipped.
+Output: `list_ready` (expected)
 
-Live updates are the next step (`tui-live-events-…`): the console will follow `GET /events` per tracker,
-each event naming which project moved so it re-reads that project's graph — local and instant — rather
-than trusting a payload already stale by the time it is drawn. Today the console re-reads on startup,
-after a write, and on returning to the queue; it opens no SSE yet.
+```json
+{
+  "ids": ["expose-active-claim-age-1787777373"],
+  "claims": [
+    { "id": "tui-live-events-1787780124", "claimed_at": "2026-08-27T06:25:00.000Z",
+      "heartbeat_at": "2026-08-27T07:04:12.000Z", "stale_for_minutes": 2 }
+  ],
+  "stale_claims": []
+}
+```
 
-The tracker change that came first: `list_projects` and the `/events` watcher used to reconstruct a
-project's id by relativising its cache file path, because the file carried only `tasks:`. A path-shaped
-id then came back without its leading `/`, and a pre-identity orphan could not be told from a live
-project (`tasks-mcp projects` once returned 33 rows, 32 of them dead). ✓ The cache file now declares its
-own id, and both readers read it: an orphan lacks the key and is skipped (never deleted), and the id
-round-trips verbatim.
+`stale_claims` is unchanged. A dispatcher sweeping it must not silently start seeing healthy claims, so
+`claims` is added beside it rather than widening it — a transition state, filed with the sweep that
+drops the older field once nothing reads it.
 
-⚠ Boundaries this does not cross. `append_trail` writes only the remote's comment thread and raises no
-`/events` change, so the console re-reads a trail when it opens an item. Nothing authenticates the HTTP
-transport, so a remote tracker is only as safe as the network it is on. And dragging is out: the ready
-order is derived on every read, so a dragged permutation has nowhere to be stored.
+⚠ Boundaries unchanged. `append_trail` writes only the remote's comment thread and raises no `/events`
+change, so the detail view still re-reads a trail when it opens an item. Claim timing stays out of the
+task record: a heartbeat per layer would rewrite the issue body on every beat, and the liveness of a
+local process is not project truth.
 
 ## The provider stack
 
