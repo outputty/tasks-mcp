@@ -74,7 +74,8 @@ function serverOptions(): ServerOptions {
 }
 
 // The project id a subcommand acts on: an explicit --project, else --project-id, else the id this repo's
-// .mcp.json declares — else a loud failure naming the flag. Never derived from git or the cwd.
+// tasks.config.yaml declares (else the legacy .mcp.json) — else a loud failure naming the flag. Never
+// derived from git or the cwd.
 const projectId = (): string => resolveProjectId(program.opts());
 const ctx = (): ProjectContext => ({ project: projectId() });
 const service = () => makeService(serverOptions());
@@ -278,14 +279,14 @@ program
 program
   .command("identify")
   .description(
-    "echo the project id a call would use — from --project, --project-id, or this repo's .mcp.json; " +
+    "echo the project id a call would use — from --project, --project-id, or this repo's tasks.config.yaml; " +
       "opaque and validated, never derived from git or the cwd",
   )
   .action(() => out({ id: projectId() }));
 
 // No subcommand: run the MCP server on the chosen transport. One service instance backs both the
 // transport and the background loop, so the loop reconciles exactly the projects the server serves.
-// The --project-id (or --project), else this repo's .mcp.json, becomes the server's default project,
+// The --project-id (or --project), else this repo's tasks.config.yaml, becomes the server's default project,
 // filling a tool call that omits one — the SAME resolution a subcommand uses, so both surfaces name one
 // project in one directory. A default may legitimately be absent; tool calls then name their own.
 program.action(async () => {

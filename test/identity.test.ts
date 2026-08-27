@@ -139,6 +139,54 @@ test("the subcommand and the server default resolve the SAME id in one directory
   expect(findProjectId({}, idDir())).toBeUndefined();
 });
 
+// --- tasks.config.yaml: the CLI-first id source, above the legacy .mcp.json read -----------------------
+
+/** A `tasks.config.yaml` body declaring `project` plus the providers shape a repo would carry. */
+const rcDeclares = (project: string): string =>
+  `project: ${project}\nproviders:\n  - github: { repo: ${project} }\n`;
+
+/** A throwaway dir carrying `tasks.config.yaml` with `body`, cleaned up after the test. */
+function rcDir(body: string): string {
+  const dir = idDir();
+  fs.writeFileSync(path.join(dir, "tasks.config.yaml"), body);
+  return dir;
+}
+
+test("identify resolves the id a repo's tasks.config.yaml declares, with no flag", () => {
+  expect(resolveProjectId({}, rcDir(rcDeclares("outputty/tasks-mcp")))).toBe("outputty/tasks-mcp");
+});
+
+test("precedence: --project > --project-id > tasks.config.yaml > .mcp.json > fail", () => {
+  const dir = idDir(declares("from/mcpjson")); // .mcp.json present
+  fs.writeFileSync(path.join(dir, "tasks.config.yaml"), rcDeclares("from/rcfile"));
+  expect(resolveProjectId({ project: "a", projectId: "b" }, dir)).toBe("a"); // --project wins
+  expect(resolveProjectId({ projectId: "b" }, dir)).toBe("b"); // --project-id beats the files
+  expect(resolveProjectId({}, dir)).toBe("from/rcfile"); // tasks.config.yaml beats .mcp.json
+  expect(resolveProjectId({}, idDir(declares("from/mcpjson")))).toBe("from/mcpjson"); // .mcp.json alone
+  expect(() => resolveProjectId({}, idDir())).toThrow("no project id"); // neither → fail
+});
+
+test("a missing, malformed, or project-less tasks.config.yaml is treated as absent (falls through)", () => {
+  expect(() => resolveProjectId({}, idDir())).toThrow("no project id"); // missing
+  expect(() => resolveProjectId({}, rcDir("[unterminated"))).toThrow("no project id"); // malformed yaml
+  expect(() => resolveProjectId({}, rcDir("providers:\n  - github: {}\n"))).toThrow(
+    "no project id",
+  ); // no project key
+});
+
+test("tasks.config.yaml is discovered from a subdirectory upward to the repo root", () => {
+  const root = rcDir(rcDeclares("outputty/tasks-mcp"));
+  const sub = path.join(root, "src", "deep");
+  fs.mkdirSync(sub, { recursive: true });
+  expect(resolveProjectId({}, sub)).toBe("outputty/tasks-mcp"); // found by walking up from a subdir
+});
+
+test("with a tasks.config.yaml, the subcommand and the server default resolve the same id", () => {
+  const dir = rcDir(rcDeclares("team/alpha"));
+  expect(findProjectId({}, dir)).toBe(resolveProjectId({}, dir));
+  expect(findProjectId({}, dir)).toBe("team/alpha");
+});
+
 test("a tool call omitting project resolves the server's --project-id default; passing project overrides it", async () => {
   installNock(new NockGitHub());
   const cache = tmp();
