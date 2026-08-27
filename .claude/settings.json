@@ -38,6 +38,11 @@
     ]
   },
   "outputStyle": "outputty",
+  "deniedMcpServers": [
+    {
+      "serverCommand": ["npx", "-y", "@outputty/tasks-mcp"]
+    }
+  ],
   "worktree": {
     "baseRef": "head"
   },
