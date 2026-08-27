@@ -684,8 +684,9 @@ The `mcp-registration` example in `examples.md`.
 no command it runs the MCP server; subcommands drive the core directly: `list`, `ready`, `roadmap`,
 `projects`, `planning`, `schedule`, `prereqs <id>`, `blockers`, `get <id>`, `add <id>`, `edit <id>`,
 `close <id>`, `delete <id>`, `trail <id>`, `trail-add <id>`, `config`, `sync`, `identify`. `projects`
-takes no `--project` (it asks about the server); `--project` otherwise defaults to cwd, and the
-deployment flags work on every command.
+takes no `--project` (it asks about the server); every other subcommand resolves its id as `--project`,
+else `--project-id`, else the `--project-id` the repo's checked-in `.mcp.json` declares, else a loud
+failure — never the cwd (`bin/resolve-id.ts`). The deployment flags work on every command.
 
 #### Example
 
