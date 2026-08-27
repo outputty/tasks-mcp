@@ -15,7 +15,12 @@ import { TaskStack } from "../src/core/service.ts";
 import { FileProvider } from "../src/core/providers/file.ts";
 import { GitHubProvider } from "../src/core/providers/github.ts";
 import { parse } from "yaml";
-import { ConfigProvider, validateProjectId, cachePath } from "../src/core/providers/config.ts";
+import {
+  ConfigProvider,
+  validateProjectId,
+  cachePath,
+  githubOf,
+} from "../src/core/providers/config.ts";
 import { readProjectSummaries } from "../src/core/projects.ts";
 import { buildStack, resolveRemotes } from "../src/core/providers/provider.ts";
 import { resolveProjectId, findProjectId } from "../bin/resolve-id.ts";
@@ -175,7 +180,9 @@ test("a project's `repo` config lets the GitHub provider resolve coordinates wit
   });
   const cache = tmp();
   const config = new ConfigProvider({ cacheDir: cache.dir });
-  config.set("acme/widgets", "repo", { repo: "acme/widgets", projects: false });
+  config.set("acme/widgets", "repo", {
+    providers: [{ github: { repo: "acme/widgets", projects: false } }],
+  });
   // launchCwd is a directory that is NOT a git repo — resolution must come from `repo`, not git.
   const provider = new GitHubProvider(config, octo(), "/tasks-mcp-not-a-git-dir");
 
@@ -216,8 +223,10 @@ test("two stacks over one cacheDir and one id share a single, verbatim-named cac
 test("the per-project config override lands under the id and a second reader sees it", () => {
   const cache = tmp();
   const id = "acme/widgets";
-  new ConfigProvider({ cacheDir: cache.dir }).set(id, "repo", { board: "Roadmap" });
-  expect(new ConfigProvider({ cacheDir: cache.dir }).get(id).board).toBe("Roadmap");
+  new ConfigProvider({ cacheDir: cache.dir }).set(id, "repo", {
+    providers: [{ github: { board: "Roadmap" } }],
+  });
+  expect(githubOf(new ConfigProvider({ cacheDir: cache.dir }).get(id))?.board).toBe("Roadmap");
   expect(fs.existsSync(path.join(cache.dir, "acme", "widgets.config.yaml"))).toBe(true);
   cache.cleanup();
 });
@@ -292,11 +301,25 @@ test("cachePath refuses an id that would escape the cache directory, and nests a
 
 // --- multi-remote-stack: a project's stack can hold more than one remote ------------------------------
 
-test("resolveRemotes: providers wins, the singular provider is its one-element form, github is default", () => {
+test("resolveRemotes: one name per entry key, deepest last, github the default", () => {
   expect(resolveRemotes({})).toEqual(["github"]);
-  expect(resolveRemotes({ provider: "linear" })).toEqual(["linear"]);
-  expect(resolveRemotes({ providers: ["github", "linear"] })).toEqual(["github", "linear"]);
-  expect(resolveRemotes({ provider: "linear", providers: ["github"] })).toEqual(["github"]);
+  expect(resolveRemotes({ providers: [] })).toEqual(["github"]);
+  expect(resolveRemotes({ providers: [{ github: {} }] })).toEqual(["github"]);
+  // deepest-last order is preserved, one name per entry
+  expect(resolveRemotes({ providers: [{ github: { repo: "a/b" } }, { github: {} }] })).toEqual([
+    "github",
+    "github",
+  ]);
+});
+
+test("a bare-string providers entry is rejected, naming the object shape it should be", () => {
+  const cache = tmp();
+  const config = new ConfigProvider({ cacheDir: cache.dir });
+  // The pre-object `providers: ["github"]` shape no longer parses — the entry must carry its config.
+  expect(() => config.set("acme/widgets", "repo", { providers: ["github"] } as never)).toThrow(
+    /provider entry must be an object/,
+  );
+  cache.cleanup();
 });
 
 test("buildStack builds [file, ...remotes] in order (N deep) and fails on an unknown entry naming it", () => {
@@ -320,7 +343,7 @@ test("buildStack builds [file, ...remotes] in order (N deep) and fails on an unk
   }
 });
 
-test("set_config accepts providers and get_config reports it in the repo and effective layers", async () => {
+test("set_config accepts a providers stack and get_config reports it in the repo and effective layers", async () => {
   installNock(new NockGitHub());
   const cache = tmp();
   const service = new TaskStack({ cacheDir: cache.dir }, [
@@ -328,18 +351,12 @@ test("set_config accepts providers and get_config reports it in the repo and eff
     nockProvider({ projects: false, cacheDir: cache.dir }),
   ]);
   const { client, close } = await startHttp(service, "team/alpha");
-
-  await client.callTool({
-    name: "set_config",
-    arguments: { project: "team/alpha", scope: "repo", config: { providers: ["github"] } },
-  });
-  const cfg = await client.callTool({
-    name: "get_config",
-    arguments: { project: "team/alpha" },
-  });
-  expect(structured(cfg).repo.providers).toEqual(["github"]);
-  expect(structured(cfg).effective.providers).toEqual(["github"]);
-
+  const providers = [{ github: { board: "Ops" } }];
+  const args = { project: "team/alpha", scope: "repo", config: { providers } };
+  await client.callTool({ name: "set_config", arguments: args });
+  const cfg = await client.callTool({ name: "get_config", arguments: { project: "team/alpha" } });
+  expect(structured(cfg).repo.providers).toEqual(providers);
+  expect(structured(cfg).effective.providers).toEqual(providers);
   await close();
   cache.cleanup();
 });

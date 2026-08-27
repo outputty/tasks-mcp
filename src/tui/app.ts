@@ -1,23 +1,16 @@
-// The interactive console — a small state machine over the queue, detail and add-tracker screens. It
-// owns the renderer, the LIST of connected trackers, and the current screen; every keypress runs through
-// `onKey`, which mutates state, may call a write ACTION (all existing tools) on the tracker its row came
-// from, and re-paints. Input is handled here rather than through OpenTUI's focusable widgets, so one
-// code path drives every screen and a test can feed keys straight to `onKey` without a terminal.
+// The interactive console — a small state machine over the queue, detail and prompt screens for ONE
+// project. It owns the renderer, the current screen and the task rows; every keypress runs through
+// `onKey`, which mutates state, may call a write ACTION (a direct `TaskService` call) and re-paints.
+// Input is handled here rather than through OpenTUI's focusable widgets, so one code path drives every
+// screen and a test can feed keys straight to `onKey` without a terminal.
 
 import type { CliRenderer } from "@opentui/core";
+import type { ProjectContext } from "../core/types.ts";
+import type { TaskService } from "../core/service.ts";
+import type { AgedClaim } from "../core/claims.ts";
+import { ready } from "../core/graph.ts";
 import { paint as paintScreen } from "./view.ts";
-import {
-  connectTracker,
-  eventsEndpoint,
-  fetchQueues,
-  mcpEndpoint,
-  probeTracker,
-  type ProbeResult,
-  type Tracker,
-} from "./tracker.ts";
-import { subscribeChanges, type Subscription } from "./events.ts";
 import { queueRows, type QueueRow, type ProjectQueue } from "./queue.ts";
-import { saveTracker } from "./config.ts";
 import {
   loadDetail,
   editFields,
@@ -34,7 +27,6 @@ import {
   detailLines,
   editLines,
   promptLines,
-  addTrackerLines,
   EDIT_FIELDS,
   FIELD_OPTIONS,
 } from "./format.ts";
@@ -50,141 +42,50 @@ export interface Key {
 
 type Mode =
   | { kind: "queue" }
-  | { kind: "add"; buffer: string; probed?: ProbeResult; error?: string }
   | { kind: "detail"; detail: Detail }
   | { kind: "state"; detail: Detail }
   | { kind: "edit"; detail: Detail; fields: EditFields; field: number }
   | { kind: "prompt"; detail: Detail; purpose: "comment" | "idea"; buffer: string };
 
-/** How long to coalesce a burst of change frames for one tracker into a single re-read. The server's
- *  own writes stream twice (its ChangeBus and its cache-dir watcher both fire), so a window wide enough
- *  to catch a socket burst keeps a local write from re-reading twice. */
-const DEBOUNCE_MS = 50;
-
 export class Console {
   private mode: Mode = { kind: "queue" };
   private rows: QueueRow[] = [];
-  // One snapshot per tracker, so a change on one re-reads that tracker alone and rebuilds the flat rows
-  // from every snapshot — nothing re-reads the trackers that did not move.
-  private queues = new Map<string, ProjectQueue[]>();
-  private readFailures = new Map<string, string>(); // trackerId → url: unreachable at read time
-  private streamFailures = new Map<string, string>(); // trackerId → url: its /events stream dropped
-  private subscriptions = new Map<string, Subscription>(); // one /events stream per tracker
-  private timers = new Map<string, ReturnType<typeof setTimeout>>(); // one debounce timer per tracker
-  private reads = 0; // completed event-driven re-reads — what the debounce test reads
   private selected = 0;
-  private active: Tracker;
-  private project = "";
+  private readonly ctx: ProjectContext;
   private error = "";
   private busy = false;
 
-  /** `trackers` starts with the in-process tracker; `cacheDir` is where a newly added tracker is saved;
-   *  `unreachable` is saved-tracker urls that failed to connect at startup, kept visible on the queue. */
+  /** `service` backs every read and write; `project` is the one project this console shows and edits —
+   *  the same id every CLI command in the repo resolves. */
   constructor(
     private readonly renderer: CliRenderer,
-    private readonly trackers: Tracker[],
-    private readonly cacheDir: string,
+    private readonly service: TaskService,
+    project: string,
     private readonly quit: () => void,
-    private readonly unreachable: string[] = [],
   ) {
-    this.active = trackers[0];
+    this.ctx = { project };
   }
 
-  /** Wire the keyboard, draw the first frame, and open one /events stream per tracker so the queue
-   *  redraws itself as builds move. */
+  /** Wire the keyboard, read the queue, and draw the first frame. */
   async start(): Promise<void> {
     this.renderer.keyInput.on("keypress", (key: Key) => void this.onKey(key));
     await this.refresh();
     this.render();
-    this.subscribeAll();
   }
 
-  /** Re-read every tracker's queue into its snapshot, then rebuild the flat rows — the one source both
-   *  screens read, so a write never patches a local copy. A tracker that fails is recorded, not fatal. */
+  /** Re-read the project's queue into the row list — the one source both screens read, so a write never
+   *  patches a local copy. */
   async refresh(): Promise<void> {
-    for (const t of this.trackers) await this.readTracker(t);
-    this.rebuildRows();
-  }
-
-  /** Read one tracker's queues into the snapshot. A read failure keeps the last snapshot — so that
-   *  tracker's rows persist — and records the url for the footer. */
-  private async readTracker(t: Tracker): Promise<void> {
-    try {
-      this.queues.set(t.id, await fetchQueues(t.client, t.id));
-      this.readFailures.delete(t.id);
-    } catch {
-      this.readFailures.set(t.id, t.url); // unreachable at read time — rows stay, not a crash
-    }
-  }
-
-  /** Rebuild the flat cross-tracker row list from every snapshot, clamping the cursor if it shrank. */
-  private rebuildRows(): void {
-    this.rows = queueRows([...this.queues.values()].flat());
+    const tasks = await this.service.list(this.ctx);
+    const claims = await this.service.claims(this.ctx);
+    const queue: ProjectQueue = {
+      project: this.ctx.project,
+      tasks,
+      readyIds: ready(tasks).map((t) => t.id),
+      claimedAt: claimTimes(claims),
+    };
+    this.rows = queueRows([queue]);
     if (this.selected >= this.rows.length) this.selected = Math.max(0, this.rows.length - 1);
-  }
-
-  /** Re-read one tracker after its /events stream reported a change, then repaint. Read-only, so it may
-   *  run between keypresses; only this tracker's snapshot is refreshed, the rest stand. */
-  private async refreshTracker(trackerId: string): Promise<void> {
-    const tracker = this.trackers.find((t) => t.id === trackerId);
-    if (!tracker) return;
-    await this.readTracker(tracker);
-    this.reads += 1;
-    this.rebuildRows();
-    this.render();
-  }
-
-  /** Open one /events subscription per connected tracker. Called once at start, and again for a tracker
-   *  added at runtime. */
-  private subscribeAll(): void {
-    for (const t of this.trackers) this.subscribeTracker(t);
-  }
-
-  /** Subscribe to one tracker's change stream: a `changed` frame schedules a debounced re-read of that
-   *  tracker, a dropped stream is shown but not fatal. A tracker already subscribed is left alone. */
-  private subscribeTracker(t: Tracker): void {
-    if (this.subscriptions.has(t.id)) return;
-    const sub = subscribeChanges(
-      eventsEndpoint(t.url),
-      () => this.scheduleRefresh(t.id),
-      () => this.streamLost(t),
-    );
-    this.subscriptions.set(t.id, sub);
-  }
-
-  /** Coalesce a burst of change frames for one tracker into a single re-read: the first frame schedules
-   *  the read, later frames inside the window are dropped because the timer already stands. */
-  private scheduleRefresh(trackerId: string): void {
-    if (this.timers.has(trackerId)) return;
-    const timer = setTimeout(() => {
-      this.timers.delete(trackerId);
-      void this.refreshTracker(trackerId);
-    }, DEBOUNCE_MS);
-    timer.unref?.();
-    this.timers.set(trackerId, timer);
-  }
-
-  /** A tracker's /events stream refused or dropped: record it for the footer and repaint. Its rows keep
-   *  their last snapshot, and every other tracker keeps streaming. */
-  private streamLost(t: Tracker): void {
-    this.streamFailures.set(t.id, t.url);
-    this.subscriptions.delete(t.id);
-    this.render();
-  }
-
-  /** Close every /events subscription and cancel every pending debounce timer — called on quit, so no
-   *  socket or timer outlives the console. Idempotent. */
-  stop(): void {
-    for (const sub of this.subscriptions.values()) sub.close();
-    this.subscriptions.clear();
-    for (const timer of this.timers.values()) clearTimeout(timer);
-    this.timers.clear();
-  }
-
-  /** How many event-driven re-reads have completed — what the debounce test reads to prove a burst of
-   *  frames coalesces to one re-read. */
-  readCount(): number {
-    return this.reads;
   }
 
   /** Handle one key: dispatch by screen, surface any write error, re-paint. Serialized so a burst of
@@ -206,7 +107,6 @@ export class Console {
   private async dispatch(key: Key): Promise<void> {
     const mode = this.mode;
     if (mode.kind === "queue") return this.queueKey(key);
-    if (mode.kind === "add") return this.addKey(key, mode);
     if (mode.kind === "detail") return this.detailKey(key, mode.detail);
     if (mode.kind === "state") return this.stateKey(key, mode.detail);
     if (mode.kind === "edit") return this.editKey(key, mode);
@@ -214,11 +114,7 @@ export class Console {
   }
 
   private async queueKey(key: Key): Promise<void> {
-    if (key.name === "q") {
-      this.stop();
-      return this.quit();
-    }
-    if (key.name === "a") return void (this.mode = { kind: "add", buffer: "" });
+    if (key.name === "q") return this.quit();
     if (key.name === "up") this.selected = Math.max(0, this.selected - 1);
     if (key.name === "down") this.selected = Math.min(this.rows.length - 1, this.selected + 1);
     if (key.name === "return") await this.open();
@@ -227,47 +123,7 @@ export class Console {
   private async open(): Promise<void> {
     const row = this.rows[this.selected];
     if (!row) return;
-    this.active = this.trackerFor(row);
-    this.project = row.project;
-    this.mode = {
-      kind: "detail",
-      detail: await loadDetail(this.active.client, row.project, row.id),
-    };
-  }
-
-  /** The tracker a row's writes go to — matched by the id the fetch tagged it with, so two trackers that
-   *  share a project id stay distinct. Falls back to the local tracker for an untagged row. */
-  private trackerFor(row: QueueRow): Tracker {
-    return this.trackers.find((t) => t.id === row.tracker) ?? this.trackers[0];
-  }
-
-  private async addKey(key: Key, mode: Mode & { kind: "add" }): Promise<void> {
-    if (key.name === "escape") return void (this.mode = { kind: "queue" });
-    if (key.name === "return") return this.addSubmit(mode);
-    mode.probed = undefined; // editing the url invalidates a prior probe
-    mode.error = undefined;
-    mode.buffer = applyTextKey(mode.buffer, key);
-  }
-
-  /** First ⏎ probes the address; a second ⏎ (once it is proven) saves it. */
-  private async addSubmit(mode: Mode & { kind: "add" }): Promise<void> {
-    if (mode.probed) return this.saveNew(mode.buffer);
-    try {
-      mode.probed = await probeTracker(mode.buffer);
-      mode.error = undefined;
-    } catch (e) {
-      mode.error = e instanceof Error ? e.message : String(e); // shown in the form; nothing is saved
-      mode.probed = undefined;
-    }
-  }
-
-  private async saveNew(url: string): Promise<void> {
-    saveTracker(this.cacheDir, url);
-    const tracker: Tracker = { id: url, url, client: await connectTracker(mcpEndpoint(url)) };
-    this.trackers.push(tracker);
-    await this.refresh();
-    this.subscribeTracker(tracker); // the new tracker streams too, so its rows stay live
-    this.mode = { kind: "queue" };
+    this.mode = { kind: "detail", detail: await loadDetail(this.service, this.ctx, row.id) };
   }
 
   private detailKey(key: Key, detail: Detail): void {
@@ -287,7 +143,7 @@ export class Console {
       | "replan"
       | undefined;
     if (!to) return;
-    await changeState(this.active.client, this.project, detail.task.id, to);
+    await changeState(this.service, this.ctx, detail.task.id, to);
     await this.refresh();
     this.mode = { kind: "queue" }; // a close drops the row; start/replan changed it — the queue is truth
   }
@@ -304,7 +160,7 @@ export class Console {
 
   private async saveEdit(mode: Mode & { kind: "edit" }): Promise<void> {
     const patch = editPatch(editFields(mode.detail.task), mode.fields);
-    await applyEdit(this.active.client, this.project, mode.detail.task.id, patch);
+    await applyEdit(this.service, this.ctx, mode.detail.task.id, patch);
     await this.reopen(mode.detail.task.id);
   }
 
@@ -316,17 +172,20 @@ export class Console {
 
   private async submitPrompt(mode: Mode & { kind: "prompt" }): Promise<void> {
     const id = mode.detail.task.id;
-    if (mode.purpose === "comment")
-      await addComment(this.active.client, this.project, id, mode.buffer);
-    else await fileIdea(this.active.client, this.project, `idea-${Date.now()}`, mode.buffer);
+    if (mode.purpose === "comment") await addComment(this.service, this.ctx, id, mode.buffer);
+    else await fileIdea(this.service, this.ctx, `idea-${Date.now()}`, mode.buffer);
     await this.reopen(id);
   }
 
   /** After a write, re-read the queue AND re-open the item, so both screens reflect the change without a
-   *  manual refresh (a trail write raises no /events, so this is the only way its new entry appears). */
+   *  manual refresh (a trail write raises no change signal, so this is the only way its new entry
+   *  appears). */
   private async reopen(id: string): Promise<void> {
     await this.refresh();
-    this.mode = { kind: "detail", detail: await loadDetail(this.active.client, this.project, id) };
+    this.mode = {
+      kind: "detail",
+      detail: await loadDetail(this.service, this.ctx, id),
+    };
   }
 
   private render(): void {
@@ -336,9 +195,7 @@ export class Console {
 
   private lines(): string[] {
     const mode = this.mode;
-    if (mode.kind === "queue")
-      return [...queueLines(this.rows, this.selected), ...this.failureLines()];
-    if (mode.kind === "add") return addTrackerLines(mode.buffer, mode.probed, mode.error);
+    if (mode.kind === "queue") return queueLines(this.rows, this.selected);
     if (mode.kind === "edit") return editLines(mode.fields, mode.field);
     if (mode.kind === "prompt") return promptLines(promptLabel(mode.purpose), mode.buffer);
     if (mode.kind === "state") {
@@ -347,29 +204,26 @@ export class Console {
     return detailLines(mode.detail);
   }
 
-  private failureLines(): string[] {
-    const unreachable = [...new Set([...this.unreachable, ...this.readFailures.values()])];
-    const lost = [...this.streamFailures.values()].filter((url) => !unreachable.includes(url));
-    return [
-      ...unreachable.map((url) => `⚠ unreachable: ${url}`),
-      ...lost.map((url) => `⚠ stream lost: ${url}`),
-    ];
-  }
-
   private title(): string {
     const mode = this.mode;
-    if (mode.kind === "queue") return `tasks-mcp — ${count(this.rows.length)}`;
-    if (mode.kind === "add") return "add tracker";
-    return `${mode.detail.task.id} — ${this.project}`;
+    if (mode.kind === "queue")
+      return `tasks-mcp — ${this.ctx.project} — ${count(this.rows.length)}`;
+    return `${mode.detail.task.id} — ${this.ctx.project}`;
   }
 
   private footer(): string {
     const mode = this.mode;
-    if (mode.kind === "queue") return "↑↓ move · ⏎ open · a add tracker · q quit";
+    if (mode.kind === "queue") return "↑↓ move · ⏎ open · q quit";
     if (mode.kind === "detail") return "e edit · s state · c comment · n new idea · esc back";
-    if (mode.kind === "add") return addFooter(mode);
     return "esc cancel";
   }
+}
+
+/** Claim start times keyed by task id, from the service's aged claims. */
+function claimTimes(claims: AgedClaim[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const c of claims) out[c.id] = c.claimed_at;
+  return out;
 }
 
 /** Cycle the selected field through its closed value set; a free-text field has none and is skipped. */
@@ -389,7 +243,7 @@ function typeInto(mode: Mode & { kind: "edit" }, key: Key): void {
 }
 
 /** Apply one key to a text buffer: backspace removes the last character, a printable one appends, any
- *  other key leaves it unchanged. The three text screens — a url, a comment, an edit field — share it. */
+ *  other key leaves it unchanged. The two text screens — a comment and an edit field — share it. */
 function applyTextKey(current: string, key: Key): string {
   if (key.name === "backspace") return current.slice(0, -1);
   if (printable(key)) return current + key.sequence;
@@ -399,11 +253,6 @@ function applyTextKey(current: string, key: Key): string {
 /** A single printable character (space included), not a control chord. */
 function printable(key: Key): boolean {
   return !key.ctrl && !key.meta && (key.sequence?.length ?? 0) === 1 && key.sequence! >= " ";
-}
-
-function addFooter(mode: Mode & { kind: "add" }): string {
-  if (mode.error) return "esc cancel";
-  return mode.probed ? "⏎ save · esc cancel" : "⏎ test · esc cancel";
 }
 
 function promptLabel(purpose: "comment" | "idea"): string {

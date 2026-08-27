@@ -1,46 +1,27 @@
 // The interactive console as a state machine: keys are fed straight to Console.onKey (a real terminal
 // delivers the same events; mockInput coalesces ESC, so synthetic keys are cleaner), and each write
-// lands on a real in-process tracker. The renderer is the headless test renderer — no TTY.
+// lands on a real in-process service for one project. The renderer is the headless test renderer — no
+// TTY, no MCP client.
 
-import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { test, expect } from "vitest";
 import { createTestRenderer } from "@opentui/core/testing";
-import { createHttpServer } from "../src/mcp/http.ts";
 import { TaskStack } from "../src/core/service.ts";
 import { FileProvider } from "../src/core/providers/file.ts";
-import { connectTracker, type Tracker } from "../src/tui/tracker.ts";
 import { Console } from "../src/tui/app.ts";
 import { tmp, task } from "./helpers.ts";
 
 const fileStack = (cacheDir: string) =>
   new TaskStack({ cacheDir }, [new FileProvider({ cacheDir })]);
 
-async function makeApp(svc: TaskStack) {
+async function makeApp(svc: TaskStack, project = "p") {
   const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
     width: 100,
     height: 22,
   });
-  const server = createHttpServer(svc);
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const local: Tracker = { id: "local", url: base, client: await connectTracker(`${base}/mcp`) };
   let quit = false;
-  const app = new Console(renderer, [local], svc.cacheDir(), () => (quit = true));
-  const close = async () => {
-    app.stop(); // close the /events subscriptions before the renderer, so no late frame repaints it
-    renderer.destroy();
-    await local.client.close();
-    await closeServer(server);
-  };
+  const app = new Console(renderer, svc, project, () => (quit = true));
+  const close = async () => renderer.destroy();
   return { app, renderOnce, frame: captureCharFrame, quit: () => quit, close };
-}
-
-async function closeServer(server: Server): Promise<void> {
-  await new Promise<void>((r) => {
-    server.close(() => r());
-    server.closeAllConnections();
-  });
 }
 
 test("⏎ opens a task and esc returns to the queue", async () => {
@@ -129,7 +110,7 @@ test("a failed write surfaces an error and leaves the item unchanged", async () 
   await app.onKey({ name: "return" });
   await app.onKey({ name: "c" }); // comment prompt
   await app.onKey({ name: "x", sequence: "x" });
-  await app.onKey({ name: "return" }); // append_trail fails: a file-only project has no thread
+  await app.onKey({ name: "return" }); // appendTrail fails: a file-only project has no thread
   await renderOnce();
   expect(frame()).toContain("⚠"); // the error is shown, the app did not crash
   expect((await svc.get({ project: "p" }, "alpha"))?.status).toBe("open"); // unchanged

@@ -26,6 +26,7 @@ import { Octokit } from "octokit";
 import { match, P } from "ts-pattern";
 import { parse, stringify } from "yaml";
 import type {
+  GitHubConfig,
   LabelFieldName,
   ProjectConfig,
   ProjectContext,
@@ -45,7 +46,7 @@ import {
   PRIORITIES,
   TRAIL_KINDS,
 } from "../types.ts";
-import { ConfigProvider } from "./config.ts";
+import { ConfigProvider, githubOf } from "./config.ts";
 import type { Provider, ProviderState } from "./provider.ts";
 import { withDefaults } from "../graph.ts";
 
@@ -85,7 +86,7 @@ function defaultOctokit(): Octokit {
  * from it — a server started outside any git repo with no `repo` set is told to configure `repo`,
  * not handed a git error.
  */
-function resolveRepo(config: ProjectConfig, launchCwd: string): RepoRef {
+function resolveRepo(config: GitHubConfig, launchCwd: string): RepoRef {
   if (config.repo) return parseRepoRef(config.repo);
   const url = run("git", ["-C", launchCwd, "remote", "get-url", "origin"]);
   if (url === null) {
@@ -210,7 +211,7 @@ function wearsLabel(task: Task, field: LabelFieldName): boolean {
 
 /** The labels a task wears — one `field:value` per configured field that earns one, then its tags
  *  verbatim — or null when the label sync is configured off (meaning: do not touch labels at all). */
-function labelsFor(task: Task, config: ProjectConfig): string[] | null {
+function labelsFor(task: Task, config: GitHubConfig): string[] | null {
   if (config.labels === false) return null;
   const fields = config.labelFields ?? LABEL_FIELD_NAMES;
   const worn = fields.filter((field) => wearsLabel(task, field)).map((f) => `${f}:${task[f]}`);
@@ -643,7 +644,8 @@ const syncedIn = (state: ProjectState): { board: boolean; labels: boolean } => (
 /** Everything init resolves for one project; every later call runs against this. */
 interface ProjectState {
   repo: RepoRef;
-  config: ProjectConfig;
+  /** This layer's own config slice — the github provider entry, not the whole ProjectConfig. */
+  config: GitHubConfig;
   /** The repository node id — what createIssue mutates against. */
   repoId: string;
   board: BoardMeta | null;
@@ -953,13 +955,15 @@ export class GitHubProvider implements Provider {
   }
 
   private async buildState(config: ProjectConfig): Promise<ProjectState> {
-    const repo = resolveRepo(config, this.launchCwd);
+    // This layer reads only its own slice — the github provider entry — from the effective config.
+    const github = githubOf(config) ?? {};
+    const repo = resolveRepo(github, this.launchCwd);
     const snapshot = await this.repoSnapshot(repo);
     return {
       repo,
-      config,
+      config: github,
       repoId: snapshot.id,
-      board: await this.boardFor(snapshot, config, repo),
+      board: await this.boardFor(snapshot, github, repo),
       labels: new Map(snapshot.labels.nodes.map((l) => [l.name, l.id])),
     };
   }
@@ -978,7 +982,7 @@ export class GitHubProvider implements Provider {
    *  not take the provider down with it, so that error is logged and swallowed here. */
   private async boardFor(
     snapshot: RepoSnapshot,
-    config: ProjectConfig,
+    config: GitHubConfig,
     repo: RepoRef,
   ): Promise<BoardMeta | null> {
     if (config.projects === false) return null;
@@ -994,14 +998,14 @@ export class GitHubProvider implements Provider {
 
   /** Find the board by number (config.projectNumber) or title (config.board, default "Tasks") among
    *  the repo's linked boards — or create it and link it to the repo — then read its Status field. */
-  private async resolveBoard(repository: RepoSnapshot, config: ProjectConfig): Promise<BoardMeta> {
+  private async resolveBoard(repository: RepoSnapshot, config: GitHubConfig): Promise<BoardMeta> {
     const found = await this.findOrCreateBoard(repository, config);
     return this.statusField(found.id);
   }
 
   private async findOrCreateBoard(
     repository: RepoSnapshot,
-    config: ProjectConfig,
+    config: GitHubConfig,
   ): Promise<{ id: string }> {
     const number = config.projectNumber;
     const title = config.board ?? "Tasks";

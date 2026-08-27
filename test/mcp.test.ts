@@ -279,7 +279,7 @@ test("a global set_config propagates to the GitHub layer on the next write", asy
   const { client, gh, project, cleanup } = await harness();
   await client.callTool({
     name: "set_config",
-    arguments: { project, scope: "global", config: { labels: false } },
+    arguments: { project, scope: "global", config: { providers: [{ github: { labels: false } }] } },
   });
   await client.callTool({ name: "add_task", arguments: { project, id: "plain", tier: 2 } });
 
@@ -291,8 +291,8 @@ test("a per-repo override beats the global spec, layer by layer in get_config", 
   const { client, gh, project, cleanup } = await harness();
   const set = (scope: string, config: object) =>
     client.callTool({ name: "set_config", arguments: { project, scope, config } });
-  await set("global", { labels: false });
-  await set("repo", { labels: true, labelFields: ["tier"] });
+  await set("global", { providers: [{ github: { labels: false } }] });
+  await set("repo", { providers: [{ github: { labels: true, labelFields: ["tier"] } }] });
   await client.callTool({
     name: "add_task",
     arguments: { project, id: "labelled", tier: 1, priority: "high" },
@@ -300,9 +300,9 @@ test("a per-repo override beats the global spec, layer by layer in get_config", 
 
   expect(gh.issues[0].labels).toEqual(["tier:1"]); // labels back on, tier only
   const cfg = structured(await client.callTool({ name: "get_config", arguments: { project } }));
-  expect(cfg.global.labels).toBe(false);
-  expect(cfg.repo.labels).toBe(true);
-  expect(cfg.effective.labelFields).toEqual(["tier"]);
+  expect(cfg.global.providers[0].github.labels).toBe(false);
+  expect(cfg.repo.providers[0].github.labels).toBe(true);
+  expect(cfg.effective.providers[0].github.labelFields).toEqual(["tier"]);
   await cleanup();
 });
 

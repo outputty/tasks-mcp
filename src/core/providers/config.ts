@@ -10,21 +10,12 @@ import os from "node:os";
 import path from "node:path";
 import { parse, stringify } from "yaml";
 import { z } from "zod";
-import type { ProjectConfig, ServerOptions } from "../types.ts";
+import type { GitHubConfig, ProjectConfig, ProviderEntry, ServerOptions } from "../types.ts";
 import { LABEL_FIELD_NAMES } from "../types.ts";
 
-/** The config schema — the ONE definition of what may be configured; the MCP tools reuse its shape. */
-export const ProjectConfigSchema = z
+/** One github provider entry's settings — the value half of a `{ github: … }` provider entry. */
+const GitHubConfigSchema = z
   .object({
-    provider: z
-      .string()
-      .min(1)
-      .optional()
-      .describe("The remote layer backing the project (singular)."),
-    providers: z
-      .array(z.string().min(1))
-      .optional()
-      .describe("Remote layers backing the project, deepest last (default [provider ?? github])."),
     repo: z
       .string()
       .min(1)
@@ -41,6 +32,28 @@ export const ProjectConfigSchema = z
       .array(z.enum(LABEL_FIELD_NAMES))
       .optional()
       .describe("Which fields become labels (default: all)."),
+  })
+  .strict();
+
+/** One provider stack entry — its type is the key, its config the value. A bare provider NAME is
+ *  rejected here so a pre-object `providers: ["github"]` fails loudly with the shape it should be. */
+const ProviderEntrySchema = z
+  .object(
+    { github: GitHubConfigSchema.optional() },
+    {
+      invalid_type_error:
+        "a provider entry must be an object like `{ github: { … } }`, not a bare provider name",
+    },
+  )
+  .strict();
+
+/** The config schema — the ONE definition of what may be configured; the MCP tools reuse its shape. */
+export const ProjectConfigSchema = z
+  .object({
+    providers: z
+      .array(ProviderEntrySchema)
+      .optional()
+      .describe("The provider stack, deepest last; each entry is `{ github: { … } }`."),
     claimStaleMinutes: z
       .number()
       .int()
@@ -49,6 +62,21 @@ export const ProjectConfigSchema = z
       .describe("Minutes of silence before a claim is reported stale (default 15)."),
   })
   .strict();
+
+/** A provider entry's type — the one key it carries (`github` today). */
+export function providerType(entry: ProviderEntry): string {
+  return Object.keys(entry)[0];
+}
+
+/**
+ * The github provider entry's config in a resolved ProjectConfig, or undefined when the project has no
+ * github layer. The FIRST github entry wins — a config carries one in practice.
+ *
+ * `githubOf({ providers: [{ github: { board: "X" } }] })` → `{ board: "X" }`.
+ */
+export function githubOf(config: ProjectConfig): GitHubConfig | undefined {
+  return config.providers?.find((e) => e.github !== undefined)?.github;
+}
 
 /** Every layer of the configuration, for inspection. */
 export interface ConfigSources {
@@ -125,25 +153,66 @@ export class ConfigProvider {
     const flags = this.flags();
     const global = readConfigFile(this.globalFile());
     const repo = readConfigFile(this.repoFile(project));
-    return { flags, global, repo, effective: { ...flags, ...global, ...repo } };
+    return { flags, global, repo, effective: mergeConfigs(flags, global, repo) };
   }
 
   /** Merge a validated patch into the global spec or one repo's override; returns the new effective. */
   set(project: string, scope: "global" | "repo", patch: ProjectConfig): ProjectConfig {
     const file = scope === "global" ? this.globalFile() : this.repoFile(project);
-    const next = { ...readConfigFile(file), ...parseConfig(patch, `set_config(${scope})`) };
+    const next = mergeConfigs(readConfigFile(file), parseConfig(patch, `set_config(${scope})`));
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, stringify(next));
     fileCache.delete(file); // an in-process write always re-reads, whatever the mtime resolution
     return this.get(project);
   }
 
-  /** The CLI-flag layer, in config shape. cacheDir and syncInterval are deployment knobs, not
+  /** The CLI-flag layer, in config shape: the github deployment fields nested under a provider entry
+   *  (keyed by `provider`, github by default). cacheDir and syncInterval are deployment knobs, not
    *  preferences, so they never reach the config surface. */
   private flags(): ProjectConfig {
-    const { cacheDir: _cacheDir, syncInterval: _syncInterval, ...flags } = this.options;
-    return flags;
+    const { cacheDir: _cacheDir, syncInterval: _syncInterval, provider, ...rest } = this.options;
+    const github = pruneUndefined(rest);
+    if (Object.keys(github).length === 0 && provider === undefined) return {};
+    const entry = { [provider ?? "github"]: github } as ProviderEntry;
+    return { providers: [entry] };
   }
+}
+
+/** Drop the keys whose value is undefined, so a merge never overwrites a set field with an unset one. */
+function pruneUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) if (value !== undefined) out[key] = value;
+  return out as Partial<T>;
+}
+
+/**
+ * Merge config layers weakest-first: `claimStaleMinutes` from the strongest layer that sets it, and
+ * each provider entry deep-merged by type — so a per-repo override changes one github field without
+ * dropping the rest, the field-level precedence the flat shape had.
+ *
+ * `mergeConfigs({ providers: [{ github: { board: "A" } }] }, { providers: [{ github: { labels: false } }] })`
+ * → `{ providers: [{ github: { board: "A", labels: false } }] }`.
+ */
+function mergeConfigs(...layers: ProjectConfig[]): ProjectConfig {
+  const out: ProjectConfig = {};
+  const byType = new Map<string, Record<string, unknown>>();
+  const order: string[] = [];
+  for (const layer of layers) {
+    if (layer.claimStaleMinutes !== undefined) out.claimStaleMinutes = layer.claimStaleMinutes;
+    for (const entry of layer.providers ?? []) {
+      const type = providerType(entry);
+      if (!byType.has(type)) {
+        byType.set(type, {});
+        order.push(type);
+      }
+      Object.assign(
+        byType.get(type)!,
+        pruneUndefined((entry as Record<string, Record<string, unknown>>)[type]),
+      );
+    }
+  }
+  if (order.length > 0) out.providers = order.map((t) => ({ [t]: byType.get(t) }) as ProviderEntry);
+  return out;
 }
 
 // Config files are read on every operation so central changes propagate live; the mtime memo makes

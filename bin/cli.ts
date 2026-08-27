@@ -297,7 +297,7 @@ program.action(async () => {
     // Lazy import, deliberately: --tui is the only path that loads @opentui/core, so a stdio or HTTP
     // server spawn never pulls a native TUI framework. The exception is recorded in CLAUDE.md.
     const { runTui } = await import("../src/tui/index.ts");
-    return runTui(svc);
+    return runTui(svc, resolveProjectId(opts)); // the console shows one project, like every subcommand
   }
   if (!opts.http) return runStdio(svc, defaultProject);
   // Bind loopback unless --host says otherwise, and log the address ACTUALLY bound — never a

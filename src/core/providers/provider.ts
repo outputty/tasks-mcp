@@ -11,7 +11,7 @@
 
 import type { ProjectConfig, ProjectContext, Task, TrailEntry } from "../types.ts";
 import type { ServerOptions } from "../types.ts";
-import { ConfigProvider } from "./config.ts";
+import { ConfigProvider, providerType } from "./config.ts";
 import { FileProvider } from "./file.ts";
 import { GitHubProvider } from "./github.ts";
 
@@ -64,14 +64,14 @@ const REMOTES: Record<string, (config: ConfigProvider) => Provider> = {
 };
 
 /**
- * The ordered remote names backing a project, deepest last. A `providers` list wins; the singular
- * `provider` is a one-element list, so a config written before multi-remote still resolves; absent,
- * the default is `github`. This is the one place the singular/plural forms reconcile.
+ * The ordered remote names backing a project, deepest last — one per `providers` entry, read from its
+ * key. An empty or absent list defaults to `github`.
  *
- * `resolveRemotes({ providers: ["github", "linear"] })` → `["github", "linear"]`.
+ * `resolveRemotes({ providers: [{ github: {} }] })` → `["github"]`; `resolveRemotes({})` → `["github"]`.
  */
 export function resolveRemotes(config: ProjectConfig): string[] {
-  return config.providers ?? [config.provider ?? "github"];
+  if (!config.providers || config.providers.length === 0) return ["github"];
+  return config.providers.map(providerType);
 }
 
 /**

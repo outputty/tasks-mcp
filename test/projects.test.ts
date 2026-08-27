@@ -72,8 +72,11 @@ test("an unparseable file, a .corrupt file and config files are skipped; the res
     path.join(cache.dir, "good.yaml.corrupt"),
     "tasks:\n  - id: q\n    status: open\n",
   );
-  fs.writeFileSync(path.join(cache.dir, "config.yaml"), "provider: github\n"); // global config, no tasks:
-  fs.writeFileSync(path.join(cache.dir, "good.config.yaml"), "labels: false\n"); // per-repo config
+  fs.writeFileSync(path.join(cache.dir, "config.yaml"), "providers:\n  - github: {}\n"); // global config, no tasks:
+  fs.writeFileSync(
+    path.join(cache.dir, "good.config.yaml"),
+    "providers:\n  - github:\n      labels: false\n",
+  ); // per-repo config
   const rows = readProjectSummaries(cache.dir);
   expect(rows.map((r) => r.project)).toEqual(["good"]); // exactly the one real project
   cache.cleanup();

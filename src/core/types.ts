@@ -145,40 +145,22 @@ export interface RepoRef {
   repo: string;
 }
 
-/** Server-wide options, set once from CLI args — deployment knobs, not user preferences. */
-export type ServerOptions = Pick<
-  ProjectConfig,
-  "provider" | "projects" | "projectNumber" | "board"
-> & {
-  /** Where the file layer and the config files live. Defaults to the OS cache dir; never the repo. */
-  cacheDir?: string;
-  /** Background-sync cadence in seconds; 0 (the default) turns the loop off. A deployment knob. */
-  syncInterval?: number;
-};
-
 /** A field a task can wear as a `field:value` GitHub label. */
 export type LabelFieldName = (typeof LABEL_FIELD_NAMES)[number];
 
-/** User preferences, resolved by ConfigProvider (defaults < flags < global spec < per-repo). */
-export interface ProjectConfig {
-  /** Which provider backs this project. Default "github". A future value is "linear". The singular
-   *  form of `providers`; a one-element list. */
-  provider?: string;
-  /**
-   * The remote layers backing this project, deepest last — the stack rules (deepest wins, absence is
-   * not a claim, deletions never propagate) apply across all of them. A one-element list equals the
-   * singular `provider`; absent falls back to `[provider]`, then `["github"]`. Only `github` is
-   * registered today.
-   */
-  providers?: string[];
+/**
+ * One GitHub provider's own settings — every GitHub-specific knob, so a project with no GitHub layer
+ * carries none of them. This is the value half of a `github` provider entry.
+ */
+export interface GitHubConfig {
   /**
    * The GitHub coordinates (`owner/repo`) backing this project. A project id is opaque and never a
    * path, so the repo is configuration, not something derived from the id. Absent means fall back to
-   * the `origin` of the server's launch working directory; a server outside any git repo with no
-   * `repo` set cannot resolve one and says so.
+   * the launch cwd's `origin`; a launch outside any git repo with no `repo` set cannot resolve one and
+   * says so.
    */
   repo?: string;
-  /** Turn the Projects v2 board sync on or off (GitHub only). Default on. */
+  /** Turn the Projects v2 board sync on or off. Default on. */
   projects?: boolean;
   /** Target an existing Projects v2 board by number. Absent means find/create one named `board`. */
   projectNumber?: number;
@@ -188,6 +170,44 @@ export interface ProjectConfig {
   labels?: boolean;
   /** Which fields become labels when `labels` is on. Default: all of them. */
   labelFields?: LabelFieldName[];
-  /** Minutes of silence before a claim is reported stale. Default 15. */
+}
+
+/**
+ * One entry in a project's provider stack: its type is the key, its own config the value. Today the
+ * only key is `github`; a second provider type is a second optional key, and the entry a provider reads
+ * is the one whose key matches its own `name`.
+ */
+export interface ProviderEntry {
+  github?: GitHubConfig;
+}
+
+/**
+ * User preferences, resolved by ConfigProvider (defaults < flags < global spec < per-repo). The
+ * provider-specific settings live inside each `providers` entry; the top level keeps only project-wide
+ * facts.
+ */
+export interface ProjectConfig {
+  /**
+   * The provider stack backing this project, deepest last — the stack rules (deepest wins, absence is
+   * not a claim, deletions never propagate) apply across all of them. Each entry carries its own
+   * config. Absent falls back to a single default `github` entry. Only `github` is registered today.
+   */
+  providers?: ProviderEntry[];
+  /** Minutes of silence before a claim is reported stale. Default 15. The local claim store, not a
+   *  provider. */
   claimStaleMinutes?: number;
 }
+
+/**
+ * Server-wide options, set once from CLI args — deployment knobs, not user preferences. It carries the
+ * GitHub deployment defaults flat (mapped into a github provider entry by `ConfigProvider.flags`), plus
+ * the provider name and the two knobs that never reach the config surface.
+ */
+export type ServerOptions = GitHubConfig & {
+  /** The remote layer backing each project. Default "github"; a future value is "linear". */
+  provider?: string;
+  /** Where the file layer and the config files live. Defaults to the OS cache dir; never the repo. */
+  cacheDir?: string;
+  /** Background-sync cadence in seconds; 0 (the default) turns the loop off. A deployment knob. */
+  syncInterval?: number;
+};

@@ -4,7 +4,6 @@
 
 import type { QueueRow } from "./queue.ts";
 import type { Detail, EditFields } from "./actions.ts";
-import type { ProbeResult } from "./tracker.ts";
 import type { TrailEntry } from "../core/types.ts";
 import { PRIORITIES, QA_LEVELS } from "../core/types.ts";
 import { tierOf, qaOf, priorityOf } from "../core/graph.ts";
@@ -57,19 +56,6 @@ export function editLines(fields: EditFields, selected: number): string[] {
 /** A single-line text prompt (a comment, or a new idea's title). */
 export function promptLines(label: string, buffer: string): string[] {
   return [label, " ", `› ${buffer}▏`];
-}
-
-/** The add-tracker screen: the url being typed, then — once ⏎ has probed it — the tracker's identity and
- *  its projects, or the reason it is not a tracker. Nothing is saved until this shows a `✓`. */
-export function addTrackerLines(url: string, probed?: ProbeResult, error?: string): string[] {
-  const lines = [`url  ${url}▏`, " "];
-  if (error) return [...lines, `✗ ${error}`];
-  if (!probed) return [...lines, "(⏎ to test the address)"];
-  lines.push(`✓ connected — ${probed.server.name} ${probed.server.version}`, " ");
-  for (const p of probed.projects) {
-    lines.push(`  ${p.project.padEnd(28)} ${p.tasks} tasks   ${p.in_progress} in progress`);
-  }
-  return lines;
 }
 
 /** deps as `id (done)`, or an em dash when there are none. */
