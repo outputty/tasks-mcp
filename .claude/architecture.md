@@ -47,9 +47,10 @@ cache dir.
 `repo`/`board`/label fields at the top level of the config — they move inside the `github` provider
 entry. The stack merge is untouched: deepest still wins, absence is still not a claim.
 
-Out of scope, each its own target: the outputty plugin flow's rewrite from `mcp__tasks__*` calls to CLI
-commands (with the driving skill, in the `claude-plugin` repo), and any rename of the
-`@outputty/tasks-mcp` package now that "mcp" is a misnomer.
+The package/binary rename (`@outputty/tasks-mcp` -> `@outputty/tasks`, binary `tasks`) is in scope. Out
+of scope: the outputty plugin flow's rewrite from `mcp__tasks__*` calls to CLI commands (with the driving
+skill, in the `claude-plugin` repo) — its own target; and renaming the GitHub repo / project id
+`outputty/tasks-mcp`, which cascades through the tracker's own state and every consumer's config.
 
 ## The provider stack
 
