@@ -28,6 +28,7 @@ async function makeApp(svc: TaskStack) {
   let quit = false;
   const app = new Console(renderer, [local], svc.cacheDir(), () => (quit = true));
   const close = async () => {
+    app.stop(); // close the /events subscriptions before the renderer, so no late frame repaints it
     renderer.destroy();
     await local.client.close();
     await closeServer(server);

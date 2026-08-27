@@ -50,7 +50,15 @@ async function makeConsole(trackers: Tracker[], cacheDir: string, unreachable: s
     height: 24,
   });
   const app = new Console(renderer, trackers, cacheDir, () => {}, unreachable);
-  return { app, renderOnce, frame: captureCharFrame, close: () => renderer.destroy() };
+  return {
+    app,
+    renderOnce,
+    frame: captureCharFrame,
+    close: () => {
+      app.stop(); // close the /events subscriptions before the renderer
+      renderer.destroy();
+    },
+  };
 }
 
 async function closeServer(server: Server): Promise<void> {

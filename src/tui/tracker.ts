@@ -42,6 +42,13 @@ export function mcpEndpoint(base: string): string {
   return trimmed.endsWith("/mcp") ? trimmed : `${trimmed}/mcp`;
 }
 
+/** The `/events` SSE endpoint for a tracker's base url — the sibling of `mcpEndpoint`, turning the same
+ *  user-typed base into the change stream the console subscribes to. `eventsEndpoint("http://h:3917")`
+ *  → `"http://h:3917/events"`. */
+export function eventsEndpoint(base: string): string {
+  return `${base.replace(/\/+$/, "")}/events`;
+}
+
 /**
  * Prove a URL is a tracker before it is saved: connect (the MCP handshake), then call `list_projects` —
  * NOT `/health`, which answers "a server is up" when the question is "is this a tracker". Returns the
