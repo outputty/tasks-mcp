@@ -5,7 +5,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { test, expect, beforeEach, afterAll } from "vitest";
+import { test, expect, beforeEach, afterEach, afterAll } from "vitest";
 import nock from "nock";
 import { Octokit } from "octokit";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -18,6 +18,7 @@ import { parse } from "yaml";
 import { ConfigProvider, validateProjectId, cachePath } from "../src/core/providers/config.ts";
 import { readProjectSummaries } from "../src/core/projects.ts";
 import { buildStack, resolveRemotes } from "../src/core/providers/provider.ts";
+import { resolveProjectId, findProjectId } from "../bin/resolve-id.ts";
 import { task, tmp } from "./helpers.ts";
 import { NockGitHub, installNock, nockProvider } from "./nock-github.ts";
 import { MockProvider } from "./mock-provider.ts";
@@ -74,6 +75,63 @@ test("validateProjectId refuses a traversal id with the message the identify exa
 
 test("validateProjectId refuses an empty or whitespace id", () => {
   expect(() => validateProjectId("   ")).toThrow("may not be empty");
+});
+
+// --- id resolution: supplied or declared, never derived from the cwd (bin/resolve-id.ts) --------------
+
+const idDirs: Array<() => void> = [];
+afterEach(() => {
+  for (const cleanup of idDirs.splice(0)) cleanup();
+});
+
+/** A throwaway dir, cleaned up after the test; writes `.mcp.json` with `body` (raw text) when given. */
+function idDir(body?: string): string {
+  const t = tmp();
+  idDirs.push(t.cleanup);
+  if (body !== undefined) fs.writeFileSync(path.join(t.dir, ".mcp.json"), body);
+  return t.dir;
+}
+
+/** A `.mcp.json` body declaring `id` via one server's `--project-id` arg; the server key is arbitrary. */
+const declares = (id: string, key = "tasks"): string =>
+  JSON.stringify({
+    mcpServers: { [key]: { command: "node", args: ["dist/cli.js", "--project-id", id] } },
+  });
+
+test("resolveProjectId reads the id a repo's .mcp.json declares, matched by args not by server key", () => {
+  // The key here is `plugin:outputty:tasks`; the id is found by the --project-id arg, not the key name.
+  const dir = idDir(declares("outputty/tasks-mcp", "plugin:outputty:tasks"));
+  expect(resolveProjectId({}, dir)).toBe("outputty/tasks-mcp");
+});
+
+test("resolveProjectId in a directory with no .mcp.json and no flag throws naming --project", () => {
+  expect(() => resolveProjectId({}, idDir())).toThrow("pass --project <id>");
+});
+
+test("--project overrides --project-id overrides the .mcp.json value (all three orderings)", () => {
+  const dir = idDir(declares("from/mcpjson"));
+  expect(resolveProjectId({ project: "a", projectId: "b" }, dir)).toBe("a"); // --project wins
+  expect(resolveProjectId({ projectId: "b" }, dir)).toBe("b"); // --project-id beats .mcp.json
+  expect(resolveProjectId({}, dir)).toBe("from/mcpjson"); // .mcp.json when no flag
+});
+
+test("a missing, malformed, server-less, or --project-id-less .mcp.json is treated as absent", () => {
+  const cases = [
+    idDir(), // missing
+    idDir("{ not json"), // malformed
+    idDir(JSON.stringify({ mcpServers: {} })), // declares no server
+    idDir(JSON.stringify({ mcpServers: { tasks: { command: "node", args: ["dist/cli.js"] } } })), // no --project-id
+  ];
+  for (const dir of cases) expect(() => resolveProjectId({}, dir)).toThrow("no project id");
+});
+
+test("the subcommand and the server default resolve the SAME id in one directory; a bare dir has none", () => {
+  const dir = idDir(declares("outputty/tasks-mcp"));
+  // contract 6: identify (resolveProjectId) and the server default (findProjectId) agree in one dir.
+  expect(findProjectId({}, dir)).toBe(resolveProjectId({}, dir));
+  expect(findProjectId({}, dir)).toBe("outputty/tasks-mcp");
+  // The server default may legitimately be absent where a subcommand would instead fail loudly.
+  expect(findProjectId({}, idDir())).toBeUndefined();
 });
 
 test("a tool call omitting project resolves the server's --project-id default; passing project overrides it", async () => {

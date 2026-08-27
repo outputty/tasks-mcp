@@ -253,8 +253,6 @@ Output:
 
 ## identify
 
-⚠ EXPECTED — not yet built. Target #54.
-
 Input:
 
 ```
@@ -267,7 +265,8 @@ Output:
 { "id": "outputty/tasks-mcp" }
 ```
 
-The id is opaque and never resolved against a provider or the filesystem, so any non-empty string works:
+The id is opaque and never derived from a provider or the working directory, so any non-empty string
+works (with no flag, the CLI reads the id the repo's `.mcp.json` declares, else fails naming `--project`):
 
 Input:
 

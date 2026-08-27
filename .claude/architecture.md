@@ -684,8 +684,9 @@ The `mcp-registration` example in `examples.md`.
 no command it runs the MCP server; subcommands drive the core directly: `list`, `ready`, `roadmap`,
 `projects`, `planning`, `schedule`, `prereqs <id>`, `blockers`, `get <id>`, `add <id>`, `edit <id>`,
 `close <id>`, `delete <id>`, `trail <id>`, `trail-add <id>`, `config`, `sync`, `identify`. `projects`
-takes no `--project` (it asks about the server); `--project` otherwise defaults to cwd, and the
-deployment flags work on every command.
+takes no `--project` (it asks about the server); every other subcommand resolves its id as `--project`,
+else `--project-id`, else the `--project-id` the repo's checked-in `.mcp.json` declares, else a loud
+failure — never the cwd (`bin/resolve-id.ts`). The deployment flags work on every command.
 
 #### Example
 
@@ -925,7 +926,7 @@ release; never create a release unprompted. On a yes: bump version, commit, push
 | branch parameter unused | limitation | Every tool accepts branch; nothing reads it — declared at the initial import, never implemented. |
 | trail store | feature | A task's trail IS its GitHub issue comment thread — every comment an entry, people's comments included. append_trail posts a comment; get_trail reads the whole thread. There is no separate trail store: the provider that owns the issue owns its comments. |
 | central config | feature | Preferences are configured through the server and stored beside the caches — never by files inside the user's repo. |
-| project identity | feature | A project is an opaque, supplied id — `--project-id` sets a server default, a tool call may override it — never derived from a path or a provider. Used verbatim as the cache filename (nesting on `/`), so worktrees sharing one checked-in id share one cache and one claim ledger. |
+| project identity | feature | A project is an opaque, supplied id — never derived from a path or a provider. As the MCP server, `--project-id` sets a default a tool call may override; a subcommand resolves `--project`, else `--project-id`, else the `--project-id` the repo's checked-in `.mcp.json` declares, else a loud failure — never the cwd (`bin/resolve-id.ts`). Used verbatim as the cache filename (nesting on `/`), so worktrees sharing one checked-in id share one cache and one claim ledger. |
 | id containment | limitation | The supplied id becomes a cache path segment, so `cachePath` (`src/core/providers/config.ts`) refuses any id that would escape the cache dir. Probe: `node dist/cli.js identify --project ../../etc/passwd` must print `Error: invalid project id … an id may not contain path traversal`. |
 | coordinates are config | feature | GitHub `owner/repo` is the project's `repo` setting, else the launch cwd's `origin` — never the id. A server outside any repo with no `repo` errors naming `repo`. Probe: `cd /tmp && node dist/cli.js sync --project x` prints `Error: no GitHub repo for this project — set \`repo\` …`. |
 | multi-remote stack | feature | A project configures a `providers` list (deepest last); `buildStack` returns `[FileProvider, ...remotes]` for any length; the singular `provider` is the one-element form. Only `github` is registered, so a list can only repeat it; the N-layer semantics are proven with `MockProvider`. |
