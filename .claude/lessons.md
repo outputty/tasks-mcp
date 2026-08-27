@@ -10,6 +10,7 @@
 
 ## An assumption that broke
 
+- [2026-08-27 · BUILD](lessons/2026-08-27-a-cache-file-off-its-id-path-is-listed-but-holds-no-tasks.md) - a cache file not at its id's `cachePath` is listed by `list_projects` (which walks and reads declared ids) yet holds no tasks for `list_tasks` (which derives the path from the id). ×1
 - [2026-08-27 · BUILD](lessons/2026-08-27-vitest-4-moved-worker-node-flags-out-of-pooloptions.md) - Vitest 4 removed `poolOptions`; a worker node flag now goes in top-level `test.execArgv`, and the old shape is accepted and silently ignored. ×1
 - [2026-08-26 · PLANNING](lessons/2026-08-26-a-deleted-mechanism-outlived-its-deletion-in-the-docs.md) - a commit deleted a subsystem and left product memory describing it as live; counted claims read as verified and age silently. ×1
 - [2026-08-26 · PLANNING](lessons/2026-08-26-a-package-cannot-npx-itself.md) - the repository publishing a tool could not launch it, because npx resolves a package name against the local checkout first. ×1
