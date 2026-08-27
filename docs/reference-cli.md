@@ -15,22 +15,22 @@ MCP protocol involved. Every subcommand prints JSON, indented two spaces, to std
 
 These are declared on the program, so they may appear before or after a subcommand name.
 
-| Option                   | Argument | Default                  | Meaning                                                                                                 |
-| ------------------------ | -------- | ------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `-V`, `--version`        | —        | —                        | Print the package version and exit.                                                                     |
-| `-h`, `--help`           | —        | —                        | Print help for the program or a subcommand and exit.                                                    |
-| `--http`                 | —        | stdio                    | Run the standalone HTTP server instead of stdio.                                                        |
-| `--tui`                  | —        | stdio                    | Run the interactive [console](#the-console) instead of the server. Needs Node 26.4+.                    |
-| `--port <n>`             | integer  | `3917`                   | HTTP port. Only meaningful with `--http`.                                                               |
-| `--host <ip>`            | string   | `127.0.0.1`              | HTTP bind address. `--host 0.0.0.0` exposes the server to every interface, deliberately. `--http` only. |
-| `--provider <name>`      | string   | `github`                 | The remote layer backing each project.                                                                  |
-| `--project-number <n>`   | integer  | find or create           | Target an existing Projects v2 board by number.                                                         |
-| `--no-projects`          | —        | board on                 | Disable the Projects v2 board sync.                                                                     |
-| `--board <title>`        | string   | `Tasks`                  | Board title to find or create.                                                                          |
-| `--cache-dir <dir>`      | path     | OS cache dir             | Where the file layer and the config files live.                                                         |
-| `--sync-interval <secs>` | integer  | `0` (off)                | Background reconcile cadence while the MCP server runs.                                                 |
-| `--project-id <id>`      | string   | —                        | The default [project id](#the-project-id) for the server and subcommands.                               |
-| `--project <id>`         | string   | `--project-id`, then cwd | The project id a subcommand acts on (overrides `--project-id`).                                         |
+| Option                   | Argument | Default                          | Meaning                                                                                                 |
+| ------------------------ | -------- | -------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `-V`, `--version`        | —        | —                                | Print the package version and exit.                                                                     |
+| `-h`, `--help`           | —        | —                                | Print help for the program or a subcommand and exit.                                                    |
+| `--http`                 | —        | stdio                            | Run the standalone HTTP server instead of stdio.                                                        |
+| `--tui`                  | —        | stdio                            | Run the interactive [console](#the-console) instead of the server. Needs Node 26.4+.                    |
+| `--port <n>`             | integer  | `3917`                           | HTTP port. Only meaningful with `--http`.                                                               |
+| `--host <ip>`            | string   | `127.0.0.1`                      | HTTP bind address. `--host 0.0.0.0` exposes the server to every interface, deliberately. `--http` only. |
+| `--provider <name>`      | string   | `github`                         | The remote layer backing each project.                                                                  |
+| `--project-number <n>`   | integer  | find or create                   | Target an existing Projects v2 board by number.                                                         |
+| `--no-projects`          | —        | board on                         | Disable the Projects v2 board sync.                                                                     |
+| `--board <title>`        | string   | `Tasks`                          | Board title to find or create.                                                                          |
+| `--cache-dir <dir>`      | path     | OS cache dir                     | Where the file layer and the config files live.                                                         |
+| `--sync-interval <secs>` | integer  | `0` (off)                        | Background reconcile cadence while the MCP server runs.                                                 |
+| `--project-id <id>`      | string   | —                                | The default [project id](#the-project-id) for the server and subcommands.                               |
+| `--project <id>`         | string   | `--project-id`, then `.mcp.json` | The project id a subcommand acts on (overrides `--project-id`); with none set the call fails.           |
 
 `--provider`, `--project-number`, `--no-projects`, and `--board` are the CLI-flag layer of the
 [configuration](reference-configuration.md); `--cache-dir` and `--sync-interval` are deployment knobs
@@ -41,9 +41,10 @@ and never reach the config surface. `github` is the only registered remote; any 
 
 A **project** is identified by an opaque, supplied string — never derived from a path or a provider. As
 the MCP server, `--project-id` sets the default a tool call uses when it omits `project`; a call may
-override it. As a subcommand, `--project` names the id (falling back to `--project-id`, then the current
-directory used verbatim). The id is validated for path traversal and used verbatim as a cache filename,
-but is never resolved against git or the filesystem:
+override it. As a subcommand, `--project` names the id, falling back to `--project-id`, then to the
+`--project-id` a repo's checked-in `.mcp.json` declares. With none of these the call fails naming the
+flag rather than deriving an id from the working directory. The id is validated for path traversal and
+used verbatim as a cache filename:
 
 ```console
 $ tasks-mcp identify --project outputty/tasks-mcp
@@ -53,27 +54,32 @@ $ tasks-mcp identify --project outputty/tasks-mcp
 
 $ tasks-mcp identify --project ../../etc/passwd
 Error: invalid project id '../../etc/passwd' — an id may not contain path traversal
+
+$ cd /tmp && tasks-mcp identify
+Error: no project id — pass --project <id>, or run where a .mcp.json declares one
 ```
 
-A repo's checked-in `.mcp.json` carries `--project-id`, so every git worktree cut from it shares one id
-and therefore one task cache — see [how to register the server](how-to-register-the-server-with-an-mcp-client.md).
+A repo's checked-in `.mcp.json` carries `--project-id`, and the CLI reads that id when no flag overrides
+it, so a human at a shell and an agent in that directory address one project — every git worktree cut
+from the repo shares one id and therefore one task cache. See
+[how to register the server](how-to-register-the-server-with-an-mcp-client.md).
 
 ## Reading the graph
 
-| Command        | Argument | Prints                                                                                             |
-| -------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| `list`         | —        | Every record, full, straight from the top layer.                                                   |
-| `ready`        | —        | The ids ready to build right now, best first.                                                      |
-| `roadmap`      | —        | Every target: `id`, `summary`, `status`, `progress`, `ready`.                                      |
-| `projects`     | —        | Every project the cache holds, with task counts. Takes no `--project` — it asks about the server.  |
-| `planning`     | —        | The ids the planning stage owns, resubmitted ones first.                                           |
-| `schedule`     | —        | The whole open plan as an array of layers of ids.                                                  |
-| `prereqs <id>` | task id  | The open prerequisites as an array of layers of ids.                                               |
-| `blockers`     | —        | Each blocker: `id`, `blocks`, `blocked`, `priority`.                                               |
-| `get <id>`     | task id  | One record, or `null`.                                                                             |
-| `trail <id>`   | task id  | The task's issue comment thread, oldest first.                                                     |
-| `config`       | —        | `flags`, `global`, `repo`, `effective`.                                                            |
-| `identify`     | —        | The [project id](#the-project-id) a call would use: `{ "id": ... }`. Touches no git or filesystem. |
+| Command        | Argument | Prints                                                                                                                                        |
+| -------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list`         | —        | Every record, full, straight from the top layer.                                                                                              |
+| `ready`        | —        | The ids ready to build right now, best first.                                                                                                 |
+| `roadmap`      | —        | Every target: `id`, `summary`, `status`, `progress`, `ready`.                                                                                 |
+| `projects`     | —        | Every project the cache holds, with task counts. Takes no `--project` — it asks about the server.                                             |
+| `planning`     | —        | The ids the planning stage owns, resubmitted ones first.                                                                                      |
+| `schedule`     | —        | The whole open plan as an array of layers of ids.                                                                                             |
+| `prereqs <id>` | task id  | The open prerequisites as an array of layers of ids.                                                                                          |
+| `blockers`     | —        | Each blocker: `id`, `blocks`, `blocked`, `priority`.                                                                                          |
+| `get <id>`     | task id  | One record, or `null`.                                                                                                                        |
+| `trail <id>`   | task id  | The task's issue comment thread, oldest first.                                                                                                |
+| `config`       | —        | `flags`, `global`, `repo`, `effective`.                                                                                                       |
+| `identify`     | —        | The [project id](#the-project-id) a call would use: `{ "id": ... }`. From a flag or the repo's `.mcp.json`; never from the working directory. |
 
 The CLI's `roadmap` and `blockers` print a narrower row than the MCP tools of the same name; see the
 [MCP tool reference](reference-mcp-tools.md) for the full shapes. The CLI has no `--target` option on

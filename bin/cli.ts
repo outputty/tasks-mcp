@@ -10,7 +10,7 @@ import { runStdio } from "../src/mcp/stdio.ts";
 import { startHttpServer } from "../src/mcp/http.ts";
 import { SERVER_INFO } from "../src/mcp/server.ts";
 import { makeService, startBackgroundSync } from "../src/core/service.ts";
-import { validateProjectId } from "../src/core/providers/config.ts";
+import { resolveProjectId, findProjectId } from "./resolve-id.ts";
 import type { ServerOptions } from "../src/core/types.ts";
 import type { ProjectContext, TrailEntry, TrailKind } from "../src/core/types.ts";
 import {
@@ -73,10 +73,9 @@ function serverOptions(): ServerOptions {
   };
 }
 
-// The project id a subcommand acts on: an explicit --project, else --project-id, else the cwd (a valid
-// opaque id for direct CLI use). Validated, never resolved against git or the filesystem.
-const projectId = (): string =>
-  validateProjectId(program.opts().project ?? program.opts().projectId ?? process.cwd());
+// The project id a subcommand acts on: an explicit --project, else --project-id, else the id this repo's
+// .mcp.json declares — else a loud failure naming the flag. Never derived from git or the cwd.
+const projectId = (): string => resolveProjectId(program.opts());
 const ctx = (): ProjectContext => ({ project: projectId() });
 const service = () => makeService(serverOptions());
 const out = (value: unknown) => console.log(JSON.stringify(value, null, 2));
@@ -279,19 +278,20 @@ program
 program
   .command("identify")
   .description(
-    "echo the project id a call would use — opaque, validated, never resolved against git or the fs",
+    "echo the project id a call would use — from --project, --project-id, or this repo's .mcp.json; " +
+      "opaque and validated, never derived from git or the cwd",
   )
   .action(() => out({ id: projectId() }));
 
 // No subcommand: run the MCP server on the chosen transport. One service instance backs both the
 // transport and the background loop, so the loop reconciles exactly the projects the server serves.
-// The --project-id (or --project) becomes the server's default project, filling a tool call that omits
-// one — validated up front so a bad default fails at launch, not on the first call.
+// The --project-id (or --project), else this repo's .mcp.json, becomes the server's default project,
+// filling a tool call that omits one — the SAME resolution a subcommand uses, so both surfaces name one
+// project in one directory. A default may legitimately be absent; tool calls then name their own.
 program.action(async () => {
   const opts = program.opts();
   const svc = makeService(serverOptions());
-  const rawDefault = opts.project ?? opts.projectId;
-  const defaultProject = rawDefault === undefined ? undefined : validateProjectId(rawDefault);
+  const defaultProject = findProjectId(opts);
   if (opts.syncInterval > 0) startBackgroundSync(svc, opts.syncInterval);
   if (opts.tui) {
     // Lazy import, deliberately: --tui is the only path that loads @opentui/core, so a stdio or HTTP
