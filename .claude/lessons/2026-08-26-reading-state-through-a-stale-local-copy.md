@@ -1,4 +1,4 @@
-# Reading state through a stale build artifact answers for code that no longer exists
+# Reading state through a stale local copy answers for a world that has moved on
 
 *PLANNING, 2026-08-26.*
 
@@ -64,14 +64,46 @@ taken the item out of the planning queue moments earlier.
    never runs it.
 4. The failure is silent by construction: a stale binary does not error, it answers.
 
-×1. It generalises to any repository where a generated artefact is both the tool and the subject: a
-compiled CLI, a bundled language server, a plugin loaded from `dist/`.
+5. **It happened again the next day, through a different local copy.** A session opened knowing this
+   lesson and rebuilt `dist/` as its first act — then read `roadmap` and got `tui-console 0/6` while
+   `git log` showed all six layers merged. The binary was current; the **task cache** was not. Reads are
+   answered by the local file layer and never hit the network, by design, so a build closing tasks in
+   another process leaves this one's cache behind until something calls `sync`:
+
+   ```
+   $ node dist/cli.js roadmap     # fresh dist, stale cache
+   tui-console-1787751801  open  0/6
+   $ node dist/cli.js sync        # pulled: 29
+   $ node dist/cli.js roadmap
+   tui-console-1787751801  in_progress  6/8
+   ```
+
+6. **The same cause stalled the dispatcher, which is the expensive form.** A queue loop reported "no
+   dispatchable target" three times in a row while a target with a ready task existed. Its reads came
+   from an unsynced cache, so it held on an empty queue and announced that only a planning session could
+   unblock it — when the work it was waiting for was already filed.
+
+×2, and the second run is why the first one's rule was too narrow. It named `dist/` — a *build* artifact
+— so a session could obey it in full and still be caught by the *data* cache next to it. Both are the
+same thing: a local copy, read as if it were the truth.
 
 ## 5. How to prevent it
 
-**Build before the first read, whenever the working tree moved.** In a repo whose tooling is its own
-build output, `npm run build` is part of orienting, not part of shipping — it costs under a second here
-and is the only thing that makes a read command describe the code you are about to reason about.
+**Refresh every local copy before the first read, not just the build.** Two of them exist here and
+both go stale silently:
+
+```
+npm run build                  # the CODE you read state through
+node dist/cli.js sync          # the DATA that state is read from
+```
+
+`sync` is not optional housekeeping: reads are deliberately local and offline, so nothing in the tool
+ever tells you the cache is behind. That is the designed trade, and it means the freshness step belongs
+to the reader.
+
+**For a dispatch loop, this is a correctness requirement rather than hygiene.** A loop that polls
+`list_ready` without syncing can never see work another process filed, so it holds on an empty queue
+forever and blames the absence of planning.
 
 ```
 AFTER
