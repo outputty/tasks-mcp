@@ -8,12 +8,14 @@ import type { CliRenderer } from "@opentui/core";
 import { paint as paintScreen } from "./view.ts";
 import {
   connectTracker,
+  eventsEndpoint,
   fetchQueues,
   mcpEndpoint,
   probeTracker,
   type ProbeResult,
   type Tracker,
 } from "./tracker.ts";
+import { subscribeChanges, type Subscription } from "./events.ts";
 import { queueRows, type QueueRow, type ProjectQueue } from "./queue.ts";
 import { saveTracker } from "./config.ts";
 import {
@@ -54,10 +56,22 @@ type Mode =
   | { kind: "edit"; detail: Detail; fields: EditFields; field: number }
   | { kind: "prompt"; detail: Detail; purpose: "comment" | "idea"; buffer: string };
 
+/** How long to coalesce a burst of change frames for one tracker into a single re-read. The server's
+ *  own writes stream twice (its ChangeBus and its cache-dir watcher both fire), so a window wide enough
+ *  to catch a socket burst keeps a local write from re-reading twice. */
+const DEBOUNCE_MS = 50;
+
 export class Console {
   private mode: Mode = { kind: "queue" };
   private rows: QueueRow[] = [];
-  private failures: string[] = [];
+  // One snapshot per tracker, so a change on one re-reads that tracker alone and rebuilds the flat rows
+  // from every snapshot — nothing re-reads the trackers that did not move.
+  private queues = new Map<string, ProjectQueue[]>();
+  private readFailures = new Map<string, string>(); // trackerId → url: unreachable at read time
+  private streamFailures = new Map<string, string>(); // trackerId → url: its /events stream dropped
+  private subscriptions = new Map<string, Subscription>(); // one /events stream per tracker
+  private timers = new Map<string, ReturnType<typeof setTimeout>>(); // one debounce timer per tracker
+  private reads = 0; // completed event-driven re-reads — what the debounce test reads
   private selected = 0;
   private active: Tracker;
   private project = "";
@@ -76,31 +90,101 @@ export class Console {
     this.active = trackers[0];
   }
 
-  /** Wire the keyboard and draw the first frame. */
+  /** Wire the keyboard, draw the first frame, and open one /events stream per tracker so the queue
+   *  redraws itself as builds move. */
   async start(): Promise<void> {
     this.renderer.keyInput.on("keypress", (key: Key) => void this.onKey(key));
     await this.refresh();
     this.render();
+    this.subscribeAll();
   }
 
-  /** Re-read every tracker's queue and merge — the one source both screens read, so a write never
-   *  patches a local copy. A tracker that fails is recorded in `failures`, not fatal. */
+  /** Re-read every tracker's queue into its snapshot, then rebuild the flat rows — the one source both
+   *  screens read, so a write never patches a local copy. A tracker that fails is recorded, not fatal. */
   async refresh(): Promise<void> {
-    this.rows = queueRows(await this.fetchAll());
+    for (const t of this.trackers) await this.readTracker(t);
+    this.rebuildRows();
+  }
+
+  /** Read one tracker's queues into the snapshot. A read failure keeps the last snapshot — so that
+   *  tracker's rows persist — and records the url for the footer. */
+  private async readTracker(t: Tracker): Promise<void> {
+    try {
+      this.queues.set(t.id, await fetchQueues(t.client, t.id));
+      this.readFailures.delete(t.id);
+    } catch {
+      this.readFailures.set(t.id, t.url); // unreachable at read time — rows stay, not a crash
+    }
+  }
+
+  /** Rebuild the flat cross-tracker row list from every snapshot, clamping the cursor if it shrank. */
+  private rebuildRows(): void {
+    this.rows = queueRows([...this.queues.values()].flat());
     if (this.selected >= this.rows.length) this.selected = Math.max(0, this.rows.length - 1);
   }
 
-  private async fetchAll(): Promise<ProjectQueue[]> {
-    this.failures = [];
-    const all: ProjectQueue[] = [];
-    for (const t of this.trackers) {
-      try {
-        all.push(...(await fetchQueues(t.client, t.id)));
-      } catch {
-        this.failures.push(t.url); // unreachable at read time — its rows are absent, not a crash
-      }
-    }
-    return all;
+  /** Re-read one tracker after its /events stream reported a change, then repaint. Read-only, so it may
+   *  run between keypresses; only this tracker's snapshot is refreshed, the rest stand. */
+  private async refreshTracker(trackerId: string): Promise<void> {
+    const tracker = this.trackers.find((t) => t.id === trackerId);
+    if (!tracker) return;
+    await this.readTracker(tracker);
+    this.reads += 1;
+    this.rebuildRows();
+    this.render();
+  }
+
+  /** Open one /events subscription per connected tracker. Called once at start, and again for a tracker
+   *  added at runtime. */
+  private subscribeAll(): void {
+    for (const t of this.trackers) this.subscribeTracker(t);
+  }
+
+  /** Subscribe to one tracker's change stream: a `changed` frame schedules a debounced re-read of that
+   *  tracker, a dropped stream is shown but not fatal. A tracker already subscribed is left alone. */
+  private subscribeTracker(t: Tracker): void {
+    if (this.subscriptions.has(t.id)) return;
+    const sub = subscribeChanges(
+      eventsEndpoint(t.url),
+      () => this.scheduleRefresh(t.id),
+      () => this.streamLost(t),
+    );
+    this.subscriptions.set(t.id, sub);
+  }
+
+  /** Coalesce a burst of change frames for one tracker into a single re-read: the first frame schedules
+   *  the read, later frames inside the window are dropped because the timer already stands. */
+  private scheduleRefresh(trackerId: string): void {
+    if (this.timers.has(trackerId)) return;
+    const timer = setTimeout(() => {
+      this.timers.delete(trackerId);
+      void this.refreshTracker(trackerId);
+    }, DEBOUNCE_MS);
+    timer.unref?.();
+    this.timers.set(trackerId, timer);
+  }
+
+  /** A tracker's /events stream refused or dropped: record it for the footer and repaint. Its rows keep
+   *  their last snapshot, and every other tracker keeps streaming. */
+  private streamLost(t: Tracker): void {
+    this.streamFailures.set(t.id, t.url);
+    this.subscriptions.delete(t.id);
+    this.render();
+  }
+
+  /** Close every /events subscription and cancel every pending debounce timer — called on quit, so no
+   *  socket or timer outlives the console. Idempotent. */
+  stop(): void {
+    for (const sub of this.subscriptions.values()) sub.close();
+    this.subscriptions.clear();
+    for (const timer of this.timers.values()) clearTimeout(timer);
+    this.timers.clear();
+  }
+
+  /** How many event-driven re-reads have completed — what the debounce test reads to prove a burst of
+   *  frames coalesces to one re-read. */
+  readCount(): number {
+    return this.reads;
   }
 
   /** Handle one key: dispatch by screen, surface any write error, re-paint. Serialized so a burst of
@@ -130,7 +214,10 @@ export class Console {
   }
 
   private async queueKey(key: Key): Promise<void> {
-    if (key.name === "q") return this.quit();
+    if (key.name === "q") {
+      this.stop();
+      return this.quit();
+    }
     if (key.name === "a") return void (this.mode = { kind: "add", buffer: "" });
     if (key.name === "up") this.selected = Math.max(0, this.selected - 1);
     if (key.name === "down") this.selected = Math.min(this.rows.length - 1, this.selected + 1);
@@ -176,8 +263,10 @@ export class Console {
 
   private async saveNew(url: string): Promise<void> {
     saveTracker(this.cacheDir, url);
-    this.trackers.push({ id: url, url, client: await connectTracker(mcpEndpoint(url)) });
+    const tracker: Tracker = { id: url, url, client: await connectTracker(mcpEndpoint(url)) };
+    this.trackers.push(tracker);
     await this.refresh();
+    this.subscribeTracker(tracker); // the new tracker streams too, so its rows stay live
     this.mode = { kind: "queue" };
   }
 
@@ -259,8 +348,12 @@ export class Console {
   }
 
   private failureLines(): string[] {
-    const urls = [...new Set([...this.unreachable, ...this.failures])];
-    return urls.map((url) => `⚠ unreachable: ${url}`);
+    const unreachable = [...new Set([...this.unreachable, ...this.readFailures.values()])];
+    const lost = [...this.streamFailures.values()].filter((url) => !unreachable.includes(url));
+    return [
+      ...unreachable.map((url) => `⚠ unreachable: ${url}`),
+      ...lost.map((url) => `⚠ stream lost: ${url}`),
+    ];
   }
 
   private title(): string {

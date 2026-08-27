@@ -42,6 +42,13 @@ export function mcpEndpoint(base: string): string {
   return trimmed.endsWith("/mcp") ? trimmed : `${trimmed}/mcp`;
 }
 
+/** The `/events` SSE endpoint for a tracker's base url — the sibling of `mcpEndpoint`, turning the same
+ *  user-typed base into the change stream the console subscribes to. `eventsEndpoint("http://h:3917")`
+ *  → `"http://h:3917/events"`. */
+export function eventsEndpoint(base: string): string {
+  return `${base.replace(/\/+$/, "")}/events`;
+}
+
 /**
  * Prove a URL is a tracker before it is saved: connect (the MCP handshake), then call `list_projects` —
  * NOT `/health`, which answers "a server is up" when the question is "is this a tracker". Returns the
@@ -88,7 +95,7 @@ function errorText(e: unknown): string {
 /**
  * One snapshot per project from a connected tracker, tagged with `trackerId` so a row can route its
  * writes back: `list_projects`, then per project `list_tasks` (in_progress included) and `list_ready`
- * (the ready ids, and the claim start times the tracker exposes as `stale_claims`).
+ * (the ready ids, and the claim start times the tracker exposes as `claims`).
  */
 export async function fetchQueues(client: Client, trackerId?: string): Promise<ProjectQueue[]> {
   const projects = (await read(client, "list_projects", {})).projects as Array<{ project: string }>;
@@ -96,13 +103,13 @@ export async function fetchQueues(client: Client, trackerId?: string): Promise<P
   for (const { project } of projects) {
     const tasks = (await read(client, "list_tasks", { project })).tasks as Task[];
     const ready = await read(client, "list_ready", { project });
-    const stale = ready.stale_claims as Array<{ id: string; claimed_at: string }>;
+    const claims = ready.claims as Array<{ id: string; claimed_at: string }>;
     out.push({
       project,
       tracker: trackerId,
       tasks,
       readyIds: ready.ids as string[],
-      claimedAt: claimTimes(stale),
+      claimedAt: claimTimes(claims),
     });
   }
   return out;
@@ -118,9 +125,9 @@ async function read(
   return (res as { structuredContent: Record<string, unknown> }).structuredContent;
 }
 
-/** Claim start times keyed by task id, from `list_ready`'s stale-claim rows. */
-function claimTimes(stale: Array<{ id: string; claimed_at: string }>): Record<string, string> {
+/** Claim start times keyed by task id, from `list_ready`'s claim rows. */
+function claimTimes(claims: Array<{ id: string; claimed_at: string }>): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const c of stale) out[c.id] = c.claimed_at;
+  for (const c of claims) out[c.id] = c.claimed_at;
   return out;
 }

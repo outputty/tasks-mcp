@@ -78,7 +78,7 @@ await service.close(ctx, "api");
 ```
 
 The service methods are `list`, `get`, `create`, `update`, `close`, `start`, `delete`, `sync`,
-`syncSeen`, `staleClaims`, `getTrail`, `appendTrail`, `getConfig`, `setConfig`, and `stop`.
+`syncSeen`, `claims`, `getTrail`, `appendTrail`, `getConfig`, `setConfig`, and `stop`.
 
 Note what you build yourself: the argument normalizing behind `add_task` — comma strings into arrays,
 tier and qa validated before the write — is not exported. `create` takes a complete task object. Fill
@@ -165,12 +165,13 @@ timer; it reconciles every project the service has been asked about and swallows
 import { ClaimStore, DEFAULT_STALE_MINUTES } from "@outputty/tasks-mcp";
 
 const store = new ClaimStore(cacheDir, "/abs/repo");
-store.all(); // every claim
-store.stale(DEFAULT_STALE_MINUTES); // the quiet ones, oldest silence first
+store.all(); // every claim, raw
+store.aged(); // every claim with its stale_for_minutes, longest silence first
 ```
 
-`service.staleClaims(ctx)` is the same thing with the project's configured threshold applied. Prefer
-it unless you are building your own sweeper.
+`service.claims(ctx)` is the aged list a caller reads — it applies no threshold, so a fresh claim comes
+back with `stale_for_minutes: 0`. Filter it yourself if you are building a sweeper:
+`claims.filter((c) => c.stale_for_minutes >= DEFAULT_STALE_MINUTES)`.
 
 ## Related
 

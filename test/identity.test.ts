@@ -171,7 +171,7 @@ test("a nested id, a top-level id, and the id `claims` each key without collidin
     await svc.create({ project: id }, task({ id: "t", title: id }));
     await svc.start({ project: id }, "t"); // writes a claim ledger under claims/<id>.json
     expect((await svc.get({ project: id }, "t"))?.title).toBe(id);
-    expect((await svc.staleClaims({ project: id })).length).toBe(0); // ledger is readable, not stale yet
+    expect((await svc.claims({ project: id })).length).toBe(1); // ledger is readable and keyed by this id
   }
   // The top-level id `claims` is the FILE claims.yaml, distinct from the claims/ ledger DIRECTORY.
   expect(fs.statSync(path.join(cache.dir, "claims.yaml")).isFile()).toBe(true);

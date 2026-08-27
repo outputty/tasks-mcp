@@ -21,7 +21,7 @@ import {
   touchesTargetShape,
   withDefaults,
 } from "./graph.ts";
-import { ClaimStore, DEFAULT_STALE_MINUTES, type StaleClaim } from "./claims.ts";
+import { ClaimStore, type AgedClaim } from "./claims.ts";
 import { ChangeBus } from "./changes.ts";
 import { readProjectSummaries, type ProjectSummary } from "./projects.ts";
 
@@ -55,10 +55,10 @@ export interface TaskService {
   /** Reconcile every project this service has served so far, one at a time; a project's own failure
    *  is logged and skipped, never thrown. This is what the background loop drives. */
   syncSeen(): Promise<Map<string, SyncResult>>;
-  /** The claims nobody has refreshed inside the threshold — a crashed worker still holding work.
-   *  Reported, never released: a claim released under a worker that is merely slow lets a second
-   *  worker take the same task. */
-  staleClaims(ctx: ProjectContext): Promise<StaleClaim[]>;
+  /** Every claim the project holds, each with its age in minutes since the last heartbeat. The caller
+   *  applies any staleness threshold: the console shows the age, a dispatcher filters the quiet ones.
+   *  A claim is reported, never released — releasing one under a merely-slow worker double-books it. */
+  claims(ctx: ProjectContext): Promise<AgedClaim[]>;
   /** A task's trail: the append-only journal of decisions and actions behind it. */
   getTrail(ctx: ProjectContext, id: string): Promise<TrailEntry[]>;
   /** Append one entry to a task's trail; returns the whole trail. Refuses an unknown task. */
@@ -139,7 +139,7 @@ export class TaskStack implements TaskService {
 
   /** This project's claim ledger, made once and reused — one store per id, keyed like every other
    *  store, so worktrees sharing an id share the ledger. */
-  private claims(project: string): ClaimStore {
+  private claimStore(project: string): ClaimStore {
     let store = this.claimStores.get(project);
     if (!store) {
       store = new ClaimStore(this.cacheDir(), project);
@@ -148,9 +148,8 @@ export class TaskStack implements TaskService {
     return store;
   }
 
-  async staleClaims(ctx: ProjectContext): Promise<StaleClaim[]> {
-    const minutes = this.config.get(ctx.project).claimStaleMinutes ?? DEFAULT_STALE_MINUTES;
-    return this.claims(ctx.project).stale(minutes);
+  async claims(ctx: ProjectContext): Promise<AgedClaim[]> {
+    return this.claimStore(ctx.project).aged();
   }
 
   async getConfig(ctx: ProjectContext): Promise<ConfigSources> {
@@ -219,7 +218,7 @@ export class TaskStack implements TaskService {
    * claimed (or its heartbeat moved), and a task in any other state holds no claim.
    */
   private trackClaim(ctx: ProjectContext, task: Task): void {
-    const claims = this.claims(ctx.project);
+    const claims = this.claimStore(ctx.project);
     if (task.status === "in_progress") claims.mark(task.id);
     else claims.release(task.id);
   }
@@ -254,7 +253,7 @@ export class TaskStack implements TaskService {
    *  the liveness signal costs nothing extra and cannot be forgotten by a worker that is working. */
   async appendTrail(ctx: ProjectContext, id: string, entry: TrailEntry): Promise<TrailEntry[]> {
     const trail = await (await this.trailLayer(ctx)).appendTrail!(ctx, id, entry);
-    this.claims(ctx.project).touch(id);
+    this.claimStore(ctx.project).touch(id);
     return trail;
   }
 
