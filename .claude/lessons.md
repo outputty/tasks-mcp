@@ -13,7 +13,8 @@
 - [2026-08-26 · PLANNING](lessons/2026-08-26-a-deleted-mechanism-outlived-its-deletion-in-the-docs.md) - a commit deleted a subsystem and left product memory describing it as live; counted claims read as verified and age silently. ×1
 - [2026-08-26 · PLANNING](lessons/2026-08-26-a-package-cannot-npx-itself.md) - the repository publishing a tool could not launch it, because npx resolves a package name against the local checkout first. ×1
 - [2026-08-26 · PLANNING](lessons/2026-08-26-a-build-verified-against-the-production-tracker.md) - a build proved a live cross-process feature against the real tracker and left two fixture tasks in the ready queue. ×1
-- [2026-08-26 · PLANNING](lessons/2026-08-26-reading-state-through-a-stale-build-artifact.md) - state was read through an un-rebuilt dist/, so the answers described code the branch no longer had. ×1
+- [2026-08-26 · PLANNING](lessons/2026-08-26-one-repo-two-project-ids.md) - a CLI default derived a project id the design says must be supplied, so one repo became two projects and three sessions called it a stale cache. ×1
+- [2026-08-27 · PLANNING](lessons/2026-08-27-a-constraint-is-not-a-done-condition.md) - two behaviours were specified as contract constraints, or as a case satisfied by an empty shell, and neither was built. ×1
 
 ## Legacy archive (pre-index prose)
 
